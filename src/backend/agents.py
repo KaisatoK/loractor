@@ -4,21 +4,22 @@ from langgraph.prebuilt import create_react_agent
 
 llm = ChatOllama(model="qwen3.5:4b")
 
+
 @tool
 def count_by_category_tool(hours: int, category: str | None = None):
     """Count log entries grouped by category within a time window."""
-    
+
 
 retrieval_agent = create_react_agent(
     llm,
     tools=[],
     prompt="You retrieve structured aggregate data (counts, trends, comparisons) from logs. "
-           "Pick the right tool and correct parameters. Do not interpret results — just return data."
+    "Pick the right tool and correct parameters. Do not interpret results — just return data.",
 )
 
 search_agent = create_react_agent(
     llm,
     tools=[],
     prompt="You find relevant raw log evidence using free-text search or location breakdowns. "
-           "Return the raw matches, do not summarize."
+    "Return the raw matches, do not summarize.",
 )

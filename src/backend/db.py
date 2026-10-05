@@ -1,4 +1,8 @@
 import psycopg2
+
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor, RealDictRow
+
 from pathlib import Path
 
 
@@ -8,18 +12,18 @@ def get_conn():
     )
 
 
-def import_from_csv(relative_file_path: str, table_name: str):
+def import_from_csv(table_name: str, relative_file_path: str):
     conn = get_conn()
-    cursor = conn.cursor()
+    cur = conn.cursor()
     base_dir = Path(__file__).resolve().parent
     absolute_file_path = base_dir / relative_file_path
 
     try:
-        create_table_query = f"""
+        create_table_query = sql.SQL("""
             CREATE TABLE IF NOT EXISTS {table_name} (
                 line_id INT PRIMARY KEY,
                 log_record TEXT,
-                log_date DATE,
+                log_log_date DATE,
                 log_time TIME,
                 pid INT,
                 level VARCHAR(50),
@@ -28,23 +32,23 @@ def import_from_csv(relative_file_path: str, table_name: str):
                 content TEXT,
                 event_id VARCHAR(50),
                 event_template TEXT
-            );
-        """
+            )
+        """).format(table_name=sql.Identifier(table_name))
 
-        cursor.execute(create_table_query)
+        cur.execute(create_table_query)
         print(f"Table '{table_name}' created successfully.")
 
-        copy_query = f"""
+        copy_query = sql.SQL("""
             COPY {table_name} (
                 line_id, log_record, log_date, log_time, pid, 
                 level, component, addr, content, event_id, event_template
             )
             FROM STDIN
             WITH CSV HEADER DELIMITER ','
-        """
+        """).format(table_name=sql.Identifier(table_name))
 
         with open(absolute_file_path, "r", encoding="utf-8") as f:
-            cursor.copy_expert(copy_query, f)
+            cur.copy_expert(copy_query, f)
 
         conn.commit()
         print("Import completed successfully.")
@@ -52,126 +56,225 @@ def import_from_csv(relative_file_path: str, table_name: str):
         conn.rollback()
         print(e)
     finally:
-        cursor.close()
+        cur.close()
+        conn.close()
+
+
+def count_by_category(
+    table_name: str, start_time: str, end_time: str, category: str | None = None
+) -> list[RealDictRow]:
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    print(f"Counting for category {category} from {start_time} to {end_time}")
+
+    try:
+        query = sql.SQL("""
+            SELECT level, COUNT(*) AS count
+            FROM {table_name}
+            WHERE (log_date + log_time) >= %s::timestamp
+              AND (log_date + log_time) <= %s::timestamp
+            {category_filter}
+            GROUP BY level
+            ORDER BY count DESC
+        """).format(
+            table_name=sql.Identifier(table_name),
+            category_filter=sql.SQL("AND level = %s") if category else sql.SQL(""),
+        )
+
+        params = [start_time, end_time] + ([category] if category else [])
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        conn.rollback()
+        print(e)
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_trend(
+    table_name: str, start_time: str, end_time: str, pid: int
+) -> list[RealDictRow]:
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    print(f"Getting trend for pid {pid} in each minute from {start_time} to {end_time}")
+
+    try:
+        query = sql.SQL("""
+            SELECT EXTRACT(MINUTE FROM log_time) AS minute, COUNT(*) AS count
+            FROM {table_name}
+            WHERE pid = %s
+              AND (log_date + log_time) >= %s::timestamp
+              AND (log_date + log_time) <= %s::timestamp
+            GROUP BY minute
+            ORDER BY minute
+        """).format(table_name=sql.Identifier(table_name))
+
+        cur.execute(query, [pid, start_time, end_time])
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        conn.rollback()
+        print(e)
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+# def search_logs(project: str, query_text: str, limit: int = 10) -> list[dict]:
+#     table = resolve_table(project)
+#     conn = get_conn()
+#     cur = conn.cursor(cursor_factory=RealDictCursor)
+
+#     # illustrative syntax — confirm exact function names in SereneDB docs
+#     query = sql.SQL("""
+#         SELECT log_date, level, service, location, message,
+#                search_rank(message, %s) AS relevance
+#         FROM {table}
+#         WHERE fuzzy_match(message, %s)
+#         ORDER BY relevance DESC
+#         LIMIT %s
+#     """).format(table=table)
+
+#     cur.execute(query, [query_text, query_text, limit])
+#     rows = cur.fetchall()
+#     conn.close()
+#     return rows
+
+
+def top_in_category_by_service(
+    table_name: str,
+    start_time: str,
+    end_time: str,
+    category: str | None = None,
+    limit: int = 5,
+) -> list[RealDictRow]:
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    print(
+        f"Getting top {limit} service(s) for category {category} from {start_time} to {end_time}"
+    )
+
+    try:
+        query = sql.SQL("""
+            SELECT component, COUNT(*) AS count
+            FROM {table_name}
+            WHERE (log_date + log_time) >= %s::timestamp
+              AND (log_date + log_time) <= %s::timestamp
+            {level_filter}
+            GROUP BY component
+            ORDER BY count DESC
+            LIMIT %s
+        """).format(
+            table_name=sql.Identifier(table_name),
+            level_filter=sql.SQL("AND level = %s") if category else sql.SQL(""),
+        )
+
+        params = [start_time, end_time] + ([category] if category else []) + [limit]
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        conn.rollback()
+        print(e)
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def compare_periods(
+    table_name: str,
+    service: str,
+    baseline_start_time: str,
+    baseline_end_time: str,
+    recent_start_time: str,
+    recent_end_time: str,
+) -> RealDictRow | None:
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    print(
+        f"Comparing service {service} for "
+        f"baseline {baseline_start_time} -> {baseline_end_time} and "
+        f"recent {recent_start_time} -> {recent_end_time}"
+    )
+
+    try:
+        query = sql.SQL("""
+            SELECT
+            COUNT(*) FILTER (
+                WHERE (log_date + log_time) >= %s::timestamp
+                  AND (log_date + log_time) <= %s::timestamp
+            ) AS baseline_count,
+            COUNT(*) FILTER (
+                WHERE (log_date + log_time) >= %s::timestamp
+                  AND (log_date + log_time) <= %s::timestamp
+            ) AS recent_count
+            FROM {table_name}
+            WHERE component = %s
+        """).format(table_name=sql.Identifier(table_name))
+
+        cur.execute(
+            query,
+            [
+                baseline_start_time,
+                baseline_end_time,
+                recent_start_time,
+                recent_end_time,
+                service,
+            ],
+        )
+        row = cur.fetchone()
+        return row
+    except Exception as e:
+        conn.rollback()
+        print(e)
+        return None
+    finally:
+        cur.close()
         conn.close()
 
 
 if __name__ == "__main__":
-    import_from_csv("csv/OpenStack_2k.log_structured.csv", "LOG")
-    
+    table_name = "log"
 
-# --- 1. Count / aggregate ---
-def count_by_category(hours: int, category: str | None = None) -> list[dict]:
-    table = resolve_table(project)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    def print_row(rows: list[RealDictRow]) -> None:
+        for row in rows:
+            print(row)
 
-    query = sql.SQL("""
-        SELECT category, COUNT(*) AS count
-        FROM {table}
-        WHERE date > NOW() - INTERVAL '%s hours'
-        {category_filter}
-        GROUP BY category
-        ORDER BY count DESC
-    """).format(
-        table=table,
-        category_filter=sql.SQL("AND category = %s") if category else sql.SQL("")
-    )
+        print()
 
-    params = [hours] + ([category] if category else [])
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    ### IMPORT FROM CSV
+    # import_from_csv(table_name, "csv/OpenStack_2k.log_structured.csv")
 
+    ### COUNT LINES BY CATEGORY (INFO, WARNING, ERROR)
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:01:00"
+    # print_row(count_by_category(table_name, start, end))
+    # print_row(count_by_category(table_name, start, end, "INFO"))
+    # print_row(count_by_category(table_name, start, end, "WARNING"))
+    # print_row(count_by_category(table_name, start, end, "ERROR"))
 
-# --- 2. Trend over time ---
-def get_trend(project: str, service: str, days: int) -> list[dict]:
-    table = resolve_table(project)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    ### GET TREND OF A PID
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:10:00"
+    # print_row(get_trend(table_name, start, end, 25746))
 
-    query = sql.SQL("""
-        SELECT DATE(date) AS day, COUNT(*) AS count
-        FROM {table}
-        WHERE service = %s
-          AND date > NOW() - INTERVAL '%s days'
-        GROUP BY DATE(date)
-        ORDER BY day
-    """).format(table=table)
+    ### FULL-TEXT SEARCH LOG
 
-    cur.execute(query, [service, days])
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    ### GET TOP OF A CATEGORY OF A SERVICE
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:01:00"
+    # print_row(top_in_category_by_service(table_name, start, end, None))
+    # print_row(top_in_category_by_service(table_name, start, end, "INFO", 10))
+    # print_row(top_in_category_by_service(table_name, start, end, "ERROR", 2))
 
-
-# --- 3. Free-text search (SereneDB fuzzy/full-text) ---
-def search_logs(project: str, query_text: str, limit: int = 10) -> list[dict]:
-    table = resolve_table(project)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-
-    # illustrative syntax — confirm exact function names in SereneDB docs
-    query = sql.SQL("""
-        SELECT date, category, service, location, message,
-               search_rank(message, %s) AS relevance
-        FROM {table}
-        WHERE fuzzy_match(message, %s)
-        ORDER BY relevance DESC
-        LIMIT %s
-    """).format(table=table)
-
-    cur.execute(query, [query_text, query_text, limit])
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-
-# --- 4. Breakdown by location ---
-def top_locations(project: str, hours: int, category: str | None = None, limit: int = 5) -> list[dict]:
-    table = resolve_table(project)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-
-    query = sql.SQL("""
-        SELECT location, COUNT(*) AS count
-        FROM {table}
-        WHERE date > NOW() - INTERVAL '%s hours'
-        {category_filter}
-        GROUP BY location
-        ORDER BY count DESC
-        LIMIT %s
-    """).format(
-        table=table,
-        category_filter=sql.SQL("AND category = %s") if category else sql.SQL("")
-    )
-
-    params = [hours] + ([category] if category else []) + [limit]
-    cur.execute(query, params)
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-
-# --- 5. Compare two time windows ---
-def compare_periods(project: str, service: str, recent_hours: int, baseline_hours_ago: int) -> dict:
-    table = resolve_table(project)
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-
-    query = sql.SQL("""
-        SELECT
-          COUNT(*) FILTER (WHERE date > NOW() - INTERVAL '%s hours') AS recent_count,
-          COUNT(*) FILTER (
-            WHERE date <= NOW() - INTERVAL '%s hours'
-            AND date > NOW() - INTERVAL '%s hours'
-          ) AS baseline_count
-        FROM {table}
-        WHERE service = %s
-    """).format(table=table)
-
-    cur.execute(query, [recent_hours, recent_hours, baseline_hours_ago, service])
-    row = cur.fetchone()
-    conn.close()
-    return row
+    ### COMPARE SERVICES FOR A BASELINE AND A RECENT TIME PERIOD
+    baseline_start = "2017-05-16 00:00:00"
+    baseline_end = "2017-05-16 00:01:00"
+    recent_start = "2017-05-16 00:02:00"
+    recent_end = "2017-05-16 00:03:00"
+    print(compare_periods(table_name, "nova.virt.libvirt.driver", baseline_start, baseline_end, recent_start, recent_end))

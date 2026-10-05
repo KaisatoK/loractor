@@ -7,13 +7,16 @@ from typing import TypedDict
 
 # from backend.graph import chatbot
 
+
 class ChatRequest(TypedDict):
-    user_id : UUID
-    message : str
+    user_id: UUID
+    message: str
+
 
 class ChatResponse(TypedDict):
     type: str
     content: str
+
 
 app = FastAPI()
 
@@ -31,7 +34,7 @@ app = FastAPI()
 #             },
 #             version="v3",
 #         )
-        
+
 #         for name, item in run.interleave("messages", "subgraphs"):
 #             if name == "messages":
 #                 for token in item.text:
@@ -40,6 +43,7 @@ app = FastAPI()
 #                 yield {"type": "subgraphs", "content": item.path}
 
 #     return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 @app.post("/chat/test")
 async def chat_test(req: ChatRequest) -> AsyncIterable[ChatResponse]:

@@ -16,7 +16,9 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 for item in st.session_state.chat_history:
-    if (item["role"] == "assistant" and "progress" in item) and item["progress"] is not None:
+    if (item["role"] == "assistant" and "progress" in item) and item[
+        "progress"
+    ] is not None:
         with st.status(label="Done", type="compact", state="complete"):
             for stage in item["progress"]:
                 st.write(f"Currently at: {stage}")
@@ -26,7 +28,9 @@ for item in st.session_state.chat_history:
 message = st.chat_input("Type your message here...")
 
 if message:
-    st.session_state.chat_history.append({"role": "user", "content": message, "progress": None})
+    st.session_state.chat_history.append(
+        {"role": "user", "content": message, "progress": None}
+    )
     with st.chat_message("user"):
         st.markdown(message)
 
@@ -49,7 +53,11 @@ if message:
 
             for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                 if chunk:
-                    data = json.loads(chunk.decode("utf-8")) if isinstance(chunk, bytes) else json.loads(chunk)
+                    data = (
+                        json.loads(chunk.decode("utf-8"))
+                        if isinstance(chunk, bytes)
+                        else json.loads(chunk)
+                    )
                     if data["type"] == "messages":
                         full_answer += data["content"]
                         placeholder.markdown(full_answer + "▌")
@@ -57,8 +65,10 @@ if message:
                         progress.write(f"Currently at: {data['content']}")
                         progress_stages.append(data["content"])
                 time.sleep(0.1)  # Simulate processing time for better UX
-            
+
         progress.update(label="Done", state="complete")
         placeholder.markdown(full_answer)
 
-    st.session_state.chat_history.append({"role": "assistant", "content": full_answer, "progress": progress_stages})
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": full_answer, "progress": progress_stages}
+    )
