@@ -1,6 +1,5 @@
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langchain_typesafe import Choice, Noul, Score, TypeSafeClassifier
+from langchain_typesafe import Choice, Noul, TypeSafeClassifier
 from langchain_ollama import ChatOllama
 
 from typing import TypedDict, Annotated, Literal
