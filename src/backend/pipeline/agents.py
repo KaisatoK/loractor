@@ -49,8 +49,7 @@ plan_agent = create_agent(
     response_format=ExecutionPlan,
     system_prompt=(
         "You create investigation plans. Return hypotheses, explanations, and the "
-        "evidence required to evaluate each hypothesis. Do not name tools or invent "
-        "evidence."
+        "evidence required to evaluate each hypothesis."
     ),
 )
 
