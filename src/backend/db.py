@@ -124,25 +124,36 @@ def get_trend(
         conn.close()
 
 
-# def search_logs(project: str, query_text: str, limit: int = 10) -> list[dict]:
-#     table = resolve_table(project)
-#     conn = get_conn()
-#     cur = conn.cursor(cursor_factory=RealDictCursor)
+def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealDictRow]:
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    print(
+        f"Getting top {limit} logs related to \"{query_text}\""
+    )
 
-#     # illustrative syntax — confirm exact function names in SereneDB docs
-#     query = sql.SQL("""
-#         SELECT log_date, level, service, location, message,
-#                search_rank(message, %s) AS relevance
-#         FROM {table}
-#         WHERE fuzzy_match(message, %s)
-#         ORDER BY relevance DESC
-#         LIMIT %s
-#     """).format(table=table)
+    try:
+        query = sql.SQL("""
+            SELECT log_date, log_time, pid, level, component, content,
+                CASE 
+                    WHEN content ILIKE %s THEN 1.0 
+                    ELSE 0.5 
+                END AS relevance
+            FROM {table_name}
+            WHERE content ILIKE %s
+            ORDER BY relevance DESC
+            LIMIT %s
+        """).format(table_name=sql.Identifier(table_name))
 
-#     cur.execute(query, [query_text, query_text, limit])
-#     rows = cur.fetchall()
-#     conn.close()
-#     return rows
+        cur.execute(query, [f"%{query_text}%", f"%{query_text}%", limit])
+        rows = cur.fetchall()
+        return rows
+    except Exception as e:
+        conn.rollback()
+        print(e)
+        return []
+    finally:
+        cur.close()
+        conn.close()
 
 
 def top_in_category_by_service(
@@ -264,6 +275,8 @@ if __name__ == "__main__":
     # print_row(get_trend(table_name, start, end, 25746))
 
     ### FULL-TEXT SEARCH LOG
+    print_row(search_logs(table_name, "network"))
+    print_row(search_logs(table_name, "instance", 2))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
     # start = "2017-05-16 00:00:00"
@@ -273,8 +286,8 @@ if __name__ == "__main__":
     # print_row(top_in_category_by_service(table_name, start, end, "ERROR", 2))
 
     ### COMPARE SERVICES FOR A BASELINE AND A RECENT TIME PERIOD
-    baseline_start = "2017-05-16 00:00:00"
-    baseline_end = "2017-05-16 00:01:00"
-    recent_start = "2017-05-16 00:02:00"
-    recent_end = "2017-05-16 00:03:00"
-    print(compare_periods(table_name, "nova.virt.libvirt.driver", baseline_start, baseline_end, recent_start, recent_end))
+    # baseline_start = "2017-05-16 00:00:00"
+    # baseline_end = "2017-05-16 00:01:00"
+    # recent_start = "2017-05-16 00:02:00"
+    # recent_end = "2017-05-16 00:03:00"
+    # print(compare_periods(table_name, "nova.virt.libvirt.driver", baseline_start, baseline_end, recent_start, recent_end))
