@@ -40,7 +40,7 @@ if message:
 
             for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                 if chunk:
-                    full_answer += chunk
+                    full_answer += (chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
                     placeholder.markdown(full_answer + "▌")
 
         placeholder.markdown(full_answer)

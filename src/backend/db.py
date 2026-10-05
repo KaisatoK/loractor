@@ -8,7 +8,7 @@ def get_conn():
 
 def import_from_csv():
     conn = get_conn()
-    cur = conn.get_cursor()
+    cur = conn.cursor()
     
     cmd = sql.SQL(
         """CREATE TABLE users(
