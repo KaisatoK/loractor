@@ -1,64 +1,17 @@
+
 from langgraph.graph import StateGraph, END
 from langchain_typesafe import TypeSafeClassifier
-from langchain_ollama import ChatOllama
 
-from typing import TypedDict, Literal
+from typing import Literal
 
-from src.backend.pipeline.agents import retrieval_agent, search_agent
+from src.backend.pipeline.agents import (
+    answer_agent,
+    executor_agent,
+    normalize_agent,
+    plan_agent,
+)
 from src.backend.pipeline.pipeline_prompts import PipelinePrompts
-
-
-class Role(TypedDict):
-    name: Literal["engineer", "team lead", "manager"]
-    objective: str
-
-
-class NormalizedOutput(TypedDict):
-    intent: Literal["count", "trend", "compare", "search", "unknown"]
-    explanation: str
-
-
-class PlanStep(TypedDict):
-    tool: Literal[
-        "count_by_category",
-        "get_trend",
-        "compare_periods",
-        "search_logs",
-        "top_locations",
-    ]
-    instruction: str
-
-
-class ExecutionPlan(TypedDict):
-    steps: list[PlanStep]
-
-
-class PipelineRoute(TypedDict):
-    next_state: Literal["plan", "answer", "conclude"]
-    pass_probability: float
-    probabilities: dict[str, float]
-    revision_reason: str
-
-
-class PipelineState(TypedDict):
-    question: str
-    role: Role
-    normalized: NormalizedOutput
-    plan: ExecutionPlan
-    plan_history: list[ExecutionPlan]
-    evidence: list
-    confidence: PipelineRoute
-    revision_feedback: str
-    answer: str
-
-
-# ROLE_OBJECTIVES = {
-#     "engineer": "Investigate an error and find the relevant evidence.",
-#     "team lead": "Understand recurring problems and patterns.",
-#     "manager": "Decide what to prioritize based on the findings.",
-# }
-
-llm = ChatOllama(model="qwen3.5:4b")
+from src.backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineState
 
 router = TypeSafeClassifier()
 
@@ -66,55 +19,88 @@ prompts = PipelinePrompts()
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
-    response = llm.with_structured_output(NormalizedOutput).invoke(
-        prompts.normalize(state)
+    result = normalize_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.normalize(state)},
+            ]
+        }
     )
-    return {**state, "normalized": response}
+    normalized = result["structured_response"]
+    return {**state, "normalized": normalized.model_dump()}
 
 
 def plan_node(state: PipelineState) -> PipelineState:
     plan_history = list(state.get("plan_history", []))
     if state.get("plan"):
-        plan_history.append(state["plan"])
+        plan_history.append(
+            {
+                "plan": state["plan"],
+                "evidence": state.get("evidence", {}),
+                "answer": state.get("answer", ""),
+                "confidence": state.get("confidence"),
+            }
+        )
 
-    plan = llm.with_structured_output(ExecutionPlan).invoke(prompts.plan(state))
+    result = plan_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.plan(state)},
+            ]
+        }
+    )
+    plan = result["structured_response"]
+    plan_data = plan.model_dump()
     return {
         **state,
-        "plan": plan,
+        "plan": plan_data,
         "plan_history": plan_history,
-        "evidence": [],
+        "evidence": {},
         "answer": "",
     }
 
 
 def execute_plan_node(state: PipelineState) -> PipelineState:
-    evidence = list(state.get("evidence", []))
+    result = executor_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.execute_evidence(state)},
+            ]
+        }
+    )
 
-    retrieval_tools = {"count_by_category", "get_trend", "compare_periods"}
-    search_tools = {"search_logs", "top_locations"}
-
-    for step in state["plan"]["steps"]:
-        tool_name = step["tool"]
-        agent = (
-            retrieval_agent
-            if tool_name in retrieval_tools
-            else search_agent if tool_name in search_tools else None
+    tool_results = []
+    for message in result.get("messages", []):
+        if getattr(message, "type", None) != "tool":
+            continue
+        tool_results.append(
+            {
+                "source_tool": getattr(message, "name", "unknown"),
+                "content": message.content,
+                "tool_call_id": getattr(message, "tool_call_id", None),
+            }
         )
 
-        if agent is None:
-            raise ValueError(f"Unsupported planned tool: {tool_name}")
-
-        result = agent.invoke(
-            {"messages": [("user", prompts.execute_tool(state, step))]}
-        )
-        evidence.append({"step": step, "result": result})
-
-    return {**state, "evidence": evidence}
+    evidence_report = result["structured_response"].model_dump()
+    return {
+        **state,
+        "evidence": {
+            "report": evidence_report,
+            "tool_results": tool_results,
+        },
+    }
 
 
 def answer_node(state: PipelineState) -> PipelineState:
-    answer = llm.invoke(prompts.answer(state))
-    return {**state, "answer": answer.content}
+    result = answer_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.answer(state)},
+            ]
+        }
+    )
+    answer = result["messages"][-1].content
+    return {**state, "answer": answer}
 
 
 def confidence_node(state: PipelineState) -> PipelineState:

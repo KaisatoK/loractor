@@ -1,17 +1,16 @@
 from langchain_typesafe import Choice, Noul
-from src.backend.pipeline.graph import PipelineState, PlanStep, Role
+from src.backend.pipeline.schemas import PipelineState, Role
 
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
-    def role_text(self, role: Role) -> str:
+    def role_text(self, role: "Role") -> str:
         return f"Role: {role['name']}\nRole objective: {role['objective']}"
 
     def normalize(self, state: "PipelineState") -> str:
         return (
-            f"{self.role_text(state['role'])}\n"
             f"User question: {state['question']}\n\n"
-            "Classify the user's intent and extract the relevant parameters."
+            "Normalize the user's question into a concise, structured format."
         )
 
     def plan(self, state: "PipelineState") -> str:
@@ -24,33 +23,48 @@ class PipelinePrompts:
 
         return (
             f"{self.role_text(state['role'])}\n"
-            f"User question: {state['question']}\n"
             f"Normalized request: {state['normalized']}\n"
             f"Previous plan: {previous_plan}\n"
-            f"Previous plan history: {plan_history}\n"
+            f"Previous attempt history, including evidence statuses: {plan_history}\n"
             f"Revision feedback: {revision_feedback}\n\n"
-            "Create a plan containing every tool call needed to gather sufficient "
-            "evidence. Use multiple steps when necessary. Each step must name one "
-            "available tool and provide its exact instruction. If this is a revision, "
-            "change the approach to address the feedback; do not repeat the previous "
-            "plan unchanged."
+            "Create an investigation plan containing the plausible hypotheses that "
+            "could explain the problem. For each hypothesis, describe why it matters "
+            "and list the specific evidence required to evaluate it. Do not name tools "
+            "or assume knowledge of the available tool set. If this is a revision, "
+            "change the hypotheses or evidence requirements to address the feedback; "
+            "do not repeat the previous plan unchanged."
         )
 
-    def execute_tool(self, state: "PipelineState", step: "PlanStep") -> str:
+    def execute_evidence(self, state: "PipelineState") -> str:
         return (
-            f"Original question: {state['question']}\n"
             f"Normalized request: {state['normalized']}\n"
-            f"Planned tool: {step['tool']}\n"
-            f"Instruction: {step['instruction']}"
+            f"Investigation plan: {state['plan']}\n\n"
+            "Collect the required evidence for each hypothesis using the available "
+            "tools. Return only evidence that appears in tool results. If evidence "
+            "cannot be collected, mark it as unavailable rather than guessing."
         )
 
     def answer(self, state: "PipelineState") -> str:
+        previous_confidence = state.get("confidence") or "No previous confidence evaluation."
+        revision_feedback = state.get(
+            "revision_feedback",
+            "No answer revision feedback is available.",
+        )
         return (
             f"{self.role_text(state['role'])}\n"
-            f"User question: {state['question']}\n"
+            f"Normalized request: {state['normalized']}\n"
+            f"Investigation hypotheses: {state['plan']}\n"
             f"Evidence: {state['evidence']}\n\n"
-            "Write a grounded answer. Do not make claims that are not supported "
-            "by the evidence. Tailor the explanation to the user's role."
+            f"Previous confidence evaluation: {previous_confidence}\n"
+            f"Required revision: {revision_feedback}\n\n"
+            "Write the answer to the user's problem, not a list of all hypotheses. "
+            "Use only hypotheses marked supported when explaining the likely cause or "
+            "answer. Ignore hypotheses marked contradicted; do not present them as "
+            "possible causes. Mention unresolved hypotheses only when the missing or "
+            "unavailable evidence materially limits the answer. Never turn not_found "
+            "or unavailable evidence into a fact, and never make claims not supported "
+            "by raw tool results. Apply the required revision explicitly. Tailor the "
+            "answer to the user's role."
         )
 
     def confidence_request(self, state: "PipelineState") -> dict:
@@ -60,8 +74,8 @@ class PipelinePrompts:
                 "user_role": state["role"]["name"],
                 "role_objective": state["role"]["objective"],
                 "user_question": state["question"],
-                "planned_steps": state["plan"],
-                "found_evidence": state["evidence"],
+                "hypotheses": state["plan"],
+                "evidence_report": state["evidence"],
                 "answer": state.get("answer", ""),
             },
             "question": {
@@ -71,7 +85,7 @@ class PipelinePrompts:
             },
         }
 
-    def role_guidance(self, role: Role) -> str:
+    def role_guidance(self, role: "Role") -> str:
         return (
             f"The user's role is {role['name']}. Their objective is: "
             f"{role['objective']}"
@@ -87,13 +101,13 @@ class PipelinePrompts:
             criteria={
                 "true": {
                     "role_fit": "The answer is useful for the user's inferred goals, responsibilities, decisions, and level of detail.",
-                    "evidence": "The evidence is relevant, specific, and sufficient to support the answer.",
-                    "answer": "The answer is grounded in the evidence and explains its conclusions reliably.",
+                    "evidence": "The evidence statuses and hypothesis statuses are supported by tool results.",
+                    "answer": "The answer focuses on supported hypotheses, excludes contradicted hypotheses, and discloses unresolved hypotheses only when they limit the conclusion.",
                 },
                 "false": {
                     "role_fit": "The answer is aimed at the wrong goals, decisions, responsibilities, or level of detail for the user's role.",
-                    "evidence": "The evidence is missing, irrelevant, contradictory, or insufficient.",
-                    "answer": "The answer is missing, unsupported by the evidence, or unreliable.",
+                    "evidence": "The evidence statuses or hypothesis statuses are unsupported, incomplete, or inconsistent with the tool results.",
+                    "answer": "The answer includes contradicted hypotheses, treats unresolved evidence as fact, or fails to focus on supported hypotheses.",
                 },
             },
         )
@@ -101,16 +115,18 @@ class PipelinePrompts:
     def next_state_question(self, role_guidance: str) -> Choice:
         return Choice(
             instructions=(
-                "Choose the next pipeline state. Select plan when more or better "
-                "evidence is needed. Select answer when the evidence is sufficient "
-                "but the answer must be generated or revised. Select conclude only "
-                "when the answer is supported and ready to return.\n\n"
+                "Choose the next pipeline state using the hypotheses, required evidence, "
+                "evidence statuses, and answer. Select plan when an important hypothesis "
+                "has missing, unavailable, irrelevant, or contradictory evidence. Select "
+                "answer when the evidence is sufficient but the answer must be generated "
+                "or revised. Select conclude only when every important hypothesis has "
+                "been evaluated and the answer is grounded in observed tool results.\n\n"
                 f"Role objective: {role_guidance}"
             ),
             criteria={
-                "plan": "Gather more evidence or revise the plan because the current evidence does not sufficiently answer the question.",
-                "answer": "Use the current evidence to generate or revise an answer grounded in the evidence and useful for the user's inferred goals, decisions, responsibilities, and required level of detail.",
-                "conclude": "The evidence and answer are sufficient, grounded, and useful for the user's inferred goals, decisions, responsibilities, and required level of detail.",
+                "plan": "Re-plan because no hypothesis is supported, or an important hypothesis has missing, unavailable, irrelevant, or contradictory evidence.",
+                "answer": "Use the evidence to generate or revise an answer that focuses on supported hypotheses, excludes contradicted hypotheses, and clearly limits unresolved conclusions.",
+                "conclude": "The answer focuses on supported hypotheses, excludes contradicted hypotheses, treats unresolved hypotheses as limitations rather than facts, and is grounded in observed tool results.",
             },
         )
 
