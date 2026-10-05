@@ -22,4 +22,3 @@ search_agent = create_react_agent(
     prompt="You find relevant raw log evidence using free-text search or location breakdowns. "
            "Return the raw matches, do not summarize."
 )
-
