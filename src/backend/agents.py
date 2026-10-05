@@ -15,3 +15,11 @@ retrieval_agent = create_react_agent(
     prompt="You retrieve structured aggregate data (counts, trends, comparisons) from logs. "
            "Pick the right tool and correct parameters. Do not interpret results — just return data."
 )
+
+search_agent = create_react_agent(
+    llm,
+    tools=[search_logs_tool, top_locations_tool],
+    prompt="You find relevant raw log evidence using free-text search or location breakdowns. "
+           "Return the raw matches, do not summarize."
+)
+

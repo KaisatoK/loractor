@@ -58,3 +58,120 @@ def import_from_csv(relative_file_path: str, table_name: str):
 
 if __name__ == "__main__":
     import_from_csv("csv/OpenStack_2k.log_structured.csv", "LOG")
+    
+
+# --- 1. Count / aggregate ---
+def count_by_category(hours: int, category: str | None = None) -> list[dict]:
+    table = resolve_table(project)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    query = sql.SQL("""
+        SELECT category, COUNT(*) AS count
+        FROM {table}
+        WHERE date > NOW() - INTERVAL '%s hours'
+        {category_filter}
+        GROUP BY category
+        ORDER BY count DESC
+    """).format(
+        table=table,
+        category_filter=sql.SQL("AND category = %s") if category else sql.SQL("")
+    )
+
+    params = [hours] + ([category] if category else [])
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# --- 2. Trend over time ---
+def get_trend(project: str, service: str, days: int) -> list[dict]:
+    table = resolve_table(project)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    query = sql.SQL("""
+        SELECT DATE(date) AS day, COUNT(*) AS count
+        FROM {table}
+        WHERE service = %s
+          AND date > NOW() - INTERVAL '%s days'
+        GROUP BY DATE(date)
+        ORDER BY day
+    """).format(table=table)
+
+    cur.execute(query, [service, days])
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# --- 3. Free-text search (SereneDB fuzzy/full-text) ---
+def search_logs(project: str, query_text: str, limit: int = 10) -> list[dict]:
+    table = resolve_table(project)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    # illustrative syntax — confirm exact function names in SereneDB docs
+    query = sql.SQL("""
+        SELECT date, category, service, location, message,
+               search_rank(message, %s) AS relevance
+        FROM {table}
+        WHERE fuzzy_match(message, %s)
+        ORDER BY relevance DESC
+        LIMIT %s
+    """).format(table=table)
+
+    cur.execute(query, [query_text, query_text, limit])
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# --- 4. Breakdown by location ---
+def top_locations(project: str, hours: int, category: str | None = None, limit: int = 5) -> list[dict]:
+    table = resolve_table(project)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    query = sql.SQL("""
+        SELECT location, COUNT(*) AS count
+        FROM {table}
+        WHERE date > NOW() - INTERVAL '%s hours'
+        {category_filter}
+        GROUP BY location
+        ORDER BY count DESC
+        LIMIT %s
+    """).format(
+        table=table,
+        category_filter=sql.SQL("AND category = %s") if category else sql.SQL("")
+    )
+
+    params = [hours] + ([category] if category else []) + [limit]
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+# --- 5. Compare two time windows ---
+def compare_periods(project: str, service: str, recent_hours: int, baseline_hours_ago: int) -> dict:
+    table = resolve_table(project)
+    conn = get_conn()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+
+    query = sql.SQL("""
+        SELECT
+          COUNT(*) FILTER (WHERE date > NOW() - INTERVAL '%s hours') AS recent_count,
+          COUNT(*) FILTER (
+            WHERE date <= NOW() - INTERVAL '%s hours'
+            AND date > NOW() - INTERVAL '%s hours'
+          ) AS baseline_count
+        FROM {table}
+        WHERE service = %s
+    """).format(table=table)
+
+    cur.execute(query, [recent_hours, recent_hours, baseline_hours_ago, service])
+    row = cur.fetchone()
+    conn.close()
+    return row

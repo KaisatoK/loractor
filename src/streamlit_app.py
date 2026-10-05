@@ -2,7 +2,7 @@ import uuid
 import requests
 import streamlit as st
 
-API_URL = "http://localhost:8000/chat/stream"
+API_URL = "http://localhost:8000/chat/test"
 
 
 st.title("LangChain Ollama Chat Agent")
@@ -17,6 +17,7 @@ for item in st.session_state.chat_history:
     with st.chat_message(item["role"]):
         st.markdown(item["content"])
 
+status = st.empty()
 message = st.chat_input("Type your message here...")
 
 if message:
@@ -40,11 +41,13 @@ if message:
 
             for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                 if chunk:
-                    full_answer += (
-                        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
-                    )
-                    placeholder.markdown(full_answer + "▌")
-
+                    if chunk["type"] == "messages":
+                        full_answer += (chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+                        placeholder.markdown(full_answer + "▌")
+                    elif chunk["type"] == "subgraphs":
+                        with status.container():
+                            st.write(f"Subgraph executed: {chunk['content']}")
+            
         placeholder.markdown(full_answer)
 
     st.session_state.chat_history.append({"role": "assistant", "content": full_answer})
