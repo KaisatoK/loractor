@@ -19,15 +19,17 @@ SYSTEM_PROMPT = (
     "Use tools when needed. If the question does not need a tool, answer directly."
 )
 
+
 class ChatRequest(BaseModel):
-    user_id : UUID
-    message : str
+    user_id: UUID
+    message: str
 
 
 @tool
 def current_time() -> str:
     """Return the current local date and time."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 @tool
 def word_count(text: str) -> int:
@@ -37,18 +39,21 @@ def word_count(text: str) -> int:
 
 checkpointer = InMemorySaver()
 
+
 def build_agent():
     model = ChatOllama(model=CHAT_MODEL, temperature=0)
     return create_agent(
         model=model,
         tools=[current_time, word_count],
         system_prompt=SYSTEM_PROMPT,
-        checkpointer=checkpointer
+        checkpointer=checkpointer,
     )
+
 
 agent = build_agent()
 
 app = FastAPI()
+
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
@@ -64,7 +69,7 @@ async def chat_stream(req: ChatRequest):
             },
             version="v3",
         )
-    
+
         for message in run.messages:
             for token in message.text:
                 yield token

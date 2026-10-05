@@ -3,7 +3,9 @@ from pathlib import Path
 
 
 def get_conn():
-    return psycopg2.connect("host=localhost dbname=postgres user=postgres password=postgres")
+    return psycopg2.connect(
+        "host=localhost dbname=postgres user=postgres password=postgres"
+    )
 
 
 def import_from_csv(relative_file_path: str, table_name: str):
