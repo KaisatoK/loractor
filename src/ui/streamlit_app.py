@@ -1,13 +1,11 @@
 import uuid
-from datetime import datetime 
+from datetime import datetime
 from new_chat import new_chat_page
 from main_page import main_page
 import streamlit as st
 
 st.set_page_config(
-    page_title="LangChain Ollama Chat Agent",
-    page_icon=":robot_face:",
-    layout="wide"
+    page_title="LangChain Ollama Chat Agent", page_icon=":robot_face:", layout="wide"
 )
 
 if "user_id" not in st.session_state:
@@ -27,7 +25,7 @@ if "chat_histories" not in st.session_state:
 #     def navigate_to_chat():
 #         st.session_state.current_chat = chat_id
 #         main_page()
-    
+
 #     pages["Conversations"].append(
 #         st.Page(
 #             navigate_to_chat,
@@ -41,7 +39,9 @@ if "chat_histories" not in st.session_state:
 # if ("current_chat" not in st.session_state):
 #     new_chat_page()
 
-if ("current_chat" not in st.session_state) or (st.session_state.current_chat not in st.session_state.chat_histories):
+if ("current_chat" not in st.session_state) or (
+    st.session_state.current_chat not in st.session_state.chat_histories
+):
     new_chat_page()
 else:
     main_page()

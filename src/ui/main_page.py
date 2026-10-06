@@ -4,10 +4,13 @@ import streamlit as st
 
 API_URL = "http://localhost:8000/chat/test"
 
+
 def main_page():
     st.title("LangChain Ollama Chat Agent")
 
-    current_chat = st.session_state.chat_histories.get(st.session_state.current_chat, {})
+    current_chat = st.session_state.chat_histories.get(
+        st.session_state.current_chat, {}
+    )
 
     for item in current_chat["history"]:
         if (item["role"] == "assistant" and "progress" in item) and item[
@@ -19,7 +22,9 @@ def main_page():
         with st.chat_message(item["role"]):
             st.markdown(item["content"])
 
-    message = st.chat_input(placeholder="Type your message here...", accept_file="multiple")
+    message = st.chat_input(
+        placeholder="Type your message here...", accept_file="multiple"
+    )
 
     if message:
         current_chat["history"].append(
@@ -39,13 +44,15 @@ def main_page():
                 API_URL,
                 json={
                     "user_id": st.session_state.user_id,
-                    "message":  message.text,
+                    "message": message.text,
                 },
                 stream=True,
             ) as response:
                 response.raise_for_status()
 
-                for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+                for chunk in response.iter_content(
+                    chunk_size=None, decode_unicode=True
+                ):
                     if chunk:
                         data = (
                             json.loads(chunk.decode("utf-8"))
