@@ -6,7 +6,7 @@ API_URL = "http://localhost:8000/chat/stream"
 
 
 def main_page():
-    st.title("LangChain Ollama Chat Agent")
+    st.title("LangChain Chat Agent")
 
     current_chat = st.session_state.chat_histories.get(
         st.session_state.current_chat, {}
@@ -43,8 +43,9 @@ def main_page():
             with requests.post(
                 API_URL,
                 json={
-                    "user_id": st.session_state.user_id,
-                    "message": message.text,
+                    "user_id"   : st.session_state.user_id,
+                    "role"      : current_chat["role"],
+                    "message"   : str(current_chat["history"]),
                 },
                 stream=True,
             ) as response:

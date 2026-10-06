@@ -3,19 +3,20 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
-from typing import AsyncIterable, TypedDict, cast
+from typing import AsyncIterable, TypedDict, Literal, cast
 from backend.pipeline.graph import chatbot
 from backend.pipeline.schemas import PipelineState
 
 
 class ChatRequest(TypedDict):
-    user_id: UUID
-    message: str
+    user_id : UUID
+    role    : Literal["engineer", "team_lead", "manager"]
+    message : str
 
 
 class ChatResponse(TypedDict):
-    type: str
-    content: str
+    type    : str
+    content : str
 
 
 app = FastAPI()
@@ -28,7 +29,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
         {
             "question": req["message"],
             "role": {
-                "name": "manager",
+                "name": req["role"],
                 "objective": "Provide a concise and accurate answer to the user's question.",
             },
         },
@@ -51,7 +52,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 yield {"type": "messages", "content": answer}
                 last_answer = answer
         elif name == "subgraphs":
-            yield {"type": "subgraphs", "content": str(item.path)}
+            yield {"type": "subgraphs", "content": item.path[0]}
 
 
 @app.post("/chat/test")

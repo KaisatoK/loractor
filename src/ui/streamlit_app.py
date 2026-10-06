@@ -5,7 +5,7 @@ from main_page import main_page
 import streamlit as st
 
 st.set_page_config(
-    page_title="LangChain Ollama Chat Agent", page_icon=":robot_face:", layout="wide"
+    page_title="LangChain Chat Agent", page_icon=":robot_face:", layout="wide"
 )
 
 if "user_id" not in st.session_state:
@@ -15,29 +15,17 @@ if "user_id" not in st.session_state:
 if "chat_histories" not in st.session_state:
     st.session_state.chat_histories = {}
 
-# # Initialize sidebar navigation
-# pages = {
-#     "New Chat": [st.Page(new_chat_page, title="New Chat")],
-#     "Conversations": []
-# }
-
-# for chat_id, chat_data in st.session_state.chat_histories.items():
-#     def navigate_to_chat():
-#         st.session_state.current_chat = chat_id
-#         main_page()
-
-#     pages["Conversations"].append(
-#         st.Page(
-#             navigate_to_chat,
-#             title=f"{chat_data['role'].capitalize()} Chat - {chat_id}"
-#         )
-#     )
-
-# pg = st.navigation(pages)
-# pg.run()
-
-# if ("current_chat" not in st.session_state):
-#     new_chat_page()
+# Initialize sidebar navigation
+with st.sidebar:
+    st.title("Conversations")
+    if st.button("New Chat", type="secondary", width="stretch"):
+        st.session_state.current_chat = None
+        st.rerun()
+    st.divider()
+    for chat_id, chat_data in st.session_state.chat_histories.items():
+        if st.button(f"{chat_data['role'].capitalize()} - {chat_id}", type="secondary", width="stretch"):
+            st.session_state.current_chat = chat_id
+            st.rerun()
 
 if ("current_chat" not in st.session_state) or (
     st.session_state.current_chat not in st.session_state.chat_histories
