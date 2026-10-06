@@ -1,5 +1,5 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
-from src.backend.pipeline.schemas import PipelineState, Role
+from backend.pipeline.schemas import PipelineState, Role
 
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
@@ -8,6 +8,9 @@ class PipelinePrompts:
         return f"Role: {role['name']}\nRole objective: {role['objective']}"
 
     def normalize(self, state: PipelineState) -> str:
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        print(state)
+        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
         return (
             f"User question: {state['question']}\n\n"
             "Normalize the user's question into a concise, structured format."

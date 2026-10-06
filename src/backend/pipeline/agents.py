@@ -1,14 +1,14 @@
 from langchain_core.tools import tool
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
-from src.backend.db import (
+from backend.db import (
     count_by_category,
     get_trend_by_category,
     search_logs,
     top_in_category_by_service,
     compare_periods,
 )
-from src.backend.pipeline.schemas import (
+from backend.pipeline.schemas import (
     EvidenceReport,
     ExecutionPlan,
     NormalizedOutput,

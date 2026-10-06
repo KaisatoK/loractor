@@ -2,7 +2,7 @@ import requests
 import json
 import streamlit as st
 
-API_URL = "http://localhost:8000/chat/test"
+API_URL = "http://localhost:8000/chat/stream"
 
 
 def main_page():

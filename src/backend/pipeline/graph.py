@@ -4,16 +4,16 @@ from langchain_typesafe import TypeSafeClassifier
 
 from typing import Literal
 
-from src.backend.pipeline.agents import (
+from backend.pipeline.agents import (
     answer_agent,
     executor_agent,
     normalize_agent,
     plan_agent,
 )
-from src.backend.pipeline.pipeline_prompts import PipelinePrompts
-from src.backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineState
+from backend.pipeline.pipeline_prompts import PipelinePrompts
+from backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineState
 
-router = TypeSafeClassifier()
+# router = TypeSafeClassifier()
 
 prompts = PipelinePrompts()
 

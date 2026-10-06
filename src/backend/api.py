@@ -4,8 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
 from typing import AsyncIterable, TypedDict
-
-# from backend.graph import chatbot
+from backend.pipeline.graph import chatbot
 
 
 class ChatRequest(TypedDict):
@@ -24,11 +23,17 @@ app = FastAPI()
 async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     run = chatbot.stream_events(
         {
-            "messages": [{"role": "user", "content": req.message}],
+            "messages": [{ 
+                "question": req["message"],
+                "role": {
+                    "name": "manager",
+                    "objective": "Provide a concise and accurate answer to the user's question."
+                },
+            }],
         },
         config={
             "configurable": {
-                "thread_id": str(req.user_id),
+                "thread_id": str(req["user_id"]),
             }
         },
         version="v3",
