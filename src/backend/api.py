@@ -20,30 +20,26 @@ class ChatResponse(TypedDict):
 
 app = FastAPI()
 
-# @app.post("/chat/stream")
-# async def chat_stream(req: ChatRequest):
-#     def generate():
-#         run = chatbot.stream_events(
-#             {
-#                 "messages": [{"role": "user", "content": req.message}],
-#             },
-#             config={
-#                 "configurable": {
-#                     "thread_id": str(req.user_id),
-#                 }
-#             },
-#             version="v3",
-#         )
-
-#         for name, item in run.interleave("messages", "subgraphs"):
-#             if name == "messages":
-#                 for token in item.text:
-#                     yield {"type": "messages", "content": token}
-#             elif name == "subgraphs":
-#                 yield {"type": "subgraphs", "content": item.path}
-
-#     return StreamingResponse(generate(), media_type="text/event-stream")
-
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
+    run = chatbot.stream_events(
+        {
+            "messages": [{"role": "user", "content": req.message}],
+        },
+        config={
+            "configurable": {
+                "thread_id": str(req.user_id),
+            }
+        },
+        version="v3",
+    )
+    
+    for name, item in run.interleave("messages", "subgraphs"):
+        if name == "messages":
+            for token in item.text:
+                yield {"type": "messages", "content": token}
+        elif name == "subgraphs":
+            yield {"type": "subgraphs", "content": item.path}
 
 @app.post("/chat/test")
 async def chat_test(req: ChatRequest) -> AsyncIterable[ChatResponse]:
