@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class Role(TypedDict):
-    name: Literal["engineer", "team lead", "manager"]
+    name: Literal["engineer", "team_lead", "manager"]
     objective: str
 
 
@@ -77,6 +77,9 @@ class PlanAttempt(TypedDict):
 class PipelineState(TypedDict):
     question: str
     role: Role
+
+    scope: Literal["pipeline", "general"]
+    
     normalized: NormalizedOutput
     plan: ExecutionPlan
     plan_history: list[PlanAttempt]

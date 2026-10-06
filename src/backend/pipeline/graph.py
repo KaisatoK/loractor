@@ -9,6 +9,7 @@ from backend.pipeline.agents import (
     executor_agent,
     normalize_agent,
     plan_agent,
+    general_agent,
 )
 from backend.pipeline.pipeline_prompts import PipelinePrompts
 from backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineState
@@ -16,6 +17,42 @@ from backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineSt
 # router = TypeSafeClassifier()
 
 prompts = PipelinePrompts()
+SCOPE_CONFIDENCE_THRESHOLD = 0.64
+
+
+def scope_node(state: PipelineState) -> PipelineState:
+    # response = router.invoke(prompts.scope_request(state))
+
+    # pipeline_probability = response.nouls["requires_pipeline"].noul
+
+    # route = "pipeline" if pipeline_probability > SCOPE_CONFIDENCE_THRESHOLD else "general"
+
+    # return {
+    #     **state,
+    #     "scope": route,
+    # }
+
+    return {
+        **state,
+        "scope": "pipeline",
+    }
+
+
+def general_node(state: PipelineState) -> PipelineState:
+    result = general_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": state["question"]},
+            ]
+        }
+    )
+
+    answer = result["messages"][-1].text
+
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("general answer:", answer)
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    return {**state, "answer": answer}
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
@@ -175,6 +212,10 @@ def confidence_node(state: PipelineState) -> PipelineState:
     }
 
 
+def route_after_scope(state: PipelineState) -> Literal["pipeline", "general"]:
+    return state["scope"]
+
+
 def route_after_confidence(
     state: PipelineState,
 ) -> Literal["plan", "answer", "conclude"]:
@@ -182,13 +223,24 @@ def route_after_confidence(
 
 
 graph = StateGraph(PipelineState)
+graph.add_node("scope", scope_node)
+graph.add_node("general", general_node)
 graph.add_node("normalize", normalize_node)
 graph.add_node("plan", plan_node)
 graph.add_node("execute_plan", execute_plan_node)
 graph.add_node("answer", answer_node)
 graph.add_node("confidence", confidence_node)
 
-graph.set_entry_point("normalize")
+graph.set_entry_point("scope")
+graph.add_conditional_edges(
+    "scope",
+    route_after_scope,
+    {
+        "pipeline": "normalize",
+        "general": "general",
+    },
+)
+graph.add_edge("general", END)
 graph.add_edge("normalize", "plan")
 graph.add_edge("plan", "execute_plan")
 graph.add_edge("execute_plan", "answer")

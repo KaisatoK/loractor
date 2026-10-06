@@ -17,6 +17,7 @@ from backend.pipeline.schemas import (
 )
 
 model = ChatGroq(model="openai/gpt-oss-120b")
+general_model = ChatOllama(model="qwen3.5:4b")
 
 
 class TimeWindowInput(BaseModel):
@@ -150,6 +151,10 @@ def compare_periods_tool(
         limit,
     )
 
+
+general_agent = create_agent(
+    model=general_model,
+)
 
 normalize_agent = create_agent(
     model=model,

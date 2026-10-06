@@ -5,8 +5,45 @@ from backend.pipeline.schemas import PipelineState, Role
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
-    def role_text(self, role: Role) -> str:
-        return f"Role: {role['name']}\nRole objective: {role['objective']}"
+    shared_grounding = (
+        "Use only observed tool results. Separate evidence from interpretation. "
+        "Do not invent facts, causes, impact, or missing details. Treat supported "
+        "hypotheses as findings, contradicted hypotheses as excluded, and unresolved "
+        "hypotheses as limitations. Include relevant time ranges, filters, calculations, "
+        "evidence references, and confidence."
+    )
+
+    def role_context(self, role: Role) -> str:
+        return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
+
+    def scope_request(self, state: PipelineState) -> ClassifierRequest:
+        return {
+            "state": {
+                "user_message": state["question"],
+            },
+            "questions": {
+                "route": self.scope_question(),
+            },
+        }
+
+    def scope_question(self) -> Noul:
+        return Noul(
+            instructions=(
+                "Determine whether the user message requires investigation using "
+                "log data."
+            ),
+            criteria=NoulCriteria(
+                true=(
+                    "The user asks about logs, errors, failures, incidents, traces, "
+                    "traces, recurring operational patterns, system impact, or priorities "
+                    "that require log evidence."
+                ),
+                false=(
+                    "The message is a greeting, thanks, casual conversation, general "
+                    "help request, or is unrelated to log investigation."
+                ),
+            ),
+        )
 
     def normalize(self, state: PipelineState) -> str:
         return (
@@ -23,7 +60,7 @@ class PipelinePrompts:
         plan_history = state.get("plan_history", [])
 
         return (
-            f"{self.role_text(state['role'])}\n"
+            f"{self.role_context(state['role'])}\n"
             f"Normalized request: {state['normalized']}\n"
             f"Previous plan: {previous_plan}\n"
             f"Previous attempt history, including evidence statuses: {plan_history}\n"
@@ -54,20 +91,17 @@ class PipelinePrompts:
             "No answer revision feedback is available.",
         )
         return (
-            f"{self.role_text(state['role'])}\n"
+            f"{self.role_context(state['role'])}\n"
             f"Normalized request: {state['normalized']}\n"
             f"Investigation hypotheses: {state['plan']}\n"
             f"Evidence: {state['evidence']}\n\n"
             f"Previous confidence evaluation: {previous_confidence}\n"
             f"Required revision: {revision_feedback}\n\n"
-            "Write the answer to the user's problem, not a list of all hypotheses. "
-            "Use only hypotheses marked supported when explaining the likely cause or "
-            "answer. Ignore hypotheses marked contradicted; do not present them as "
-            "possible causes. Mention unresolved hypotheses only when the missing or "
-            "unavailable evidence materially limits the answer. Never turn not_found "
-            "or unavailable evidence into a fact, and never make claims not supported "
-            "by raw tool results. Apply the required revision explicitly. Tailor the "
-            "answer to the user's role."
+            "Answer the user's question directly. Focus on supported hypotheses, exclude "
+            "contradicted hypotheses, and mention unresolved hypotheses only when they "
+            "materially limit the conclusion. Tailor the detail and recommendation to the "
+            "user's role. Apply the revision feedback.\n\n"
+            f"Grounding rules: {self.shared_grounding}"
         )
 
     # def confidence_request(self, state: PipelineState) -> ClassifierRequest:
@@ -88,48 +122,45 @@ class PipelinePrompts:
     #         },
     #     }
 
-    def role_guidance(self, role: Role) -> str:
-        return (
-            f"The user's role is {role['name']}. Their objective is: "
-            f"{role['objective']}"
-        )
-
-    def pass_question(self, role_guidance: str) -> Noul:
+    def pass_question(self, role: Role) -> Noul:
         return Noul(
             instructions=(
                 "Estimate whether the current evidence and answer are sufficient "
                 "to answer the user's question accurately and for the user's role.\n\n"
-                f"Role objective: {role_guidance}"
+                f"{self.role_context(role)}"
             ),
             criteria=NoulCriteria(
                 true={
-                    "role_fit": "The answer is useful for the user's inferred goals, responsibilities, decisions, and level of detail.",
-                    "evidence": "The evidence statuses and hypothesis statuses are supported by tool results.",
-                    "answer": "The answer focuses on supported hypotheses, excludes contradicted hypotheses, and discloses unresolved hypotheses only when they limit the conclusion.",
+                    "role_fit": "The answer supports the role objective at the appropriate level of detail.",
+                    "grounding": "Material claims and hypothesis statuses are supported by tool results.",
+                    "completeness": "The answer resolves the question or clearly states its limitations.",
                 },
                 false={
-                    "role_fit": "The answer is aimed at the wrong goals, decisions, responsibilities, or level of detail for the user's role.",
-                    "evidence": "The evidence statuses or hypothesis statuses are unsupported, incomplete, or inconsistent with the tool results.",
-                    "answer": "The answer includes contradicted hypotheses, treats unresolved evidence as fact, or fails to focus on supported hypotheses.",
+                    "role_fit": "The answer does not support the role objective.",
+                    "grounding": "The answer contains unsupported claims or misrepresents evidence.",
+                    "completeness": "Important findings or limitations are missing.",
                 },
             ),
         )
 
-    def next_state_question(self, role_guidance: str) -> Choice:
+    def next_state_question(self, role: Role) -> Choice:
         return Choice(
             instructions=(
-                "Choose the next pipeline state using the hypotheses, required evidence, "
-                "evidence statuses, and answer. Select plan when an important hypothesis "
-                "has missing, unavailable, irrelevant, or contradictory evidence. Select "
-                "answer when the evidence is sufficient but the answer must be generated "
-                "or revised. Select conclude only when every important hypothesis has "
-                "been evaluated and the answer is grounded in observed tool results.\n\n"
-                f"Role objective: {role_guidance}"
+                "Choose the next pipeline state based on evidence sufficiency and "
+                "answer quality.\n\n"
+                f"{self.role_context(role)}"
             ),
             criteria={
-                "plan": "Re-plan because no hypothesis is supported, or an important hypothesis has missing, unavailable, irrelevant, or contradictory evidence.",
-                "answer": "Use the evidence to generate or revise an answer that focuses on supported hypotheses, excludes contradicted hypotheses, and clearly limits unresolved conclusions.",
-                "conclude": "The answer focuses on supported hypotheses, excludes contradicted hypotheses, treats unresolved hypotheses as limitations rather than facts, and is grounded in observed tool results.",
+                "plan": (
+                    "Evidence is missing, unavailable, irrelevant, contradictory, "
+                    "or no important hypothesis is supported."
+                ),
+                "answer": (
+                    "Evidence is sufficient, but the answer must be generated or revised."
+                ),
+                "conclude": (
+                    "The answer is grounded, role-appropriate, and ready to return."
+                ),
             },
         )
 
@@ -140,10 +171,10 @@ class PipelinePrompts:
                 "Choose none only when the evidence and answer are ready to return."
             ),
             criteria={
-                "missing_evidence": "The plan did not collect enough evidence to answer the question.",
-                "irrelevant_evidence": "The collected evidence does not address the question or is contradictory.",
-                "unsupported_answer": "The evidence is useful, but the answer contains unsupported claims or omissions.",
-                "role_mismatch": "The evidence and answer do not address the user's role or decision needs.",
-                "none": "The evidence is relevant and sufficient, and the answer is grounded and ready to return.",
+                "missing_evidence": "More evidence is required.",
+                "irrelevant_evidence": "The evidence does not address the important hypotheses.",
+                "unsupported_answer": "The evidence is adequate, but the answer misuses or omits it.",
+                "role_mismatch": "The answer does not support the user's role objective.",
+                "none": "The result is grounded and ready to return.",
             },
         )
