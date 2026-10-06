@@ -232,12 +232,34 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealD
         query = sql.SQL("""
             WITH query_embedding AS (
                 SELECT ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] AS emb
+            ),
+            fused AS (
+                SELECT log_date, log_time, pid, level, component, content,
+                    ROW_NUMBER() OVER (ORDER BY s DESC) AS rank 
+                FROM (
+                    SELECT log_date, log_time, pid, level, component, content, 
+                        BM25({table_name}.tableoid) AS s
+                    FROM {table_name}, query_embedding q
+                    WHERE content @@ ts_levenshtein(%s, 1)
+                    ORDER BY s DESC 
+                    LIMIT 100
+                ) lex
+                UNION ALL
+                SELECT log_date, log_time, pid, level, component, content,
+                    ROW_NUMBER() OVER (ORDER BY dist) AS rank 
+                FROM (
+                    SELECT log_date, log_time, pid, level, component, content, 
+                        embedding <=> q.emb AS dist
+                    FROM {table_name}, query_embedding q
+                    ORDER BY dist 
+                    LIMIT 100
+                ) vec
             )
-            SELECT 
-                log_date, log_time, pid, level, component, content, (1.0 - (embedding <=> q.emb)) AS relevance
-            FROM {table_name}, query_embedding q
-            WHERE content @@ %s
-            ORDER BY embedding <=> q.emb ASC
+            SELECT log_date, log_time, pid, level, component, content, 
+                SUM(1.0 / (60 + rank)) AS relevance
+            FROM fused
+            GROUP BY log_date, log_time, pid, level, component, content
+            ORDER BY SUM(1.0 / (60 + rank)) DESC
             LIMIT %s
         """).format(table_name=sql.Identifier(f"{table_name}_idx"))
 
@@ -389,7 +411,9 @@ if __name__ == "__main__":
     # print_row(get_trend_by_category(table_name, start, end, 2931, "WARNING"))
 
     ### FULL-TEXT SEARCH LOG
-    print_row(search_logs(table_name, "network failure", 5))
+    print_row(search_logs(table_name, "connection", 5))
+    print_row(search_logs(table_name, "nework", 5))
+    print_row(search_logs(table_name, "network", 5))
     print_row(search_logs(table_name, "resource"))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
