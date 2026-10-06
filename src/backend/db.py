@@ -1,14 +1,20 @@
 import psycopg2
+import os
 
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
 from pathlib import Path
 
+SERENEDB_PORT = 7890
+MODEL_BASE_URL = "http://host.docker.internal:11434"
+EMBEDDING_MODEL = "nomic-embed-text:v1.5"
+EMBEDDING_DIMENSION = 768
+
 
 def get_conn():
     return psycopg2.connect(
-        "host=localhost port=7890 dbname=postgres user=postgres password=postgres"
+        f"host=localhost port={SERENEDB_PORT} dbname=postgres user=postgres password=postgres"
     )
 
 
@@ -21,14 +27,18 @@ def create_ai_secret():
         cur.execute("DROP SECRET IF EXISTS local_ai")
         print("Dropped old secret 'local_ai' if it existed.")
 
-        cur.execute("""
+        query = sql.SQL("""
             CREATE SECRET local_ai (
                 TYPE openai,
-                base_url 'http://host.docker.internal:11434',
+                base_url {base_url},
                 embeddings_path '/v1/embeddings',
-                model 'all-minilm'
+                model {embedding_model}
             )
-        """)
+        """).format(
+            base_url=sql.Literal(MODEL_BASE_URL),
+            embedding_model=sql.Literal(EMBEDDING_MODEL),
+        )
+        cur.execute(query)
         conn.commit()
         print("AI secret 'local_ai' created successfully.")
     except Exception as e:
@@ -68,9 +78,12 @@ def import_from_csv(table_name: str, relative_file_path: str):
                 content TEXT,
                 event_id VARCHAR(50),
                 event_template TEXT,
-                embedding FLOAT[384]
+                embedding FLOAT[{embedding_dimension}]
             )
-        """).format(table_name=sql.Identifier(table_name))
+        """).format(
+            table_name=sql.Identifier(table_name),
+            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
+        )
         cur.execute(create_table_query)
         print(f"Table '{table_name}' created successfully.")
 
@@ -95,8 +108,12 @@ def import_from_csv(table_name: str, relative_file_path: str):
 
         update_embedding_query = sql.SQL("""
             UPDATE {table_name} 
-            SET embedding = ai_embed(content, 'all-minilm', 'local_ai')::FLOAT[384]
-        """).format(table_name=sql.Identifier(table_name))
+            SET embedding = ai_embed(content, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}]
+        """).format(
+            table_name=sql.Identifier(table_name),
+            embedding_model=sql.Literal(EMBEDDING_MODEL),
+            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
+        )
         cur.execute(update_embedding_query)
         print("Generated embedding vectors.")
 
@@ -233,7 +250,7 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]
 
         query = sql.SQL("""
             WITH query_embedding AS (
-                SELECT ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] AS emb
+                SELECT ai_embed(%s, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}] AS emb
             ),
             fused AS (
                 SELECT line_id,
@@ -265,8 +282,10 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]
             ORDER BY SUM(1.0 / (60 + f.rank)) DESC
             LIMIT %s
         """).format(
-            table_name=sql.Identifier(table_name),
+            embedding_model=sql.Literal(EMBEDDING_MODEL),
+            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
             index_name=sql.Identifier(f"{table_name}_idx"),
+            table_name=sql.Identifier(table_name),
         )
 
         cur.execute(query, [query_text, query_text, limit])
