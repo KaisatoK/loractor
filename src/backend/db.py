@@ -106,12 +106,15 @@ def import_from_csv(table_name: str, relative_file_path: str):
         """)
 
         create_index_query = sql.SQL("""
-            CREATE INDEX log_idx ON {table_name} USING inverted (
+            CREATE INDEX {index_name} ON {table_name} USING inverted (
                 line_id, 
                 content english, 
                 embedding ivf (metric = 'cosine')
             )
-        """).format(table_name=sql.Identifier(table_name))
+        """).format(
+            index_name=sql.Identifier(f"{table_name}_idx"),
+            table_name=sql.Identifier(table_name),
+        )
         cur.execute(create_index_query)
 
         refresh_query = sql.SQL("VACUUM (REFRESH_TABLE) {table_name}").format(
@@ -226,16 +229,19 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealD
     try:
         cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
 
-        query = """
-            SELECT log_date, log_time, pid, level, component, content,
-                   (1.0 - (embedding <=> ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384])) AS relevance
-            FROM log_idx
+        query = sql.SQL("""
+            WITH query_embedding AS (
+                SELECT ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] AS emb
+            )
+            SELECT 
+                log_date, log_time, pid, level, component, content, (1.0 - (embedding <=> q.emb)) AS relevance
+            FROM {table_name}, query_embedding q
             WHERE content @@ %s
-            ORDER BY embedding <=> ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] ASC
+            ORDER BY embedding <=> q.emb ASC
             LIMIT %s
-        """
+        """).format(table_name=sql.Identifier(f"{table_name}_idx"))
 
-        cur.execute(query, [query_text, query_text, query_text, limit])
+        cur.execute(query, [query_text, query_text, limit])
         return cur.fetchall()
     except Exception as e:
         conn.rollback()
@@ -366,44 +372,44 @@ if __name__ == "__main__":
     # create_ai_secret()
 
     ### IMPORT FROM CSV
-    import_from_csv(table_name, "csv/OpenStack_2k.log_structured.csv")
+    # import_from_csv(table_name, "csv/OpenStack_2k.log_structured.csv")
 
     ### COUNT LINES BY CATEGORY (INFO, WARNING, ERROR)
-    start = "2017-05-16 00:00:00"
-    end = "2017-05-16 00:01:00"
-    print_row(count_by_category(table_name, start, end))
-    print_row(count_by_category(table_name, start, end, "INFO"))
-    print_row(count_by_category(table_name, start, end, "WARNING"))
-    print_row(count_by_category(table_name, start, end, "ERROR"))
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:01:00"
+    # print_row(count_by_category(table_name, start, end))
+    # print_row(count_by_category(table_name, start, end, "INFO"))
+    # print_row(count_by_category(table_name, start, end, "WARNING"))
+    # print_row(count_by_category(table_name, start, end, "ERROR"))
 
     ### GET TREND OF A PID
-    start = "2017-05-16 00:00:00"
-    end = "2017-05-16 00:10:00"
-    print_row(get_trend_by_category(table_name, start, end, 25746))
-    print_row(get_trend_by_category(table_name, start, end, 2931, "WARNING"))
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:10:00"
+    # print_row(get_trend_by_category(table_name, start, end, 25746))
+    # print_row(get_trend_by_category(table_name, start, end, 2931, "WARNING"))
 
     ### FULL-TEXT SEARCH LOG
     print_row(search_logs(table_name, "network failure", 5))
     print_row(search_logs(table_name, "resource"))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
-    start = "2017-05-16 00:00:00"
-    end = "2017-05-16 00:01:00"
-    print_row(top_in_category_by_service(table_name, start, end, None))
-    print_row(top_in_category_by_service(table_name, start, end, "INFO", 10))
-    print_row(top_in_category_by_service(table_name, start, end, "ERROR", 2))
+    # start = "2017-05-16 00:00:00"
+    # end = "2017-05-16 00:01:00"
+    # print_row(top_in_category_by_service(table_name, start, end, None))
+    # print_row(top_in_category_by_service(table_name, start, end, "INFO", 10))
+    # print_row(top_in_category_by_service(table_name, start, end, "ERROR", 2))
 
     ### COMPARE SERVICES FOR A BASELINE AND A RECENT TIME PERIOD
-    baseline_start = "2017-05-16 00:00:00"
-    baseline_end = "2017-05-16 00:01:00"
-    recent_start = "2017-05-16 00:02:00"
-    recent_end = "2017-05-16 00:03:00"
-    print_row(
-        compare_periods(
-            table_name,
-            baseline_start,
-            baseline_end,
-            recent_start,
-            recent_end,
-        )
-    )
+    # baseline_start = "2017-05-16 00:00:00"
+    # baseline_end = "2017-05-16 00:01:00"
+    # recent_start = "2017-05-16 00:02:00"
+    # recent_end = "2017-05-16 00:03:00"
+    # print_row(
+    #     compare_periods(
+    #         table_name,
+    #         baseline_start,
+    #         baseline_end,
+    #         recent_start,
+    #         recent_end,
+    #     )
+    # )
