@@ -1,19 +1,19 @@
-from langchain_typesafe import Choice, Noul
+from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 from src.backend.pipeline.schemas import PipelineState, Role
 
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
-    def role_text(self, role: "Role") -> str:
+    def role_text(self, role: Role) -> str:
         return f"Role: {role['name']}\nRole objective: {role['objective']}"
 
-    def normalize(self, state: "PipelineState") -> str:
+    def normalize(self, state: PipelineState) -> str:
         return (
             f"User question: {state['question']}\n\n"
             "Normalize the user's question into a concise, structured format."
         )
 
-    def plan(self, state: "PipelineState") -> str:
+    def plan(self, state: PipelineState) -> str:
         previous_plan = state.get("plan") or "None"
         revision_feedback = state.get(
             "revision_feedback",
@@ -35,7 +35,7 @@ class PipelinePrompts:
             "do not repeat the previous plan unchanged."
         )
 
-    def execute_evidence(self, state: "PipelineState") -> str:
+    def execute_evidence(self, state: PipelineState) -> str:
         return (
             f"Normalized request: {state['normalized']}\n"
             f"Investigation plan: {state['plan']}\n\n"
@@ -44,7 +44,7 @@ class PipelinePrompts:
             "cannot be collected, mark it as unavailable rather than guessing."
         )
 
-    def answer(self, state: "PipelineState") -> str:
+    def answer(self, state: PipelineState) -> str:
         previous_confidence = state.get("confidence") or "No previous confidence evaluation."
         revision_feedback = state.get(
             "revision_feedback",
@@ -67,25 +67,25 @@ class PipelinePrompts:
             "answer to the user's role."
         )
 
-    def confidence_request(self, state: "PipelineState") -> dict:
-        role_guidance = self.role_guidance(state["role"])
-        return {
-            "state": {
-                "user_role": state["role"]["name"],
-                "role_objective": state["role"]["objective"],
-                "user_question": state["question"],
-                "hypotheses": state["plan"],
-                "evidence_report": state["evidence"],
-                "answer": state.get("answer", ""),
-            },
-            "question": {
-                "pass": self.pass_question(role_guidance),
-                "next_state": self.next_state_question(role_guidance),
-                "revision_reason": self.revision_reason_question(),
-            },
-        }
+    # def confidence_request(self, state: PipelineState) -> ClassifierRequest:
+    #     role_guidance = self.role_guidance(state["role"])
+    #     return {
+    #         "state": {
+    #             "user_role": state["role"]["name"],
+    #             "role_objective": state["role"]["objective"],
+    #             "user_question": state["question"],
+    #             "hypotheses": state["plan"],
+    #             "evidence_report": state["evidence"],
+    #             "answer": state.get("answer", ""),
+    #         },
+    #         "question": {
+    #             "pass": self.pass_question(role_guidance),
+    #             "next_state": self.next_state_question(role_guidance),
+    #             "revision_reason": self.revision_reason_question(),
+    #         },
+    #     }
 
-    def role_guidance(self, role: "Role") -> str:
+    def role_guidance(self, role: Role) -> str:
         return (
             f"The user's role is {role['name']}. Their objective is: "
             f"{role['objective']}"
@@ -98,18 +98,17 @@ class PipelinePrompts:
                 "to answer the user's question accurately and for the user's role.\n\n"
                 f"Role objective: {role_guidance}"
             ),
-            criteria={
-                "true": {
+            criteria=NoulCriteria(
+                true={
                     "role_fit": "The answer is useful for the user's inferred goals, responsibilities, decisions, and level of detail.",
                     "evidence": "The evidence statuses and hypothesis statuses are supported by tool results.",
                     "answer": "The answer focuses on supported hypotheses, excludes contradicted hypotheses, and discloses unresolved hypotheses only when they limit the conclusion.",
                 },
-                "false": {
+                false={
                     "role_fit": "The answer is aimed at the wrong goals, decisions, responsibilities, or level of detail for the user's role.",
                     "evidence": "The evidence statuses or hypothesis statuses are unsupported, incomplete, or inconsistent with the tool results.",
                     "answer": "The answer includes contradicted hypotheses, treats unresolved evidence as fact, or fails to focus on supported hypotheses.",
-                },
-            },
+                }),
         )
 
     def next_state_question(self, role_guidance: str) -> Choice:

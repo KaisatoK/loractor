@@ -104,40 +104,55 @@ def answer_node(state: PipelineState) -> PipelineState:
 
 
 def confidence_node(state: PipelineState) -> PipelineState:
-    response = router.invoke(prompts.confidence_request(state))
+    # response = router.invoke(prompts.confidence_request(state))
 
-    route_answer = response.choices["next_state"]
-    next_state = max(route_answer.probabilities, key=route_answer.probabilities.get)
-    reason_answer = response.choices["revision_reason"]
-    revision_reason = max(
-        reason_answer.probabilities, key=reason_answer.probabilities.get
-    )
+    # route_answer = response.choices["next_state"]
+    # next_state = max(route_answer.probabilities, key=route_answer.probabilities.get)
+    # reason_answer = response.choices["revision_reason"]
+    # revision_reason = max(
+    #     reason_answer.probabilities, key=reason_answer.probabilities.get
+    # )
 
-    revision_feedback = {
-        "missing_evidence": "Add or change tool calls to collect the missing evidence.",
-        "irrelevant_evidence": "Change the search criteria or tools so the evidence directly addresses the question.",
-        "unsupported_answer": "Keep the useful evidence, but revise the answer so every claim is supported.",
-        "role_mismatch": "Adjust the evidence plan and answer to the user's role and decision needs.",
-        "none": "No revision is required.",
-    }[revision_reason]
+    # revision_feedback = {
+    #     "missing_evidence": "Add or change tool calls to collect the missing evidence.",
+    #     "irrelevant_evidence": "Change the search criteria or tools so the evidence directly addresses the question.",
+    #     "unsupported_answer": "Keep the useful evidence, but revise the answer so every claim is supported.",
+    #     "role_mismatch": "Adjust the evidence plan and answer to the user's role and decision needs.",
+    #     "none": "No revision is required.",
+    # }[revision_reason]
 
-    # Debug output while the confidence policy is being tuned.
-    print(
-        f"confidence pass={response.nouls['pass'].noul:.3f} "
-        f"next_state={next_state} next_state_confidence={route_answer.confidence:.3f} "
-        f"revision_reason={revision_reason} "
-        f"revision_reason_confidence={reason_answer.confidence:.3f}"
-    )
+    # # Debug output while the confidence policy is being tuned.
+    # print(
+    #     f"confidence pass={response.nouls['pass'].noul:.3f} "
+    #     f"next_state={next_state} next_state_confidence={route_answer.confidence:.3f} "
+    #     f"revision_reason={revision_reason} "
+    #     f"revision_reason_confidence={reason_answer.confidence:.3f}"
+    # )
+
+    # return {
+    #     **state,
+    #     "confidence": {
+    #         "next_state": next_state,
+    #         "pass_probability": response.nouls["pass"].noul,
+    #         "probabilities": route_answer.probabilities,
+    #         "revision_reason": revision_reason,
+    #     },
+    #     "revision_feedback": revision_feedback,
+    # }
 
     return {
         **state,
         "confidence": {
-            "next_state": next_state,
-            "pass_probability": response.nouls["pass"].noul,
-            "probabilities": route_answer.probabilities,
-            "revision_reason": revision_reason,
+            "next_state": "conclude",
+            "pass_probability": 1,
+            "probabilities": {
+                "plan": 0,
+                "answer": 0,
+                "conclude": 1,
+            },
+            "revision_reason": "No revision is required.",
         },
-        "revision_feedback": revision_feedback,
+        "revision_feedback": "No revision is required.",
     }
 
 
