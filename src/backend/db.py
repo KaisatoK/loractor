@@ -1,7 +1,7 @@
 import psycopg2
 
 from psycopg2 import sql
-from psycopg2.extras import RealDictCursor, RealDictRow
+from psycopg2.extras import RealDictCursor
 
 from pathlib import Path
 
@@ -135,7 +135,7 @@ def import_from_csv(table_name: str, relative_file_path: str):
 
 def count_by_category(
     table_name: str, start_time: str, end_time: str, category: str | None = None
-) -> list[RealDictRow]:
+) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(f"Counting for category {category} from {start_time} to {end_time}")
@@ -156,7 +156,8 @@ def count_by_category(
 
         params = [start_time, end_time] + ([category] if category else [])
         cur.execute(query, params)
-        return cur.fetchall()
+        results = cur.fetchall()
+        return [dict(row) for row in results]
     except Exception as e:
         conn.rollback()
         print(e)
@@ -172,7 +173,7 @@ def get_trend_by_category(
     end_time: str,
     pid: int,
     category: str | None = None,
-) -> list[RealDictRow]:
+) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(
@@ -211,7 +212,8 @@ def get_trend_by_category(
 
         params = [pid, start_time, end_time] + ([category] if category else [])
         cur.execute(query, params)
-        return cur.fetchall()
+        results = cur.fetchall()
+        return [dict(row) for row in results]
     except Exception as e:
         conn.rollback()
         print(e)
@@ -221,7 +223,7 @@ def get_trend_by_category(
         conn.close()
 
 
-def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealDictRow]:
+def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(f'Getting top {limit} logs related to "{query_text}"')
@@ -264,7 +266,8 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealD
         """).format(table_name=sql.Identifier(f"{table_name}_idx"))
 
         cur.execute(query, [query_text, query_text, limit])
-        return cur.fetchall()
+        results = cur.fetchall()
+        return [dict(row) for row in results]
     except Exception as e:
         conn.rollback()
         print(e)
@@ -280,7 +283,7 @@ def top_in_category_by_service(
     end_time: str,
     category: str | None = None,
     limit: int = 5,
-) -> list[RealDictRow]:
+) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(
@@ -304,7 +307,8 @@ def top_in_category_by_service(
 
         params = [start_time, end_time] + ([category] if category else []) + [limit]
         cur.execute(query, params)
-        return cur.fetchall()
+        results = cur.fetchall()
+        return [dict(row) for row in results]
     except Exception as e:
         conn.rollback()
         print(e)
@@ -321,7 +325,7 @@ def compare_periods(
     recent_start: str,
     recent_end: str,
     limit: int = 5,
-) -> list[RealDictRow]:
+) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(
@@ -371,7 +375,8 @@ def compare_periods(
                 limit,
             ],
         )
-        return cur.fetchall()
+        results = cur.fetchall()
+        return [dict(row) for row in results]
     except Exception as e:
         conn.rollback()
         print(e)
@@ -384,7 +389,7 @@ def compare_periods(
 if __name__ == "__main__":
     table_name = "log"
 
-    def print_row(rows: list[RealDictRow]) -> None:
+    def print_row(rows: list[dict]) -> None:
         for row in rows:
             print(row)
 

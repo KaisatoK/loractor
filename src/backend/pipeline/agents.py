@@ -1,6 +1,13 @@
 from langchain_core.tools import tool
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
+from src.backend.db import (
+    count_by_category,
+    get_trend_by_category,
+    search_logs,
+    top_in_category_by_service,
+    compare_periods,
+)
 from src.backend.pipeline.schemas import (
     EvidenceReport,
     ExecutionPlan,
@@ -11,32 +18,64 @@ model = ChatOllama(model="qwen3.5:4b")
 
 
 @tool
-def count_by_category_tool(hours: int, category: str | None = None):
-    """Count log entries grouped by category within a time window."""
+def count_by_category_tool(
+    table_name: str,
+    start_time: str,
+    end_time: str,
+    category: str | None = None,
+) -> list[dict]:
+    """Count log entries grouped by category within a time window from the database."""
+    return count_by_category(table_name, start_time, end_time, category)
 
 
 @tool
-def search_logs_tool(query: str, limit: int = 10) -> dict[str, object]:
-    """Placeholder for searching raw logs by text."""
-    return {
-        "status": "not_implemented",
-        "tool": "search_logs_tool",
-        "message": "Raw log search is not implemented yet.",
-        "query": query,
-        "limit": limit,
-    }
+def get_trend_tool(
+    table_name: str,
+    start_time: str,
+    end_time: str,
+    pid: int,
+    category: str | None = None,
+) -> list[dict]:
+    """Get minute-by-minute trend for a given pid and optional category from the database."""
+    return get_trend_by_category(table_name, start_time, end_time, pid, category)
 
 
 @tool
-def get_trend_tool(service: str, days: int = 7) -> dict[str, object]:
-    """Placeholder for retrieving a service trend over time."""
-    return {
-        "status": "not_implemented",
-        "tool": "get_trend_tool",
-        "message": "Trend retrieval is not implemented yet.",
-        "service": service,
-        "days": days,
-    }
+def search_logs_tool(table_name: str, query_text: str, limit: int = 10) -> list[dict]:
+    """Search raw logs using full-text and semantic search from the database."""
+    return search_logs(table_name, query_text, limit)
+
+
+@tool
+def top_in_category_by_service_tool(
+    table_name: str,
+    start_time: str,
+    end_time: str,
+    category: str | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Get top services for a specific category within a time window from the database."""
+    return top_in_category_by_service(table_name, start_time, end_time, category, limit)
+
+
+@tool
+def compare_periods_tool(
+    table_name: str,
+    baseline_start: str,
+    baseline_end: str,
+    recent_start: str,
+    recent_end: str,
+    limit: int = 5,
+) -> list[dict]:
+    """Compare top services between a baseline period and a recent period from the database."""
+    return compare_periods(
+        table_name,
+        baseline_start,
+        baseline_end,
+        recent_start,
+        recent_end,
+        limit,
+    )
 
 
 normalize_agent = create_agent(
@@ -55,7 +94,13 @@ plan_agent = create_agent(
 
 executor_agent = create_agent(
     model=model,
-    tools=[count_by_category_tool, search_logs_tool, get_trend_tool],
+    tools=[
+        count_by_category_tool,
+        get_trend_tool,
+        search_logs_tool,
+        top_in_category_by_service_tool,
+        compare_periods_tool,
+    ],
     response_format=EvidenceReport,
     system_prompt=(
         "You are an evidence collection agent. Receive investigation hypotheses and "
@@ -81,4 +126,3 @@ answer_agent = create_agent(
         "collected, not found, and unavailable evidence."
     ),
 )
-
