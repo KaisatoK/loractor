@@ -1,6 +1,7 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 from backend.pipeline.schemas import PipelineState, Role
 
+
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
@@ -8,9 +9,6 @@ class PipelinePrompts:
         return f"Role: {role['name']}\nRole objective: {role['objective']}"
 
     def normalize(self, state: PipelineState) -> str:
-        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-        print(state)
-        print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
         return (
             f"User question: {state['question']}\n\n"
             "Normalize the user's question into a concise, structured format."
@@ -48,7 +46,9 @@ class PipelinePrompts:
         )
 
     def answer(self, state: PipelineState) -> str:
-        previous_confidence = state.get("confidence") or "No previous confidence evaluation."
+        previous_confidence = (
+            state.get("confidence") or "No previous confidence evaluation."
+        )
         revision_feedback = state.get(
             "revision_feedback",
             "No answer revision feedback is available.",
@@ -111,7 +111,8 @@ class PipelinePrompts:
                     "role_fit": "The answer is aimed at the wrong goals, decisions, responsibilities, or level of detail for the user's role.",
                     "evidence": "The evidence statuses or hypothesis statuses are unsupported, incomplete, or inconsistent with the tool results.",
                     "answer": "The answer includes contradicted hypotheses, treats unresolved evidence as fact, or fails to focus on supported hypotheses.",
-                }),
+                },
+            ),
         )
 
     def next_state_question(self, role_guidance: str) -> Choice:

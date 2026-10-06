@@ -52,7 +52,7 @@ class SearchLogsInput(BaseModel):
         default=10,
         ge=1,
         le=100,
-        description="Maximum number of relevant log records to return."
+        description="Maximum number of relevant log records to return.",
     )
 
 
@@ -61,7 +61,7 @@ class TopServicesInput(TimeWindowInput):
         default=5,
         ge=1,
         le=100,
-        description="Maximum number of components to return, ordered by log volume."
+        description="Maximum number of components to return, ordered by log volume.",
     )
 
 
@@ -86,7 +86,7 @@ class ComparePeriodsInput(BaseModel):
         default=5,
         ge=1,
         le=100,
-        description="Maximum number of component and severity changes to return."
+        description="Maximum number of component and severity changes to return.",
     )
 
 

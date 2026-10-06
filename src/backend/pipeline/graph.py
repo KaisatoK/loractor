@@ -1,4 +1,3 @@
-
 from langgraph.graph import StateGraph, END
 from langchain_typesafe import TypeSafeClassifier
 
@@ -20,8 +19,6 @@ prompts = PipelinePrompts()
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("before normalize_node state:", state)
     result = normalize_agent.invoke(
         {
             "messages": [
@@ -29,8 +26,6 @@ def normalize_node(state: PipelineState) -> PipelineState:
             ]
         }
     )
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("after normalize_node state:", result)
     normalized = result["structured_response"]
     return {**state, "normalized": normalized.model_dump()}
 
@@ -121,7 +116,7 @@ def answer_node(state: PipelineState) -> PipelineState:
 
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     print("answer:", answer)
-    print("####################################")
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {**state, "answer": answer}
 
 
@@ -162,8 +157,8 @@ def confidence_node(state: PipelineState) -> PipelineState:
     #     "revision_feedback": revision_feedback,
     # }
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print(state["answer"])
-    print("####################################")
+    print("answer:", state["answer"])
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {
         **state,
         "confidence": {

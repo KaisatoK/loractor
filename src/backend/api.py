@@ -20,6 +20,7 @@ class ChatResponse(TypedDict):
 
 app = FastAPI()
 
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     initial_state = cast(
@@ -41,7 +42,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
         },
         version="v3",
     )
-    
+
     last_answer = None
     for name, item in run.interleave("values", "subgraphs"):
         if name == "values":
@@ -50,9 +51,9 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 yield {"type": "messages", "content": answer}
                 last_answer = answer
         elif name == "subgraphs":
-                yield {"type": "subgraphs", "content": str(item.path)}
+            yield {"type": "subgraphs", "content": str(item.path)}
 
-                
+
 @app.post("/chat/test")
 async def chat_test(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     yield {"type": "subgraphs", "content": "normalize"}

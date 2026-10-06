@@ -18,12 +18,10 @@ class NormalizedOutput(BaseModel):
         description="A free-form description of the user's desired outcome."
     )
     context: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Dynamic question-specific JSON."
+        default_factory=dict, description="Dynamic question-specific JSON."
     )
     ambiguities: list[str] = Field(
-        default_factory=list,
-        description="Uncertainties that could affect the result."
+        default_factory=list, description="Uncertainties that could affect the result."
     )
 
 
