@@ -8,8 +8,35 @@ from pathlib import Path
 
 def get_conn():
     return psycopg2.connect(
-        "host=localhost dbname=postgres user=postgres password=postgres"
+        "host=localhost port=7890 dbname=postgres user=postgres password=postgres"
     )
+
+
+def create_ai_secret():
+    """Registers the local Ollama AI model provider secret in SereneDB."""
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("DROP SECRET IF EXISTS local_ai")
+        print("Dropped old secret 'local_ai' if it existed.")
+
+        cur.execute("""
+            CREATE SECRET local_ai (
+                TYPE openai,
+                base_url 'http://host.docker.internal:11434',
+                embeddings_path '/v1/embeddings',
+                model 'all-minilm'
+            )
+        """)
+        conn.commit()
+        print("AI secret 'local_ai' created successfully.")
+    except Exception as e:
+        conn.rollback()
+        print(e)
+    finally:
+        cur.close()
+        conn.close()
 
 
 def import_from_csv(table_name: str, relative_file_path: str):
@@ -19,11 +46,20 @@ def import_from_csv(table_name: str, relative_file_path: str):
     absolute_file_path = base_dir / relative_file_path
 
     try:
+        cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
+
+        drop_query = sql.SQL("DROP TABLE IF EXISTS {table_name} CASCADE").format(
+            table_name=sql.Identifier(table_name)
+        )
+
+        cur.execute(drop_query)
+        print(f"Dropped old table '{table_name}' if it existed.")
+
         create_table_query = sql.SQL("""
-            CREATE TABLE IF NOT EXISTS {table_name} (
+            CREATE TABLE {table_name} (
                 line_id INT PRIMARY KEY,
                 log_record TEXT,
-                log_log_date DATE,
+                log_date DATE,
                 log_time TIME,
                 pid INT,
                 level VARCHAR(50),
@@ -31,7 +67,8 @@ def import_from_csv(table_name: str, relative_file_path: str):
                 addr TEXT,
                 content TEXT,
                 event_id VARCHAR(50),
-                event_template TEXT
+                event_template TEXT,
+                embedding FLOAT[384]
             )
         """).format(table_name=sql.Identifier(table_name))
 
@@ -49,6 +86,30 @@ def import_from_csv(table_name: str, relative_file_path: str):
 
         with open(absolute_file_path, "r", encoding="utf-8") as f:
             cur.copy_expert(copy_query, f)
+
+        print("CSV data copied successfully.")
+
+        update_embedding_query = sql.SQL("""
+            UPDATE {table_name} 
+            SET embedding = ai_embed(content, 'all-minilm', 'local_ai')::FLOAT[384]
+        """).format(table_name=sql.Identifier(table_name))
+
+        cur.execute(update_embedding_query)
+        print("Generated embedding vectors.")
+
+        cur.execute("""
+            CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS english AS 
+            split_text(case := 'lower') WITH (frequency, position, offset)
+        """)
+        cur.execute("""
+            CREATE INDEX log_idx ON log USING inverted (
+                line_id, 
+                content english, 
+                embedding ivf (metric = 'cosine')
+            )
+        """)
+        cur.execute("VACUUM (REFRESH_TABLE) log")
+        print("Created the text search dictionary and inverted index.")
 
         conn.commit()
         print("Import completed successfully.")
@@ -83,8 +144,7 @@ def count_by_category(
 
         params = [start_time, end_time] + ([category] if category else [])
         cur.execute(query, params)
-        rows = cur.fetchall()
-        return rows
+        return cur.fetchall()
     except Exception as e:
         conn.rollback()
         print(e)
@@ -113,8 +173,7 @@ def get_trend(
         """).format(table_name=sql.Identifier(table_name))
 
         cur.execute(query, [pid, start_time, end_time])
-        rows = cur.fetchall()
-        return rows
+        return cur.fetchall()
     except Exception as e:
         conn.rollback()
         print(e)
@@ -127,26 +186,22 @@ def get_trend(
 def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[RealDictRow]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    print(
-        f"Getting top {limit} logs related to \"{query_text}\""
-    )
+    print(f'Getting top {limit} logs related to "{query_text}"')
 
     try:
-        query = sql.SQL("""
-            SELECT log_date, log_time, pid, level, component, content,
-                CASE 
-                    WHEN content ILIKE %s THEN 1.0 
-                    ELSE 0.5 
-                END AS relevance
-            FROM {table_name}
-            WHERE content ILIKE %s
-            ORDER BY relevance DESC
-            LIMIT %s
-        """).format(table_name=sql.Identifier(table_name))
+        cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
 
-        cur.execute(query, [f"%{query_text}%", f"%{query_text}%", limit])
-        rows = cur.fetchall()
-        return rows
+        query = """
+            SELECT log_date, log_time, pid, level, component, content,
+                   (1.0 - (embedding <=> ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384])) AS relevance
+            FROM log_idx
+            WHERE content @@ %s
+            ORDER BY embedding <=> ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] ASC
+            LIMIT %s
+        """
+
+        cur.execute(query, [query_text, query_text, query_text, limit])
+        return cur.fetchall()
     except Exception as e:
         conn.rollback()
         print(e)
@@ -186,8 +241,7 @@ def top_in_category_by_service(
 
         params = [start_time, end_time] + ([category] if category else []) + [limit]
         cur.execute(query, params)
-        rows = cur.fetchall()
-        return rows
+        return cur.fetchall()
     except Exception as e:
         conn.rollback()
         print(e)
@@ -238,8 +292,7 @@ def compare_periods(
                 service,
             ],
         )
-        row = cur.fetchone()
-        return row
+        return cur.fetchone()
     except Exception as e:
         conn.rollback()
         print(e)
@@ -258,6 +311,9 @@ if __name__ == "__main__":
 
         print()
 
+    ### CREATE AI SECRET REQUIRED TO RUN SERENEDB
+    # create_ai_secret()
+
     ### IMPORT FROM CSV
     # import_from_csv(table_name, "csv/OpenStack_2k.log_structured.csv")
 
@@ -275,8 +331,8 @@ if __name__ == "__main__":
     # print_row(get_trend(table_name, start, end, 25746))
 
     ### FULL-TEXT SEARCH LOG
-    print_row(search_logs(table_name, "network"))
-    print_row(search_logs(table_name, "instance", 2))
+    print_row(search_logs(table_name, "network failure", 5))
+    print_row(search_logs(table_name, "resource"))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
     # start = "2017-05-16 00:00:00"
