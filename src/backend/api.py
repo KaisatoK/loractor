@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
-from typing import TypedDict
+from typing import AsyncIterable, TypedDict
 
 # from backend.graph import chatbot
 
