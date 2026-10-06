@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from new_chat import new_chat_page
-from main_page import main_page
+from new_chat.new_chat import new_chat
+from main_page.main_page import main_page
 import streamlit as st
 
 st.set_page_config(
@@ -30,6 +30,6 @@ with st.sidebar:
 if ("current_chat" not in st.session_state) or (
     st.session_state.current_chat not in st.session_state.chat_histories
 ):
-    new_chat_page()
+    new_chat()
 else:
     main_page()
