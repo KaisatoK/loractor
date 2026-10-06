@@ -6,6 +6,7 @@ from typing import Literal
 
 from backend.pipeline.agents import (
     answer_agent,
+    evidence_agent,
     executor_agent,
     normalize_agent,
     plan_agent,
@@ -19,6 +20,8 @@ prompts = PipelinePrompts()
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("before normalize_node state:", state)
     result = normalize_agent.invoke(
         {
             "messages": [
@@ -26,6 +29,8 @@ def normalize_node(state: PipelineState) -> PipelineState:
             ]
         }
     )
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("after normalize_node state:", result)
     normalized = result["structured_response"]
     return {**state, "normalized": normalized.model_dump()}
 
@@ -81,7 +86,20 @@ def execute_plan_node(state: PipelineState) -> PipelineState:
             }
         )
 
-    evidence_report = result["structured_response"].model_dump()
+    evidence_result = evidence_agent.invoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Investigation plan: {state['plan']}\n\n"
+                        f"Tool results: {tool_results}"
+                    ),
+                }
+            ]
+        }
+    )
+    evidence_report = evidence_result["structured_response"].model_dump()
     return {
         **state,
         "evidence": {
@@ -99,7 +117,11 @@ def answer_node(state: PipelineState) -> PipelineState:
             ]
         }
     )
-    answer = result["messages"][-1].content
+    answer = result["messages"][-1].text
+
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print("answer:", answer)
+    print("####################################")
     return {**state, "answer": answer}
 
 
@@ -139,7 +161,9 @@ def confidence_node(state: PipelineState) -> PipelineState:
     #     },
     #     "revision_feedback": revision_feedback,
     # }
-
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    print(state["answer"])
+    print("####################################")
     return {
         **state,
         "confidence": {

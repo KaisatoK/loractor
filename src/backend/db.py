@@ -236,34 +236,38 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]
                 SELECT ai_embed(%s, 'all-minilm', 'local_ai')::FLOAT[384] AS emb
             ),
             fused AS (
-                SELECT log_date, log_time, pid, level, component, content,
+                SELECT line_id,
                     ROW_NUMBER() OVER (ORDER BY s DESC) AS rank 
                 FROM (
-                    SELECT log_date, log_time, pid, level, component, content, 
-                        BM25({table_name}.tableoid) AS s
-                    FROM {table_name}, query_embedding q
+                    SELECT line_id,
+                        BM25({index_name}.tableoid) AS s
+                    FROM {index_name}
                     WHERE content @@ ts_levenshtein(%s, 1)
                     ORDER BY s DESC 
                     LIMIT 100
                 ) lex
                 UNION ALL
-                SELECT log_date, log_time, pid, level, component, content,
+                SELECT line_id,
                     ROW_NUMBER() OVER (ORDER BY dist) AS rank 
                 FROM (
-                    SELECT log_date, log_time, pid, level, component, content, 
+                    SELECT line_id,
                         embedding <=> q.emb AS dist
-                    FROM {table_name}, query_embedding q
+                    FROM {index_name}, query_embedding q
                     ORDER BY dist 
                     LIMIT 100
                 ) vec
             )
-            SELECT log_date, log_time, pid, level, component, content, 
-                SUM(1.0 / (60 + rank)) AS relevance
-            FROM fused
-            GROUP BY log_date, log_time, pid, level, component, content
-            ORDER BY SUM(1.0 / (60 + rank)) DESC
+            SELECT t.log_date, t.log_time, t.pid, t.level, t.component, t.content,
+                SUM(1.0 / (60 + f.rank)) AS relevance
+            FROM fused f
+            JOIN {table_name} t ON t.line_id = f.line_id
+            GROUP BY t.log_date, t.log_time, t.pid, t.level, t.component, t.content
+            ORDER BY SUM(1.0 / (60 + f.rank)) DESC
             LIMIT %s
-        """).format(table_name=sql.Identifier(f"{table_name}_idx"))
+        """).format(
+            table_name=sql.Identifier(table_name),
+            index_name=sql.Identifier(f"{table_name}_idx"),
+        )
 
         cur.execute(query, [query_text, query_text, limit])
         results = cur.fetchall()
