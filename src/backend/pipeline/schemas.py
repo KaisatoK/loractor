@@ -78,9 +78,7 @@ class PipelineState(TypedDict):
     question: str
     role: Role
     effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
-
     scope: Literal["pipeline", "general"]
-    
     normalized: NormalizedOutput
     plan: ExecutionPlan
     plan_history: list[PlanAttempt]

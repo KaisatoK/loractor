@@ -23,7 +23,11 @@ with st.sidebar:
         st.rerun()
     st.divider()
     for chat_id, chat_data in st.session_state.chat_histories.items():
-        if st.button(f"{chat_data['role'].capitalize()} - {chat_id}", type="secondary", width="stretch"):
+        if st.button(
+            f"{chat_data['role'].capitalize()} - {chat_id}",
+            type="secondary",
+            width="stretch",
+        ):
             st.session_state.current_chat = chat_id
             st.rerun()
 

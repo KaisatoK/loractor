@@ -66,7 +66,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 "name": req["role"],
                 "objective": ROLE_OBJECTIVES[req["role"]],
             },
-            "effort": req["effort"]
+            "effort": req["effort"],
         },
     )
     run = chatbot.stream_events(

@@ -10,7 +10,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-from backend.db.query import (
+from backend.db import (
     count_by_category,
     get_trend_by_category,
     search_logs,
@@ -101,10 +101,10 @@ def handle_tool_errors(
 
 @tool("count_logs_by_severity")
 def count_by_category_tool(
-    table_name: str,
     start_time: str,
     end_time: str,
     runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> dict:
     """Count log rows by exact severity within an inclusive time window."""
@@ -120,7 +120,7 @@ def count_by_category_tool(
     return execute_database_tool(
         runtime=runtime,
         operation="count logs by severity",
-        function=lambda: count_by_category(table_name, start_time, end_time, category),
+        function=lambda: count_by_category(start_time, end_time, table_name, category),
     )
 
 

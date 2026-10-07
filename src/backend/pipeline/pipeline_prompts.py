@@ -1,13 +1,15 @@
+import json
+
 from pathlib import Path
 
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 from backend.pipeline.schemas import PipelineState, Role
 
-
 LOG_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "log_table_schema.yaml"
 LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")
-TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[0] / "tool_schema.yaml"
-TOOL_SCHEMA = TOOL_SCHEMA_PATH.read_text(encoding="utf-8")
+TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[0] / "tool_schema.json"
+TOOL_SCHEMA = json.loads(TOOL_SCHEMA_PATH.read_text(encoding="utf-8"))
+
 
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""

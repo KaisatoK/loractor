@@ -16,13 +16,13 @@ columns:
     description: Where and when the log line came from.
   - name: log_date
     type: DATE
-    description: Date of the event (no time part) e.g. "2017-05-16"
+    description: Date of the event (no time part) with format YYYY-MM-DD.
   - name: log_time
     type: TIME
-    description: Time of day of the event (no date part) e.g. "00:14:47"
+    description: Time of day of the event (no date part) with format HH:MM:SS.
   - name: log_timestamp
     type: TIMESTAMP
-    description: log_date + log_time combined e.g. "2017-05-16 00:01:00". Describe when the log line was written
+    description: log_date + log_time combined with format YYYY-MM-DD HH:MM:SS.
   - name: pid
     type: INT
     description: Process ID that emitted the line.
