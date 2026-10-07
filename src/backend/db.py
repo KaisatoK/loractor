@@ -1,6 +1,9 @@
 import psycopg2
-import os
+import functools
+import logging
 
+from contextlib import contextmanager
+from typing import Callable, ParamSpec
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
@@ -11,11 +14,47 @@ MODEL_BASE_URL = "http://host.docker.internal:11434"
 EMBEDDING_MODEL = "nomic-embed-text:v1.5"
 EMBEDDING_DIMENSION = 768
 
+logger = logging.getLogger(__name__)
+P = ParamSpec("P")
+
 
 def get_conn():
     return psycopg2.connect(
         f"host=localhost port={SERENEDB_PORT} dbname=postgres user=postgres password=postgres"
     )
+
+
+@contextmanager
+def db_cursor():
+    conn = get_conn()
+    cur = None
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        yield cur
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if cur is not None:
+            cur.close()
+        conn.close()
+
+
+def query_runner(
+    func: Callable[P, tuple[sql.Composable, list]],
+) -> Callable[P, list[dict]]:
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> list[dict]:
+        logger.info("Running %s args=%s kwargs=%s", func.__name__, args, kwargs)
+
+        query, params = func(*args, **kwargs)
+
+        with db_cursor() as cur:
+            cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
+            cur.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
+
+    return wrapper
 
 
 def create_ai_secret():
@@ -72,7 +111,7 @@ def import_from_csv(table_name: str, relative_file_path: str):
                 log_time TIME,
                 log_timestamp TIMESTAMP,
                 pid INT,
-                level VARCHAR(50),
+                category VARCHAR(50),
                 component TEXT,
                 addr TEXT,
                 content TEXT,
@@ -90,7 +129,7 @@ def import_from_csv(table_name: str, relative_file_path: str):
         copy_query = sql.SQL("""
             COPY {table_name} (
                 line_id, log_record, log_date, log_time, pid, 
-                level, component, addr, content, event_id, event_template
+                category, component, addr, content, event_id, event_template
             )
             FROM STDIN
             WITH CSV HEADER DELIMITER ','
@@ -150,199 +189,156 @@ def import_from_csv(table_name: str, relative_file_path: str):
         conn.close()
 
 
+@query_runner
 def count_by_category(
     table_name: str, start_time: str, end_time: str, category: str | None = None
-) -> list[dict]:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+) -> tuple[sql.Composable, list[str]]:
     print(f"Counting for category {category} from {start_time} to {end_time}")
 
-    try:
-        query = sql.SQL("""
-            SELECT level, COUNT(*) AS count
-            FROM {table_name}
-            WHERE log_timestamp >= %s::timestamp
-              AND log_timestamp <= %s::timestamp
-              {category_filter}
-            GROUP BY level
-            ORDER BY count DESC
-        """).format(
-            table_name=sql.Identifier(table_name),
-            category_filter=sql.SQL("AND level = %s") if category else sql.SQL(""),
-        )
+    query = sql.SQL("""
+        SELECT category, COUNT(*) AS count
+        FROM {table_name}
+        WHERE log_timestamp >= %s::timestamp
+            AND log_timestamp <= %s::timestamp
+            {category_filter}
+        GROUP BY category
+        ORDER BY count DESC
+    """).format(
+        table_name=sql.Identifier(table_name),
+        category_filter=sql.SQL("AND category = %s") if category else sql.SQL(""),
+    )
 
-        params = [start_time, end_time] + ([category] if category else [])
-        cur.execute(query, params)
-        results = cur.fetchall()
-        return [dict(row) for row in results]
-    except Exception as e:
-        conn.rollback()
-        print(e)
-        return []
-    finally:
-        cur.close()
-        conn.close()
+    params = [start_time, end_time] + ([category] if category else [])
+    return query, params
 
 
+@query_runner
 def get_trend_by_category(
     table_name: str,
     start_time: str,
     end_time: str,
     pid: int,
     category: str | None = None,
-) -> list[dict]:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+) -> tuple[sql.Composable, list[str | int]]:
     print(
         f"Getting minute-by-minute trend for pid {pid} and category {category} from {start_time} to {end_time}"
     )
 
-    try:
-        query = sql.SQL("""
-            WITH minute_counts AS (
-                SELECT 
-                    EXTRACT(MINUTE FROM log_time) AS minute, 
-                    COUNT(*) AS count
-                FROM {table_name}
-                WHERE pid = %s
-                  AND log_timestamp >= %s::timestamp
-                  AND log_timestamp <= %s::timestamp
-                  {category_filter}
-                GROUP BY minute
-            )
+    query = sql.SQL("""
+        WITH minute_counts AS (
             SELECT 
-                minute,
-                count,
-                LAG(count) OVER (ORDER BY minute) AS prev_count,
-                CASE 
-                    WHEN LAG(count) OVER (ORDER BY minute) IS NULL THEN 'initial'
-                    WHEN count > LAG(count) OVER (ORDER BY minute) THEN 'up'
-                    WHEN count < LAG(count) OVER (ORDER BY minute) THEN 'down'
-                    ELSE 'flat'
-                END AS trend
-            FROM minute_counts
-            ORDER BY minute
-        """).format(
-            table_name=sql.Identifier(table_name),
-            category_filter=sql.SQL("AND level = %s") if category else sql.SQL(""),
+                EXTRACT(MINUTE FROM log_time) AS minute, 
+                COUNT(*) AS count
+            FROM {table_name}
+            WHERE pid = %s
+                AND log_timestamp >= %s::timestamp
+                AND log_timestamp <= %s::timestamp
+                {category_filter}
+            GROUP BY minute
         )
+        SELECT 
+            minute,
+            count,
+            LAG(count) OVER (ORDER BY minute) AS prev_count,
+            CASE 
+                WHEN LAG(count) OVER (ORDER BY minute) IS NULL THEN 'initial'
+                WHEN count > LAG(count) OVER (ORDER BY minute) THEN 'up'
+                WHEN count < LAG(count) OVER (ORDER BY minute) THEN 'down'
+                ELSE 'flat'
+            END AS trend
+        FROM minute_counts
+        ORDER BY minute
+    """).format(
+        table_name=sql.Identifier(table_name),
+        category_filter=sql.SQL("AND category = %s") if category else sql.SQL(""),
+    )
 
-        params = [pid, start_time, end_time] + ([category] if category else [])
-        cur.execute(query, params)
-        results = cur.fetchall()
-        return [dict(row) for row in results]
-    except Exception as e:
-        conn.rollback()
-        print(e)
-        return []
-    finally:
-        cur.close()
-        conn.close()
+    params = [pid, start_time, end_time] + ([category] if category else [])
+    return query, params
 
 
-
-def search_logs(table_name: str, query_text: str, category: str | None = None, limit: int = 10) -> list[dict]:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+@query_runner
+def search_logs(
+    table_name: str, query_text: str, category: str | None = None, limit: int = 10
+) -> tuple[sql.Composable, list[str | int]]:
     print(f'Getting top {limit} logs related to "{query_text}"')
 
-    try:
-        cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
-
-        query = sql.SQL("""
-            WITH query_embedding AS (
-                SELECT ai_embed(%s, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}] AS emb
-            ),
-            fused AS (
+    query = sql.SQL("""
+        WITH query_embedding AS (
+            SELECT ai_embed(%s, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}] AS emb
+        ),
+        fused AS (
+            SELECT line_id,
+                ROW_NUMBER() OVER (ORDER BY s DESC) AS rank 
+            FROM (
                 SELECT line_id,
-                    ROW_NUMBER() OVER (ORDER BY s DESC) AS rank 
-                FROM (
-                    SELECT line_id,
-                        BM25({index_name}.tableoid) AS s
-                    FROM {index_name}
-                    WHERE content @@ ts_levenshtein(%s, 1)
-                    ORDER BY s DESC 
-                    LIMIT 100
-                ) lex
-                UNION ALL
+                    BM25({index_name}.tableoid) AS s
+                FROM {index_name}
+                WHERE content @@ ts_levenshtein(%s, 1)
+                ORDER BY s DESC 
+                LIMIT 100
+            ) lex
+            UNION ALL
+            SELECT line_id,
+                ROW_NUMBER() OVER (ORDER BY dist) AS rank 
+            FROM (
                 SELECT line_id,
-                    ROW_NUMBER() OVER (ORDER BY dist) AS rank 
-                FROM (
-                    SELECT line_id,
-                        embedding <=> q.emb AS dist
-                    FROM {index_name}, query_embedding q
-                    ORDER BY dist 
-                    LIMIT 100
-                ) vec
-            )
-            SELECT t.log_date, t.log_time, t.pid, t.level, t.component, t.content,
-                SUM(1.0 / (60 + f.rank)) AS relevance
-            FROM fused f
-            JOIN {table_name} t ON t.line_id = f.line_id
-            WHERE t.level = %s
-            GROUP BY t.log_date, t.log_time, t.pid, t.level, t.component, t.content
-            ORDER BY SUM(1.0 / (60 + f.rank)) DESC
-            LIMIT %s
-        """).format(
-            embedding_model=sql.Literal(EMBEDDING_MODEL),
-            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
-            index_name=sql.Identifier(f"{table_name}_idx"),
-            table_name=sql.Identifier(table_name),
+                    embedding <=> q.emb AS dist
+                FROM {index_name}, query_embedding q
+                ORDER BY dist 
+                LIMIT 100
+            ) vec
         )
+        SELECT t.log_timestamp, t.pid, t.category, t.component, t.content,
+            SUM(1.0 / (60 + f.rank)) AS relevance
+        FROM fused f
+        JOIN {table_name} t ON t.line_id = f.line_id
+        WHERE t.category = %s
+        GROUP BY t.log_timestamp, t.pid, t.category, t.component, t.content
+        ORDER BY SUM(1.0 / (60 + f.rank)) DESC
+        LIMIT %s
+    """).format(
+        embedding_model=sql.Literal(EMBEDDING_MODEL),
+        embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
+        index_name=sql.Identifier(f"{table_name}_idx"),
+        table_name=sql.Identifier(table_name),
+    )
 
-        cur.execute(query, [query_text, query_text, category, limit])
-        results = cur.fetchall()
-        return [dict(row) for row in results]
-    except Exception as e:
-        conn.rollback()
-        print(e)
-        return []
-    finally:
-        cur.close()
-        conn.close()
+    params = [query_text, query_text, category, limit]
+    return query, params
 
 
+@query_runner
 def top_in_category_by_service(
     table_name: str,
     start_time: str,
     end_time: str,
     category: str | None = None,
     limit: int = 5,
-) -> list[dict]:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+) -> tuple[sql.Composable, list[str | int]]:
     print(
         f"Getting top {limit} service(s) for category {category} from {start_time} to {end_time}"
     )
 
-    try:
-        query = sql.SQL("""
-            SELECT component, COUNT(*) AS count
-            FROM {table_name}
-            WHERE log_timestamp >= %s::timestamp
-              AND log_timestamp <= %s::timestamp
-            {level_filter}
-            GROUP BY component
-            ORDER BY count DESC
-            LIMIT %s
-        """).format(
-            table_name=sql.Identifier(table_name),
-            level_filter=sql.SQL("AND level = %s") if category else sql.SQL(""),
-        )
+    query = sql.SQL("""
+        SELECT component, COUNT(*) AS count
+        FROM {table_name}
+        WHERE log_timestamp >= %s::timestamp
+            AND log_timestamp <= %s::timestamp
+        {category_filter}
+        GROUP BY component
+        ORDER BY count DESC
+        LIMIT %s
+    """).format(
+        table_name=sql.Identifier(table_name),
+        category_filter=sql.SQL("AND category = %s") if category else sql.SQL(""),
+    )
 
-        params = [start_time, end_time] + ([category] if category else []) + [limit]
-        cur.execute(query, params)
-        results = cur.fetchall()
-        return [dict(row) for row in results]
-    except Exception as e:
-        conn.rollback()
-        print(e)
-        return []
-    finally:
-        cur.close()
-        conn.close()
+    params = [start_time, end_time] + ([category] if category else []) + [limit]
+    return query, params
 
 
+@query_runner
 def compare_periods(
     table_name: str,
     baseline_start: str,
@@ -350,65 +346,46 @@ def compare_periods(
     recent_start: str,
     recent_end: str,
     limit: int = 5,
-) -> list[dict]:
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+) -> tuple[sql.Composable, list[str | int]]:
     print(
         f"Comparing top {limit} service between baseline ({baseline_start} -> {baseline_end}) and recent period ({recent_start} -> {recent_end})."
     )
 
-    try:
-        query = sql.SQL("""
-            WITH baseline AS (
-                SELECT component, level, COUNT(*) AS baseline_count
-                FROM {table_name}
-                WHERE log_timestamp >= %s::timestamp 
-                  AND log_timestamp <= %s::timestamp
-                GROUP BY component, level
-            ),
-            recent AS (
-                SELECT component, level, COUNT(*) AS recent_count
-                FROM {table_name}
-                WHERE log_timestamp >= %s::timestamp 
-                  AND log_timestamp <= %s::timestamp
-                GROUP BY component, level
-            )
-            SELECT 
-                COALESCE(r.component, b.component) AS component,
-                COALESCE(r.level, b.level) AS level,
-                COALESCE(b.baseline_count, 0) AS baseline_count,
-                COALESCE(r.recent_count, 0) AS recent_count,
-                (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) AS volume_change,
-                ROUND(
-                    (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) * 100.0 / 
-                    NULLIF(b.baseline_count, 0), 2
-                ) AS percentage_change
-            FROM recent r
-            FULL OUTER JOIN baseline b 
-              ON r.component = b.component AND r.level = b.level
-            ORDER BY volume_change DESC
-            LIMIT %s
-        """).format(table_name=sql.Identifier(table_name))
-
-        cur.execute(
-            query,
-            [
-                baseline_start,
-                baseline_end,
-                recent_start,
-                recent_end,
-                limit,
-            ],
+    query = sql.SQL("""
+        WITH baseline AS (
+            SELECT component, category, COUNT(*) AS baseline_count
+            FROM {table_name}
+            WHERE log_timestamp >= %s::timestamp 
+                AND log_timestamp <= %s::timestamp
+            GROUP BY component, category
+        ),
+        recent AS (
+            SELECT component, category, COUNT(*) AS recent_count
+            FROM {table_name}
+            WHERE log_timestamp >= %s::timestamp 
+                AND log_timestamp <= %s::timestamp
+            GROUP BY component, category
         )
-        results = cur.fetchall()
-        return [dict(row) for row in results]
-    except Exception as e:
-        conn.rollback()
-        print(e)
-        return []
-    finally:
-        cur.close()
-        conn.close()
+        SELECT 
+            COALESCE(r.component, b.component) AS component,
+            COALESCE(r.category, b.category) AS category,
+            COALESCE(b.baseline_count, 0) AS baseline_count,
+            COALESCE(r.recent_count, 0) AS recent_count,
+            (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) AS volume_change,
+            ROUND(
+                (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) * 100.0 / 
+                NULLIF(b.baseline_count, 0), 2
+            ) AS percentage_change
+        FROM recent r
+        FULL OUTER JOIN baseline b 
+            ON r.component = b.component AND r.category = b.category
+        ORDER BY volume_change DESC
+        LIMIT %s
+    """).format(table_name=sql.Identifier(table_name))
+
+    params = [baseline_start, baseline_end, recent_start, recent_end, limit]
+
+    return query, params
 
 
 if __name__ == "__main__":
@@ -443,7 +420,7 @@ if __name__ == "__main__":
     ### FULL-TEXT SEARCH LOG
     # print_row(search_logs(table_name, "connection", None, 5))
     # print_row(search_logs(table_name, "nework", None, 5))
-    # print_row(search_logs(table_name, "network", None, 5))
+    # print_row(search_logs(table_name, "network", "WARNING", 5))
     # print_row(search_logs(table_name, "resource", None, 5))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
@@ -460,10 +437,6 @@ if __name__ == "__main__":
     # recent_end = "2017-05-16 00:03:00"
     # print_row(
     #     compare_periods(
-    #         table_name,
-    #         baseline_start,
-    #         baseline_end,
-    #         recent_start,
-    #         recent_end,
+    #         table_name, baseline_start, baseline_end, recent_start, recent_end
     #     )
     # )
