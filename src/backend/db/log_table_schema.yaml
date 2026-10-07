@@ -16,13 +16,13 @@ columns:
     description: Where and when the log line came from.
   - name: log_date
     type: DATE
-    description: Date of the event (no time part).
+    description: Date of the event (no time part) e.g. "2017-05-16"
   - name: log_time
     type: TIME
-    description: Time of day of the event (no date part).
+    description: Time of day of the event (no date part) e.g. "00:14:47"
   - name: log_timestamp
     type: TIMESTAMP
-    description: log_date + log_time combined. When the log line was written
+    description: log_date + log_time combined e.g. "2017-05-16 00:01:00". Describe when the log line was written
   - name: pid
     type: INT
     description: Process ID that emitted the line.
@@ -50,8 +50,7 @@ columns:
       by placeholders. One template per event_id.
 
 relationships:
-  - "log_timestamp == log_date + log_time (redundant)"
-  - "content is event_template with its variables filled in"
+  - content is event_template with its variables filled in
 
 agent_guidelines:
   - Use this document only to understand the meaning of the fields.

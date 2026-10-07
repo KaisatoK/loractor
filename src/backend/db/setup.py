@@ -31,7 +31,7 @@ def create_ai_secret():
         print("AI secret 'local_ai' created successfully.")
 
 
-def import_from_csv(table_name: str, relative_file_path: str):
+def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
     base_dir = Path(__file__).resolve().parent
     absolute_file_path = base_dir / relative_file_path
 
@@ -126,4 +126,4 @@ if __name__ == "__main__":
     # create_ai_secret()
 
     ### IMPORT FROM CSV
-    import_from_csv(TABLE_NAME, "../csv/OpenStack_2k.log_structured.csv")
+    import_from_csv("../csv/OpenStack_2k.log_structured.csv")

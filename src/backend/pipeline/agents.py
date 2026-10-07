@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 model = ChatGroq(model="openai/gpt-oss-120b")
 general_model = ChatOllama(model="qwen3.5:4b")
 
-
+TABLE_NAME = "log"
 TableName = Literal["log"]
 LogCategory = Literal["INFO", "WARNING", "ERROR"]
 
@@ -39,15 +39,15 @@ class ToolInput(BaseModel):
 
 
 class TimeWindowInput(ToolInput):
-    table_name: TableName = Field(
-        default="log",
-        description="Log table. Currently only 'log' is supported.",
-    )
     start_time: str = Field(
         description="Inclusive start timestamp in YYYY-MM-DD HH:MM:SS format."
     )
     end_time: str = Field(
         description="Inclusive end timestamp in YYYY-MM-DD HH:MM:SS format."
+    )
+    table_name: TableName = Field(
+        default="log",
+        description="Optional log table name. Currently only 'log' is supported.",
     )
     category: LogCategory | None = Field(
         default=None,
@@ -63,7 +63,6 @@ class TrendInput(TimeWindowInput):
 
 
 class SearchLogsInput(ToolInput):
-    table_name: TableName = "log"
     query_text: str = Field(
         min_length=1,
         max_length=500,
@@ -72,6 +71,10 @@ class SearchLogsInput(ToolInput):
     category: LogCategory | None = Field(
         default=None,
         description="Optional exact severity filter.",
+    )
+    table_name: TableName = Field(
+        default="log",
+        description="Optional log table name. Currently only 'log' is supported.",
     )
     limit: int = Field(default=10, ge=1, le=100)
 
@@ -86,18 +89,13 @@ class TopServicesInput(TimeWindowInput):
 
 
 class ComparePeriodsInput(ToolInput):
-    table_name: TableName = "log"
-    baseline_start: str = Field(
-        description="Inclusive baseline start timestamp."
-    )
-    baseline_end: str = Field(
-        description="Inclusive baseline end timestamp."
-    )
-    recent_start: str = Field(
-        description="Inclusive recent-period start timestamp."
-    )
-    recent_end: str = Field(
-        description="Inclusive recent-period end timestamp."
+    baseline_start: str = Field(description="Inclusive baseline start timestamp.")
+    baseline_end: str = Field(description="Inclusive baseline end timestamp.")
+    recent_start: str = Field(description="Inclusive recent-period start timestamp.")
+    recent_end: str = Field(description="Inclusive recent-period end timestamp.")
+    table_name: TableName = Field(
+        default="log",
+        description="Optional log table name. Currently only 'log' is supported.",
     )
     limit: int = Field(
         default=5,
@@ -192,11 +190,11 @@ def count_by_category_tool(
     description="Count logs per minute for one known process ID in a time window.",
 )
 def get_trend_tool(
-    table_name: str,
     start_time: str,
     end_time: str,
     pid: int,
     runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> dict:
     """Count one known PID by minute; optionally restrict results to one severity."""
@@ -204,7 +202,7 @@ def get_trend_tool(
         runtime=runtime,
         operation="get PID log trend",
         function=lambda: get_trend_by_category(
-            table_name, start_time, end_time, pid, category
+            start_time, end_time, pid, table_name, category
         ),
     )
 
@@ -215,17 +213,17 @@ def get_trend_tool(
     description="Search log-message text; put severity in category, not query_text.",
 )
 def search_logs_tool(
-    table_name: str,
     query_text: str,
     runtime: ToolRuntime,
     category: str | None = None,
+    table_name: str = TABLE_NAME,
     limit: int = 10,
 ) -> dict:
     """Search message content; put severity in category, not query_text."""
     return execute_database_tool(
         runtime=runtime,
         operation="search log messages",
-        function=lambda: search_logs(table_name, query_text, category, limit),
+        function=lambda: search_logs(query_text, table_name, category, limit),
     )
 
 
@@ -235,10 +233,10 @@ def search_logs_tool(
     description="Rank services or components by log volume in an inclusive time window.",
 )
 def top_in_category_by_service_tool(
-    table_name: str,
     start_time: str,
     end_time: str,
     runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
     category: str | None = None,
     limit: int = 5,
 ) -> dict:
@@ -247,7 +245,7 @@ def top_in_category_by_service_tool(
         runtime=runtime,
         operation="rank services by log volume",
         function=lambda: top_in_category_by_service(
-            table_name, start_time, end_time, category, limit
+            start_time, end_time, table_name, category, limit
         ),
     )
 
@@ -258,12 +256,12 @@ def top_in_category_by_service_tool(
     description="Compare component and severity counts between baseline and recent periods.",
 )
 def compare_periods_tool(
-    table_name: str,
     baseline_start: str,
     baseline_end: str,
     recent_start: str,
     recent_end: str,
     runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
     limit: int = 5,
 ) -> dict:
     """Compare component/severity counts between baseline and recent windows."""
@@ -271,11 +269,11 @@ def compare_periods_tool(
         runtime=runtime,
         operation="compare log periods",
         function=lambda: compare_periods(
-            table_name,
             baseline_start,
             baseline_end,
             recent_start,
             recent_end,
+            table_name,
             limit,
         ),
     )

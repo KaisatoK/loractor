@@ -9,7 +9,10 @@ TABLE_NAME = "log"
 
 @query_runner
 def count_by_category(
-    table_name: str, start_time: str, end_time: str, category: str | None = None
+    start_time: str,
+    end_time: str,
+    table_name: str = TABLE_NAME,
+    category: str | None = None,
 ) -> tuple[sql.Composable, list[str]]:
     print(f"Counting for category {category} from {start_time} to {end_time}")
 
@@ -32,10 +35,10 @@ def count_by_category(
 
 @query_runner
 def get_trend_by_category(
-    table_name: str,
     start_time: str,
     end_time: str,
     pid: int,
+    table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str | int]]:
     print(
@@ -77,7 +80,10 @@ def get_trend_by_category(
 
 @query_runner
 def search_logs(
-    table_name: str, query_text: str, category: str | None = None, limit: int = 10
+    query_text: str,
+    table_name: str = TABLE_NAME,
+    category: str | None = None,
+    limit: int = 10,
 ) -> tuple[sql.Composable, list[str | int]]:
     print(f'Getting top {limit} logs related to "{query_text}" for category {category}')
 
@@ -129,9 +135,9 @@ def search_logs(
 
 @query_runner
 def top_in_category_by_service(
-    table_name: str,
     start_time: str,
     end_time: str,
+    table_name: str = TABLE_NAME,
     category: str | None = None,
     limit: int = 5,
 ) -> tuple[sql.Composable, list[str | int]]:
@@ -159,11 +165,11 @@ def top_in_category_by_service(
 
 @query_runner
 def compare_periods(
-    table_name: str,
     baseline_start: str,
     baseline_end: str,
     recent_start: str,
     recent_end: str,
+    table_name: str = TABLE_NAME,
     limit: int = 5,
 ) -> tuple[sql.Composable, list[str | int]]:
     print(
@@ -218,37 +224,33 @@ if __name__ == "__main__":
     ### COUNT LINES BY CATEGORY (INFO, WARNING, ERROR)
     # start = "2017-05-16 00:00:00"
     # end = "2017-05-16 00:01:00"
-    # print_row(count_by_category(TABLE_NAME, start, end))
-    # print_row(count_by_category(TABLE_NAME, start, end, "INFO"))
-    # print_row(count_by_category(TABLE_NAME, start, end, "WARNING"))
-    # print_row(count_by_category(TABLE_NAME, start, end, "ERROR"))
+    # print_row(count_by_category(start, end))
+    # print_row(count_by_category(start, end, category="INFO"))
+    # print_row(count_by_category(start, end, category="WARNING"))
+    # print_row(count_by_category(start, end, category="ERROR"))
 
     ### GET TREND OF A PID
     # start = "2017-05-16 00:00:00"
     # end = "2017-05-16 00:10:00"
-    # print_row(get_trend_by_category(TABLE_NAME, start, end, 25746))
-    # print_row(get_trend_by_category(TABLE_NAME, start, end, 2931, "WARNING"))
+    # print_row(get_trend_by_category(start, end, 25746))
+    # print_row(get_trend_by_category(start, end, 2931, category="WARNING"))
 
     ### FULL-TEXT SEARCH LOG
-    print_row(search_logs(TABLE_NAME, "connection", None, 5))
-    print_row(search_logs(TABLE_NAME, "nework", None, 5))
-    print_row(search_logs(TABLE_NAME, "network", "WARNING", 5))
-    print_row(search_logs(TABLE_NAME, "resource", None, 5))
+    # print_row(search_logs("connection", category=None, limit=5))
+    # print_row(search_logs("nework", category=None, limit=5))
+    # print_row(search_logs("network", category="WARNING"))
+    # print_row(search_logs("resource", category=None))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
     # start = "2017-05-16 00:00:00"
     # end = "2017-05-16 00:01:00"
-    # print_row(top_in_category_by_service(TABLE_NAME, start, end, None))
-    # print_row(top_in_category_by_service(TABLE_NAME, start, end, "INFO", 10))
-    # print_row(top_in_category_by_service(TABLE_NAME, start, end, "ERROR", 2))
+    # print_row(top_in_category_by_service(start, end, category=None))
+    # print_row(top_in_category_by_service(start, end, category="INFO", limit=10))
+    # print_row(top_in_category_by_service(start, end, category="ERROR", limit=2))
 
     ### COMPARE SERVICES FOR A BASELINE AND A RECENT TIME PERIOD
     # baseline_start = "2017-05-16 00:00:00"
     # baseline_end = "2017-05-16 00:01:00"
     # recent_start = "2017-05-16 00:02:00"
     # recent_end = "2017-05-16 00:03:00"
-    # print_row(
-    #     compare_periods(
-    #         TABLE_NAME, baseline_start, baseline_end, recent_start, recent_end
-    #     )
-    # )
+    # print_row(compare_periods(baseline_start, baseline_end, recent_start, recent_end))
