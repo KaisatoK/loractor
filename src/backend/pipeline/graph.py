@@ -1,5 +1,6 @@
 from langgraph.graph import StateGraph, END
 from langchain_typesafe import TypeSafeClassifier
+from langgraph.checkpoint.memory import InMemorySaver
 
 from typing import Literal
 
@@ -251,4 +252,5 @@ graph.add_conditional_edges(
     {"plan": "plan", "answer": "answer", "conclude": END},
 )
 
-chatbot = graph.compile()
+checkpointer = InMemorySaver()
+chatbot = graph.compile(checkpointer=checkpointer)

@@ -1,6 +1,7 @@
 import requests
 import json
 import streamlit as st
+import pyperclip
 
 API_URL = "http://localhost:8000/chat/stream"
 
@@ -21,8 +22,15 @@ def main_page():
                     st.write(f"Currently at: {stage}")
         with st.chat_message(item["role"]):
             st.markdown(item["content"])
+        if st.button(label="Copy to Clipboard", icon=":material/content_copy:", key=f"copy_{item["role"]}_{hash(item['content'])}"):
+            st.success("Copied to clipboard!")
+            pyperclip.copy(item["content"])
 
-    message = st.chat_input(
+    col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
+
+    effort = col1.selectbox("Effort Level", ["Low", "Medium", "High", "Extreme", "Brutal"], index=1)
+
+    message = col2.chat_input(
         placeholder="Type your message here...", accept_file="multiple"
     )
 
@@ -45,6 +53,7 @@ def main_page():
                 json={
                     "user_id"   : st.session_state.user_id,
                     "role"      : current_chat["role"],
+                    "effort"    : effort,
                     "message"   : str(current_chat["history"]),
                 },
                 stream=True,
@@ -63,8 +72,11 @@ def main_page():
                         if data["type"] == "messages":
                             full_answer += data["content"]
                             placeholder.markdown(full_answer + "▌")
-                        elif data["type"] == "subgraphs":
+                        elif data["type"] == "subgraph_name":
                             progress.write(f"Currently at: {data['content']}")
+                            progress_stages.append(data["content"])
+                        elif data["type"] == "subgraph_message":
+                            progress.write(f"Thinking: {data['content']}")
                             progress_stages.append(data["content"])
                     # time.sleep(0.1)  # Simulate processing time for better UX
 
@@ -74,3 +86,7 @@ def main_page():
         current_chat["history"].append(
             {"role": "assistant", "content": full_answer, "progress": progress_stages}
         )
+
+        if st.button(label="Copy to Clipboard", icon=":material/content_copy:", key=f"copy_assistent_{hash(full_answer)}"):
+            st.success("Copied to clipboard!")
+            pyperclip.copy(full_answer)

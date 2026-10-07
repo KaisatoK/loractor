@@ -10,6 +10,7 @@ from backend.pipeline.schemas import PipelineState
 class ChatRequest(TypedDict):
     user_id: UUID
     role: Literal["engineer", "team_lead", "manager"]
+    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
     message: str
 
 
@@ -52,7 +53,6 @@ ROLE_OBJECTIVES: dict[str, str] = {
     ),
 }
 
-
 app = FastAPI()
 
 
@@ -66,6 +66,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 "name": req["role"],
                 "objective": ROLE_OBJECTIVES[req["role"]],
             },
+            "effort": req["effort"]
         },
     )
     run = chatbot.stream_events(
@@ -86,7 +87,11 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 yield {"type": "messages", "content": answer}
                 last_answer = answer
         elif name == "subgraphs":
-            yield {"type": "subgraphs", "content": item.path[0]}
+            # print(f"@@@ API check @@@ name={name}: graph_name={item.graph_name}")
+            yield {"type": "subgraph_name", "content": str(item.graph_name)}
+            for message in item.messages:
+                # print(f"@@@ API check @@@ name={name}: reasoning={message.reasoning}, text={message.text}")
+                yield {"type": "subgraph_message", "content": str(message.reasoning)}
 
 
 @app.post("/chat/test")

@@ -77,6 +77,7 @@ class PlanAttempt(TypedDict):
 class PipelineState(TypedDict):
     question: str
     role: Role
+    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
 
     scope: Literal["pipeline", "general"]
     
