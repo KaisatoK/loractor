@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from langgraph.types import Command
 from langchain.agents import create_agent
-from langchain.agents.middleware import wrap_tool_call
+from langchain.agents.middleware import ToolCallLimitMiddleware, wrap_tool_call
 from langchain.messages import ToolMessage
 from langchain.tools import ToolRuntime, tool
 from langchain.tools.tool_node import ToolCallRequest
@@ -257,7 +257,10 @@ executor_agent = create_agent(
         top_in_category_by_service_tool,
         compare_periods_tool,
     ],
-    middleware=[handle_tool_errors],
+    middleware=[
+        handle_tool_errors,
+        ToolCallLimitMiddleware(run_limit=6),
+    ],
     system_prompt=(
         "You are an evidence collection agent. Use tools to evaluate every evidence "
         "requirement. Report only facts returned by successful tool calls. A tool error "

@@ -240,6 +240,7 @@ if __name__ == "__main__":
     # print_row(search_logs("nework", category=None, limit=5))
     # print_row(search_logs("network", category="WARNING"))
     # print_row(search_logs("resource", category=None))
+    # print_row(search_logs("Exception", category="ERROR"))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
     # start = "2017-05-16 00:00:00"
