@@ -1,12 +1,13 @@
 from psycopg2 import sql
 from pathlib import Path
 
-from utils import db_cursor
-
-MODEL_BASE_URL = "http://host.docker.internal:11434"
-EMBEDDING_MODEL = "nomic-embed-text:v1.5"
-EMBEDDING_DIMENSION = 768
-TABLE_NAME = "log"
+from utils import (
+    db_cursor,
+    MODEL_BASE_URL,
+    EMBEDDING_MODEL,
+    EMBEDDING_DIMENSION,
+    TABLE_NAME,
+)
 
 
 def create_ai_secret():

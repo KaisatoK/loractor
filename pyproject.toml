@@ -84,4 +84,5 @@ dependencies = [
     "psycopg-binary==3.3.6",
     "psycopg-pool==3.3.3",
     "pyperclip==1.11.0",
+    "jsonref>=1.1.0",
 ]

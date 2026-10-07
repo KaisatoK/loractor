@@ -8,6 +8,10 @@ from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
 SERENEDB_PORT = 7890
+MODEL_BASE_URL = "http://host.docker.internal:11434"
+EMBEDDING_MODEL = "nomic-embed-text:v1.5"
+EMBEDDING_DIMENSION = 768
+TABLE_NAME = "log"
 
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")

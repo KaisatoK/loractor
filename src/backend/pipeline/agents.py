@@ -10,6 +10,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
+
 from backend.db import (
     count_by_category,
     get_trend_by_category,
@@ -22,6 +23,7 @@ from backend.pipeline.schemas import (
     ExecutionPlan,
     NormalizedOutput,
 )
+from backend.pipeline.utils import load_tool_schema
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,7 @@ def handle_tool_errors(
         )
 
 
-@tool("count_logs_by_severity")
+@tool(args_schema=load_tool_schema("count_by_category"))
 def count_by_category_tool(
     start_time: str,
     end_time: str,
@@ -109,7 +111,7 @@ def count_by_category_tool(
 ) -> dict:
     """Count log rows by exact severity within an inclusive time window."""
     print("#########################################")
-    print("Executing count_logs_by_severity tool")
+    print("Executing count_by_category tool")
     print(f"table_name: {table_name}")
     print(f"start_time: {start_time}")
     print(f"end_time: {end_time}")
@@ -124,7 +126,7 @@ def count_by_category_tool(
     )
 
 
-@tool("get_pid_log_trend")
+@tool(args_schema=load_tool_schema("get_trend"))
 def get_trend_tool(
     start_time: str,
     end_time: str,
@@ -135,7 +137,7 @@ def get_trend_tool(
 ) -> dict:
     """Count one known PID by minute; optionally restrict results to one severity."""
     print("#########################################")
-    print("Executing get_pid_log_trend tool")
+    print("Executing get_trend tool")
     print(f"table_name: {table_name}")
     print(f"start_time: {start_time}")
     print(f"end_time: {end_time}")
@@ -153,7 +155,7 @@ def get_trend_tool(
     )
 
 
-@tool("search_log_messages")
+@tool(args_schema=load_tool_schema("search_logs"))
 def search_logs_tool(
     query_text: str,
     runtime: ToolRuntime,
@@ -163,7 +165,7 @@ def search_logs_tool(
 ) -> dict:
     """Search message content; put severity in category, not query_text."""
     print("#########################################")
-    print("Executing search_log_messages tool")
+    print("Executing search_logs tool")
     print(f"table_name: {table_name}")
     print(f"query_text: {query_text}")
     print(f"category: {category}")
@@ -177,7 +179,7 @@ def search_logs_tool(
     )
 
 
-@tool("rank_services_by_log_volume")
+@tool(args_schema=load_tool_schema("top_in_category_by_service"))
 def top_in_category_by_service_tool(
     start_time: str,
     end_time: str,
@@ -196,7 +198,7 @@ def top_in_category_by_service_tool(
     )
 
 
-@tool("compare_log_periods")
+@tool(args_schema=load_tool_schema("compare_periods"))
 def compare_periods_tool(
     baseline_start: str,
     baseline_end: str,
@@ -208,7 +210,7 @@ def compare_periods_tool(
 ) -> dict:
     """Compare component/severity counts between baseline and recent windows."""
     print("#########################################")
-    print("Executing compare_log_periods tool")
+    print("Executing compare_periods tool")
     print(f"table_name: {table_name}")
     print(f"baseline_start: {baseline_start}")
     print(f"baseline_end: {baseline_end}")

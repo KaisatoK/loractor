@@ -43,38 +43,36 @@
         ],
         "tools": [
             {
-                "name": "count_logs_by_severity",
+                "name": "count_by_category",
                 "description": "Count log rows by exact severity within an inclusive time window. If category is omitted, count logs across all severities.",
                 "operation": "count logs by severity",
                 "input_schema": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "start_time",
-                        "end_time"
-                    ],
                     "properties": {
                         "start_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "end_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "table_name": {
+                            "type": "TableName",
                             "$ref": "#/tool_catalog/shared_types/TableName"
                         },
                         "category": {
+                            "type": "LogCategory",
                             "$ref": "#/tool_catalog/shared_types/LogCategory"
                         }
-                    }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time"
+                    ]
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": [
-                        "status",
-                        "operation",
-                        "data"
-                    ],
                     "properties": {
                         "status": {
                             "type": "string",
@@ -85,13 +83,18 @@
                             "const": "count logs by severity"
                         },
                         "data": {
-                            "description": "Result returned by the count_by_category database function.",
                             "type": [
                                 "object",
                                 "array"
-                            ]
+                            ],
+                            "description": "Result returned by the count_by_category database function."
                         }
-                    }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
                 },
                 "examples": [
                     {
@@ -114,22 +117,18 @@
                 ]
             },
             {
-                "name": "get_pid_log_trend",
+                "name": "get_trend",
                 "description": "Count logs per minute for one known process ID within an inclusive time window. Optionally restrict the result to one exact severity.",
                 "operation": "get PID log trend",
                 "input_schema": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "start_time",
-                        "end_time",
-                        "pid"
-                    ],
                     "properties": {
                         "start_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "end_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "pid": {
@@ -138,20 +137,22 @@
                             "description": "Exact process ID. The value must come from the user or from previously collected evidence."
                         },
                         "table_name": {
+                            "type": "TableName",
                             "$ref": "#/tool_catalog/shared_types/TableName"
                         },
                         "category": {
+                            "type": "LogCategory",
                             "$ref": "#/tool_catalog/shared_types/LogCategory"
                         }
-                    }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time",
+                        "pid"
+                    ]
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": [
-                        "status",
-                        "operation",
-                        "data"
-                    ],
                     "properties": {
                         "status": {
                             "type": "string",
@@ -162,13 +163,18 @@
                             "const": "get PID log trend"
                         },
                         "data": {
-                            "description": "Per-minute log counts returned by the get_trend_by_category database function.",
                             "type": [
                                 "object",
                                 "array"
-                            ]
+                            ],
+                            "description": "Per-minute log counts returned by the get_trend_by_category database function."
                         }
-                    }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
                 },
                 "examples": [
                     {
@@ -184,15 +190,11 @@
                 ]
             },
             {
-                "name": "search_log_messages",
+                "name": "search_logs",
                 "description": "Search log-message content. query_text contains only message text or a concept. Severity must be supplied separately through category.",
                 "operation": "search log messages",
                 "input_schema": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "query_text"
-                    ],
                     "properties": {
                         "query_text": {
                             "type": "string",
@@ -201,9 +203,11 @@
                             "description": "Text or concept to search for in log messages. Do not include INFO, WARNING, ERROR (or any case variations like info, Warning, Err) merely as severity filters."
                         },
                         "category": {
+                            "type": "LogCategory",
                             "$ref": "#/tool_catalog/shared_types/LogCategory"
                         },
                         "table_name": {
+                            "type": "TableName",
                             "$ref": "#/tool_catalog/shared_types/TableName"
                         },
                         "limit": {
@@ -213,15 +217,13 @@
                             "default": 10,
                             "description": "Maximum number of matching rows to return."
                         }
-                    }
+                    },
+                    "required": [
+                        "query_text"
+                    ]
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": [
-                        "status",
-                        "operation",
-                        "data"
-                    ],
                     "properties": {
                         "status": {
                             "type": "string",
@@ -232,13 +234,18 @@
                             "const": "search log messages"
                         },
                         "data": {
-                            "description": "Matching log entries returned by the search_logs database function.",
                             "type": [
                                 "object",
                                 "array"
-                            ]
+                            ],
+                            "description": "Matching log entries returned by the search_logs database function."
                         }
-                    }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
                 },
                 "examples": [
                     {
@@ -270,27 +277,26 @@
                 ]
             },
             {
-                "name": "rank_services_by_log_volume",
+                "name": "top_in_category_by_service",
                 "description": "Rank services or components by log volume within an inclusive time window. Optionally restrict the ranking to one exact severity.",
                 "operation": "rank services by log volume",
                 "input_schema": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "start_time",
-                        "end_time"
-                    ],
                     "properties": {
                         "start_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "end_time": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
                         },
                         "table_name": {
+                            "type": "TableName",
                             "$ref": "#/tool_catalog/shared_types/TableName"
                         },
                         "category": {
+                            "type": "LogCategory",
                             "$ref": "#/tool_catalog/shared_types/LogCategory"
                         },
                         "limit": {
@@ -300,15 +306,14 @@
                             "default": 5,
                             "description": "Maximum number of ranked services or components."
                         }
-                    }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time"
+                    ]
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": [
-                        "status",
-                        "operation",
-                        "data"
-                    ],
                     "properties": {
                         "status": {
                             "type": "string",
@@ -319,13 +324,18 @@
                             "const": "rank services by log volume"
                         },
                         "data": {
-                            "description": "Ranked service or component counts returned by the top_in_category_by_service database function.",
                             "type": [
                                 "object",
                                 "array"
-                            ]
+                            ],
+                            "description": "Ranked service or component counts returned by the top_in_category_by_service database function."
                         }
-                    }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
                 },
                 "examples": [
                     {
@@ -341,36 +351,34 @@
                 ]
             },
             {
-                "name": "compare_log_periods",
+                "name": "compare_periods",
                 "description": "Compare component and severity counts between an inclusive baseline period and an inclusive recent period.",
                 "operation": "compare log periods",
                 "input_schema": {
                     "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "baseline_start",
-                        "baseline_end",
-                        "recent_start",
-                        "recent_end"
-                    ],
                     "properties": {
                         "baseline_start": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp",
                             "description": "Inclusive baseline-period start timestamp."
                         },
                         "baseline_end": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp",
                             "description": "Inclusive baseline-period end timestamp."
                         },
                         "recent_start": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp",
                             "description": "Inclusive recent-period start timestamp."
                         },
                         "recent_end": {
+                            "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp",
                             "description": "Inclusive recent-period end timestamp."
                         },
                         "table_name": {
+                            "type": "TableName",
                             "$ref": "#/tool_catalog/shared_types/TableName"
                         },
                         "limit": {
@@ -380,15 +388,16 @@
                             "default": 5,
                             "description": "Maximum number of component and severity changes to return."
                         }
-                    }
+                    },
+                    "required": [
+                        "baseline_start",
+                        "baseline_end",
+                        "recent_start",
+                        "recent_end"
+                    ]
                 },
                 "output_schema": {
                     "type": "object",
-                    "required": [
-                        "status",
-                        "operation",
-                        "data"
-                    ],
                     "properties": {
                         "status": {
                             "type": "string",
@@ -399,13 +408,18 @@
                             "const": "compare log periods"
                         },
                         "data": {
-                            "description": "Component and severity count changes returned by the compare_periods database function.",
                             "type": [
                                 "object",
                                 "array"
-                            ]
+                            ],
+                            "description": "Component and severity count changes returned by the compare_periods database function."
                         }
-                    }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
                 },
                 "examples": [
                     {
@@ -444,23 +458,23 @@
         "tool_selection_guide": [
             {
                 "intent": "Count logs in a time window",
-                "use": "count_logs_by_severity"
+                "use": "count_by_category"
             },
             {
                 "intent": "Inspect a known process ID over time",
-                "use": "get_pid_log_trend"
+                "use": "get_trend"
             },
             {
                 "intent": "Find logs containing a text",
-                "use": "search_log_messages"
+                "use": "search_logs"
             },
             {
                 "intent": "Find the top x logs with a severity and/or rank them",
-                "use": "rank_services_by_log_volume"
+                "use": "top_in_category_by_service"
             },
             {
                 "intent": "Compare certain services between 2 periods of time",
-                "use": "compare_log_periods"
+                "use": "compare_periods"
             }
         ]
     }
