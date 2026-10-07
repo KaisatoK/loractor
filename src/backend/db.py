@@ -240,7 +240,8 @@ def get_trend_by_category(
         conn.close()
 
 
-def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]:
+
+def search_logs(table_name: str, query_text: str, category: str | None = None, limit: int = 10) -> list[dict]:
     conn = get_conn()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     print(f'Getting top {limit} logs related to "{query_text}"')
@@ -278,6 +279,7 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]
                 SUM(1.0 / (60 + f.rank)) AS relevance
             FROM fused f
             JOIN {table_name} t ON t.line_id = f.line_id
+            WHERE t.level = %s
             GROUP BY t.log_date, t.log_time, t.pid, t.level, t.component, t.content
             ORDER BY SUM(1.0 / (60 + f.rank)) DESC
             LIMIT %s
@@ -288,7 +290,7 @@ def search_logs(table_name: str, query_text: str, limit: int = 10) -> list[dict]
             table_name=sql.Identifier(table_name),
         )
 
-        cur.execute(query, [query_text, query_text, limit])
+        cur.execute(query, [query_text, query_text, category, limit])
         results = cur.fetchall()
         return [dict(row) for row in results]
     except Exception as e:
@@ -439,10 +441,10 @@ if __name__ == "__main__":
     # print_row(get_trend_by_category(table_name, start, end, 2931, "WARNING"))
 
     ### FULL-TEXT SEARCH LOG
-    print_row(search_logs(table_name, "connection", 5))
-    print_row(search_logs(table_name, "nework", 5))
-    print_row(search_logs(table_name, "network", 5))
-    print_row(search_logs(table_name, "resource"))
+    # print_row(search_logs(table_name, "connection", None, 5))
+    # print_row(search_logs(table_name, "nework", None, 5))
+    # print_row(search_logs(table_name, "network", None, 5))
+    # print_row(search_logs(table_name, "resource", None, 5))
 
     ### GET TOP OF A CATEGORY OF A SERVICE
     # start = "2017-05-16 00:00:00"
