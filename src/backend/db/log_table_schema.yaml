@@ -1,0 +1,59 @@
+table: log
+description: >
+  Parsed system log records. Each row is one log line split into structured
+  fields. This document is context only: it explains what the data means.
+  Content overview: OpenStack Nova logs from a single day, 2017-05-16,
+  covering the first 15 minutes after midnight (00:00:00 to 00:15:00).
+
+primary_key: line_id
+
+columns:
+  - name: line_id
+    type: INT
+    description: Unique ID of the log line. Follows the original file order.
+  - name: log_record
+    type: TEXT
+    description: Where and when the log line came from.
+  - name: log_date
+    type: DATE
+    description: Date of the event (no time part).
+  - name: log_time
+    type: TIME
+    description: Time of day of the event (no date part).
+  - name: log_timestamp
+    type: TIMESTAMP
+    description: log_date + log_time combined. When the log line was written
+  - name: pid
+    type: INT
+    description: Process ID that emitted the line.
+  - name: category
+    type: VARCHAR(50)
+    description: Log level or type (INFO, WARNING, ERROR).
+  - name: component
+    type: TEXT
+    description: Component, module, or service that produced the line.
+  - name: addr
+    type: TEXT
+    description: Source address. May be NULL or empty.
+  - name: content
+    type: TEXT
+    description: Free-text log message without the header fields.
+  - name: event_id
+    type: VARCHAR(50)
+    description: >
+      ID of the log template this line matches. Same event_id means same
+      kind of event.
+  - name: event_template
+    type: TEXT
+    description: >
+      Generalized message pattern for event_id, with variable parts replaced
+      by placeholders. One template per event_id.
+
+relationships:
+  - "log_timestamp == log_date + log_time (redundant)"
+  - "content is event_template with its variables filled in"
+
+agent_guidelines:
+  - Use this document only to understand the meaning of the fields.
+  - Retrieve log data only through the tools you have been given.
+  - Only refer to the columns listed above.

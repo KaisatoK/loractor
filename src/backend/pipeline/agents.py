@@ -3,7 +3,7 @@ from langchain.agents import create_agent
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
-from backend.db import (
+from db.query import (
     count_by_category,
     get_trend_by_category,
     search_logs,
