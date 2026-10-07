@@ -1,6 +1,6 @@
 from psycopg2 import sql
 
-from utils import query_runner
+from backend.db.utils import query_runner
 
 EMBEDDING_MODEL = "nomic-embed-text:v1.5"
 EMBEDDING_DIMENSION = 768

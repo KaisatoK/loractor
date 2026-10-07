@@ -1,9 +1,17 @@
-from langchain_core.tools import tool
+import logging
+from collections.abc import Callable
+from typing import Any, Literal
+
+from langgraph.types import Command
 from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_tool_call
+from langchain.messages import ToolMessage
+from langchain.tools import ToolRuntime, tool
+from langchain.tools.tool_node import ToolCallRequest
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, Field
-from db.query import (
+from pydantic import BaseModel, ConfigDict, Field
+from backend.db.query import (
     count_by_category,
     get_trend_by_category,
     search_logs,
@@ -16,14 +24,24 @@ from backend.pipeline.schemas import (
     NormalizedOutput,
 )
 
+logger = logging.getLogger(__name__)
+
 model = ChatGroq(model="openai/gpt-oss-120b")
 general_model = ChatOllama(model="qwen3.5:4b")
 
 
-class TimeWindowInput(BaseModel):
-    table_name: str = Field(
+TableName = Literal["log"]
+LogCategory = Literal["INFO", "WARNING", "ERROR"]
+
+
+class ToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class TimeWindowInput(ToolInput):
+    table_name: TableName = Field(
         default="log",
-        description="The log table to query. Use 'log' unless another table is explicitly provided.",
+        description="Log table. Currently only 'log' is supported.",
     )
     start_time: str = Field(
         description="Inclusive start timestamp in YYYY-MM-DD HH:MM:SS format."
@@ -31,30 +49,31 @@ class TimeWindowInput(BaseModel):
     end_time: str = Field(
         description="Inclusive end timestamp in YYYY-MM-DD HH:MM:SS format."
     )
-    category: str | None = Field(
+    category: LogCategory | None = Field(
         default=None,
-        description="Optional log severity filter, such as INFO, WARNING, or ERROR.",
+        description="Optional exact log severity.",
     )
 
 
 class TrendInput(TimeWindowInput):
-    pid: int = Field(description="Process ID whose log activity should be analyzed.")
-
-
-class SearchLogsInput(BaseModel):
-    table_name: str = Field(
-        default="log",
-        description="The log table to search. Use 'log' unless another table is explicitly provided.",
+    pid: int = Field(
+        ge=0,
+        description="Exact process ID. Must come from the user or collected evidence.",
     )
+
+
+class SearchLogsInput(ToolInput):
+    table_name: TableName = "log"
     query_text: str = Field(
-        description="Natural-language symptom, error message, keyword, or concept to search for."
+        min_length=1,
+        max_length=500,
+        description="Text or concept to search for in log messages. Do not include severity.",
     )
-    limit: int = Field(
-        default=10,
-        ge=1,
-        le=100,
-        description="Maximum number of relevant log records to return.",
+    category: LogCategory | None = Field(
+        default=None,
+        description="Optional exact severity filter.",
     )
+    limit: int = Field(default=10, ge=1, le=100)
 
 
 class TopServicesInput(TimeWindowInput):
@@ -62,93 +81,203 @@ class TopServicesInput(TimeWindowInput):
         default=5,
         ge=1,
         le=100,
-        description="Maximum number of components to return, ordered by log volume.",
+        description="Maximum number of ranked components.",
     )
 
 
-class ComparePeriodsInput(BaseModel):
-    table_name: str = Field(
-        default="log",
-        description="The log table to query. Use 'log' unless another table is explicitly provided.",
-    )
+class ComparePeriodsInput(ToolInput):
+    table_name: TableName = "log"
     baseline_start: str = Field(
-        description="Inclusive baseline start timestamp in YYYY-MM-DD HH:MM:SS format."
+        description="Inclusive baseline start timestamp."
     )
     baseline_end: str = Field(
-        description="Inclusive baseline end timestamp in YYYY-MM-DD HH:MM:SS format."
+        description="Inclusive baseline end timestamp."
     )
     recent_start: str = Field(
-        description="Inclusive recent-period start timestamp in YYYY-MM-DD HH:MM:SS format."
+        description="Inclusive recent-period start timestamp."
     )
     recent_end: str = Field(
-        description="Inclusive recent-period end timestamp in YYYY-MM-DD HH:MM:SS format."
+        description="Inclusive recent-period end timestamp."
     )
     limit: int = Field(
         default=5,
         ge=1,
         le=100,
-        description="Maximum number of component and severity changes to return.",
+        description="Maximum number of component/severity changes.",
     )
 
 
-@tool(args_schema=TimeWindowInput)
+def execute_database_tool(
+    *,
+    runtime: ToolRuntime,
+    operation: str,
+    function: Callable[[], Any],
+) -> dict:
+    writer = runtime.stream_writer
+    writer(
+        {
+            "type": "tool_progress",
+            "operation": operation,
+            "status": "started",
+            "message": f"Starting {operation}.",
+        }
+    )
+
+    try:
+        data = function()
+    except Exception as exc:
+        logger.exception("Database tool failed: %s", operation)
+        writer(
+            {
+                "type": "tool_progress",
+                "operation": operation,
+                "status": "failed",
+                "message": f"{operation} failed.",
+            }
+        )
+        raise RuntimeError(f"{operation} failed") from exc
+
+    writer(
+        {
+            "type": "tool_progress",
+            "operation": operation,
+            "status": "completed",
+            "message": f"Completed {operation}.",
+        }
+    )
+    return {"status": "success", "operation": operation, "data": data}
+
+
+@wrap_tool_call
+def handle_tool_errors(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage | Command],
+) -> ToolMessage | Command:
+    """Convert tool exceptions into ToolMessages the model can handle."""
+    try:
+        return handler(request)
+    except Exception as e:
+        return ToolMessage(
+            content=(
+                f"The tool could not complete the database operation: {e}"
+                " Do not infer or fabricate a result."
+            ),
+            tool_call_id=request.tool_call["id"],
+        )
+
+
+@tool(
+    "count_logs_by_severity",
+    args_schema=TimeWindowInput,
+    description="Count logs by exact severity in an inclusive time window.",
+)
 def count_by_category_tool(
     table_name: str,
     start_time: str,
     end_time: str,
+    runtime: ToolRuntime,
     category: str | None = None,
-) -> list[dict]:
-    """Count log entries grouped by category within a time window from the database."""
-    return count_by_category(table_name, start_time, end_time, category)
+) -> dict:
+    """Count log rows by exact severity within an inclusive time window."""
+    return execute_database_tool(
+        runtime=runtime,
+        operation="count logs by severity",
+        function=lambda: count_by_category(table_name, start_time, end_time, category),
+    )
 
 
-@tool(args_schema=TrendInput)
+@tool(
+    "get_pid_log_trend",
+    args_schema=TrendInput,
+    description="Count logs per minute for one known process ID in a time window.",
+)
 def get_trend_tool(
     table_name: str,
     start_time: str,
     end_time: str,
     pid: int,
+    runtime: ToolRuntime,
     category: str | None = None,
-) -> list[dict]:
-    """Get minute-by-minute trend for a given pid and optional category from the database."""
-    return get_trend_by_category(table_name, start_time, end_time, pid, category)
+) -> dict:
+    """Count one known PID by minute; optionally restrict results to one severity."""
+    return execute_database_tool(
+        runtime=runtime,
+        operation="get PID log trend",
+        function=lambda: get_trend_by_category(
+            table_name, start_time, end_time, pid, category
+        ),
+    )
 
 
-@tool(args_schema=SearchLogsInput)
-def search_logs_tool(table_name: str, query_text: str, limit: int = 10) -> list[dict]:
-    """Search raw logs using full-text and semantic search from the database."""
-    return search_logs(table_name, query_text, limit)
+@tool(
+    "search_log_messages",
+    args_schema=SearchLogsInput,
+    description="Search log-message text; put severity in category, not query_text.",
+)
+def search_logs_tool(
+    table_name: str,
+    query_text: str,
+    runtime: ToolRuntime,
+    category: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Search message content; put severity in category, not query_text."""
+    return execute_database_tool(
+        runtime=runtime,
+        operation="search log messages",
+        function=lambda: search_logs(table_name, query_text, category, limit),
+    )
 
 
-@tool(args_schema=TopServicesInput)
+@tool(
+    "rank_services_by_log_volume",
+    args_schema=TopServicesInput,
+    description="Rank services or components by log volume in an inclusive time window.",
+)
 def top_in_category_by_service_tool(
     table_name: str,
     start_time: str,
     end_time: str,
+    runtime: ToolRuntime,
     category: str | None = None,
     limit: int = 5,
-) -> list[dict]:
-    """Get top services for a specific category within a time window from the database."""
-    return top_in_category_by_service(table_name, start_time, end_time, category, limit)
+) -> dict:
+    """Rank components by log volume, optionally restricted to one severity."""
+    return execute_database_tool(
+        runtime=runtime,
+        operation="rank services by log volume",
+        function=lambda: top_in_category_by_service(
+            table_name, start_time, end_time, category, limit
+        ),
+    )
 
 
-@tool(args_schema=ComparePeriodsInput)
+@tool(
+    "compare_log_periods",
+    args_schema=ComparePeriodsInput,
+    description="Compare component and severity counts between baseline and recent periods.",
+)
 def compare_periods_tool(
     table_name: str,
     baseline_start: str,
     baseline_end: str,
     recent_start: str,
     recent_end: str,
+    runtime: ToolRuntime,
     limit: int = 5,
-) -> list[dict]:
-    """Compare top services between a baseline period and a recent period from the database."""
-    return compare_periods(
-        table_name,
-        baseline_start,
-        baseline_end,
-        recent_start,
-        recent_end,
-        limit,
+) -> dict:
+    """Compare component/severity counts between baseline and recent windows."""
+    return execute_database_tool(
+        runtime=runtime,
+        operation="compare log periods",
+        function=lambda: compare_periods(
+            table_name,
+            baseline_start,
+            baseline_end,
+            recent_start,
+            recent_end,
+            limit,
+        ),
     )
 
 
@@ -179,19 +308,15 @@ executor_agent = create_agent(
         top_in_category_by_service_tool,
         compare_periods_tool,
     ],
+    middleware=[handle_tool_errors],
     system_prompt=(
-        # "Just pretend that you can not find any evidence."
-        "You are an evidence collection agent. Receive investigation hypotheses and "
-        "required evidence, then use the available tools to collect it. You may only "
-        "report facts returned by tool calls. Never invent, infer, or fill in missing "
-        "evidence. For every requirement, use supports when a tool returned a matching "
-        "fact that supports the hypothesis, use contradicts when the fact directly "
-        "conflicts with the hypothesis, "
-        "contradicts when it directly conflicts with the hypothesis, not_found when a "
-        "tool ran but returned no matching fact, and unavailable when no available tool "
-        "can check it. Mark a hypothesis supported only when its evidence supports it, "
-        "contradicted only when evidence directly conflicts with it, otherwise mark it "
-        "unresolved."
+        "You are an evidence collection agent. Use tools to evaluate every evidence "
+        "requirement. Report only facts returned by successful tool calls. A tool error "
+        "means the evidence is unavailable, not not_found. Use not_found only when a "
+        "successful tool call returned no matching facts. Never guess tool arguments "
+        "such as PID or timestamps. Mark a hypothesis supported only when matching "
+        "evidence supports it, contradicted only when evidence directly conflicts with "
+        "it, otherwise unresolved."
     ),
 )
 

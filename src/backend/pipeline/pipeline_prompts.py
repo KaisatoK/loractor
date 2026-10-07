@@ -1,5 +1,11 @@
+from pathlib import Path
+
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 from backend.pipeline.schemas import PipelineState, Role
+
+
+LOG_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "log_table_schema.yaml"
+LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")
 
 
 class PipelinePrompts:
@@ -62,6 +68,7 @@ class PipelinePrompts:
         return (
             f"{self.role_context(state['role'])}\n"
             f"Normalized request: {state['normalized']}\n"
+            f"Log table schema:\n{LOG_SCHEMA}\n"
             f"Previous plan: {previous_plan}\n"
             f"Previous attempt history, including evidence statuses: {plan_history}\n"
             f"Revision feedback: {revision_feedback}\n\n"
@@ -76,6 +83,7 @@ class PipelinePrompts:
     def execute_evidence(self, state: PipelineState) -> str:
         return (
             f"Normalized request: {state['normalized']}\n"
+            f"Log table schema:\n{LOG_SCHEMA}\n"
             f"Investigation plan: {state['plan']}\n\n"
             "Collect the required evidence for each hypothesis using the available "
             "tools. Return only evidence that appears in tool results. If evidence "

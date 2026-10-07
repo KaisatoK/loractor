@@ -1,7 +1,7 @@
 from psycopg2 import sql
 from pathlib import Path
 
-from utils import db_cursor
+from backend.db.utils import db_cursor
 
 MODEL_BASE_URL = "http://host.docker.internal:11434"
 EMBEDDING_MODEL = "nomic-embed-text:v1.5"

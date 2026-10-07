@@ -19,6 +19,8 @@ from backend.pipeline.schemas import NormalizedOutput, PipelineRoute, PipelineSt
 
 prompts = PipelinePrompts()
 SCOPE_CONFIDENCE_THRESHOLD = 0.64
+ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
+MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
 
 
 def scope_node(state: PipelineState) -> PipelineState:
