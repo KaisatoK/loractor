@@ -6,7 +6,8 @@ from backend.pipeline.schemas import PipelineState, Role
 
 LOG_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "log_table_schema.yaml"
 LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")
-
+TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[0] / "tool_schema.yaml"
+TOOL_SCHEMA = TOOL_SCHEMA_PATH.read_text(encoding="utf-8")
 
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
@@ -85,6 +86,7 @@ class PipelinePrompts:
             f"Normalized request: {state['normalized']}\n"
             f"Log table schema:\n{LOG_SCHEMA}\n"
             f"Investigation plan: {state['plan']}\n\n"
+            f"Tool schemas:\n{TOOL_SCHEMA}\n\n"
             "Collect the required evidence for each hypothesis using the available "
             "tools. Return only evidence that appears in tool results. If evidence "
             "cannot be collected, mark it as unavailable rather than guessing."

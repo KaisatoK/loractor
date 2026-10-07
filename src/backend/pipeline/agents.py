@@ -10,7 +10,6 @@ from langchain.tools import ToolRuntime, tool
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
-from pydantic import BaseModel, ConfigDict, Field
 from backend.db.query import (
     count_by_category,
     get_trend_by_category,
@@ -26,83 +25,13 @@ from backend.pipeline.schemas import (
 
 logger = logging.getLogger(__name__)
 
-model = ChatGroq(model="openai/gpt-oss-120b")
-general_model = ChatOllama(model="qwen3.5:4b")
+model = ChatGroq(model="openai/gpt-oss-20b")
+general_model = ChatGroq(model="openai/gpt-oss-20b")
+# general_model = ChatOllama(model="qwen3.5:4b")
 
 TABLE_NAME = "log"
 TableName = Literal["log"]
 LogCategory = Literal["INFO", "WARNING", "ERROR"]
-
-
-class ToolInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class TimeWindowInput(ToolInput):
-    start_time: str = Field(
-        description="Inclusive start timestamp in YYYY-MM-DD HH:MM:SS format."
-    )
-    end_time: str = Field(
-        description="Inclusive end timestamp in YYYY-MM-DD HH:MM:SS format."
-    )
-    table_name: TableName = Field(
-        default="log",
-        description="Optional log table name. Currently only 'log' is supported.",
-    )
-    category: LogCategory | None = Field(
-        default=None,
-        description="Optional exact log severity.",
-    )
-
-
-class TrendInput(TimeWindowInput):
-    pid: int = Field(
-        ge=0,
-        description="Exact process ID. Must come from the user or collected evidence.",
-    )
-
-
-class SearchLogsInput(ToolInput):
-    query_text: str = Field(
-        min_length=1,
-        max_length=500,
-        description="Text or concept to search for in log messages. Do not include severity.",
-    )
-    category: LogCategory | None = Field(
-        default=None,
-        description="Optional exact severity filter.",
-    )
-    table_name: TableName = Field(
-        default="log",
-        description="Optional log table name. Currently only 'log' is supported.",
-    )
-    limit: int = Field(default=10, ge=1, le=100)
-
-
-class TopServicesInput(TimeWindowInput):
-    limit: int = Field(
-        default=5,
-        ge=1,
-        le=100,
-        description="Maximum number of ranked components.",
-    )
-
-
-class ComparePeriodsInput(ToolInput):
-    baseline_start: str = Field(description="Inclusive baseline start timestamp.")
-    baseline_end: str = Field(description="Inclusive baseline end timestamp.")
-    recent_start: str = Field(description="Inclusive recent-period start timestamp.")
-    recent_end: str = Field(description="Inclusive recent-period end timestamp.")
-    table_name: TableName = Field(
-        default="log",
-        description="Optional log table name. Currently only 'log' is supported.",
-    )
-    limit: int = Field(
-        default=5,
-        ge=1,
-        le=100,
-        description="Maximum number of component/severity changes.",
-    )
 
 
 def execute_database_tool(
@@ -120,10 +49,15 @@ def execute_database_tool(
             "message": f"Starting {operation}.",
         }
     )
+    print("#########################################")
+    print(f"Executing database tool: {operation}")
+    print(f"Tool runtime: {runtime}")
+    print(f"Tool function: {function}")
+    print("#########################################")
 
     try:
         data = function()
-    except Exception as exc:
+    except Exception as e:
         logger.exception("Database tool failed: %s", operation)
         writer(
             {
@@ -133,7 +67,7 @@ def execute_database_tool(
                 "message": f"{operation} failed.",
             }
         )
-        raise RuntimeError(f"{operation} failed") from exc
+        raise RuntimeError(f"{operation} failed") from e
 
     writer(
         {
@@ -155,6 +89,7 @@ def handle_tool_errors(
     try:
         return handler(request)
     except Exception as e:
+        print(f"Tool call failed: {e}")
         return ToolMessage(
             content=(
                 f"The tool could not complete the database operation: {e}"
@@ -164,11 +99,7 @@ def handle_tool_errors(
         )
 
 
-@tool(
-    "count_logs_by_severity",
-    args_schema=TimeWindowInput,
-    description="Count logs by exact severity in an inclusive time window.",
-)
+@tool("count_logs_by_severity")
 def count_by_category_tool(
     table_name: str,
     start_time: str,
@@ -177,6 +108,15 @@ def count_by_category_tool(
     category: str | None = None,
 ) -> dict:
     """Count log rows by exact severity within an inclusive time window."""
+    print("#########################################")
+    print("Executing count_logs_by_severity tool")
+    print(f"table_name: {table_name}")
+    print(f"start_time: {start_time}")
+    print(f"end_time: {end_time}")
+    print(f"category: {category}")
+    print(f"runtime: {runtime}")
+    print("#########################################")
+
     return execute_database_tool(
         runtime=runtime,
         operation="count logs by severity",
@@ -184,11 +124,7 @@ def count_by_category_tool(
     )
 
 
-@tool(
-    "get_pid_log_trend",
-    args_schema=TrendInput,
-    description="Count logs per minute for one known process ID in a time window.",
-)
+@tool("get_pid_log_trend")
 def get_trend_tool(
     start_time: str,
     end_time: str,
@@ -198,6 +134,16 @@ def get_trend_tool(
     category: str | None = None,
 ) -> dict:
     """Count one known PID by minute; optionally restrict results to one severity."""
+    print("#########################################")
+    print("Executing get_pid_log_trend tool")
+    print(f"table_name: {table_name}")
+    print(f"start_time: {start_time}")
+    print(f"end_time: {end_time}")
+    print(f"pid: {pid}")
+    print(f"category: {category}")
+    print(f"runtime: {runtime}")
+    print("#########################################")
+
     return execute_database_tool(
         runtime=runtime,
         operation="get PID log trend",
@@ -207,11 +153,7 @@ def get_trend_tool(
     )
 
 
-@tool(
-    "search_log_messages",
-    args_schema=SearchLogsInput,
-    description="Search log-message text; put severity in category, not query_text.",
-)
+@tool("search_log_messages")
 def search_logs_tool(
     query_text: str,
     runtime: ToolRuntime,
@@ -220,6 +162,14 @@ def search_logs_tool(
     limit: int = 10,
 ) -> dict:
     """Search message content; put severity in category, not query_text."""
+    print("#########################################")
+    print("Executing search_log_messages tool")
+    print(f"table_name: {table_name}")
+    print(f"query_text: {query_text}")
+    print(f"category: {category}")
+    print(f"runtime: {runtime}")
+    print("#########################################")
+
     return execute_database_tool(
         runtime=runtime,
         operation="search log messages",
@@ -227,11 +177,7 @@ def search_logs_tool(
     )
 
 
-@tool(
-    "rank_services_by_log_volume",
-    args_schema=TopServicesInput,
-    description="Rank services or components by log volume in an inclusive time window.",
-)
+@tool("rank_services_by_log_volume")
 def top_in_category_by_service_tool(
     start_time: str,
     end_time: str,
@@ -250,11 +196,7 @@ def top_in_category_by_service_tool(
     )
 
 
-@tool(
-    "compare_log_periods",
-    args_schema=ComparePeriodsInput,
-    description="Compare component and severity counts between baseline and recent periods.",
-)
+@tool("compare_log_periods")
 def compare_periods_tool(
     baseline_start: str,
     baseline_end: str,
@@ -265,6 +207,15 @@ def compare_periods_tool(
     limit: int = 5,
 ) -> dict:
     """Compare component/severity counts between baseline and recent windows."""
+    print("#########################################")
+    print("Executing compare_log_periods tool")
+    print(f"table_name: {table_name}")
+    print(f"baseline_start: {baseline_start}")
+    print(f"baseline_end: {baseline_end}")
+    print(f"recent_start: {recent_start}")
+    print(f"recent_end: {recent_end}")
+    print(f"runtime: {runtime}")
+    print("#########################################")
     return execute_database_tool(
         runtime=runtime,
         operation="compare log periods",

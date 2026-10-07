@@ -1,7 +1,7 @@
 from psycopg2 import sql
 from pathlib import Path
 
-from backend.db.utils import db_cursor
+from utils import db_cursor
 
 MODEL_BASE_URL = "http://host.docker.internal:11434"
 EMBEDDING_MODEL = "nomic-embed-text:v1.5"
@@ -123,7 +123,7 @@ def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
 
 if __name__ == "__main__":
     ### CREATE AI SECRET REQUIRED TO RUN SERENEDB, ONLY NEED TO BE RAN ONCE
-    # create_ai_secret()
+    create_ai_secret()
 
     ### IMPORT FROM CSV
     import_from_csv("../csv/OpenStack_2k.log_structured.csv")
