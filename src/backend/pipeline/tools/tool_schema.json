@@ -30,8 +30,7 @@
         },
         "usage_rules": [
             "Use only the tools defined in this catalog.",
-            "Do not invent process IDs, timestamps, categories, table names, or limits.",
-            "A PID must come directly from the user or previously collected evidence.",
+            "Do not invent process IDs, timestamps, categories, event_ids, table names. They must come directly from the user or previously collected evidence.",
             "Time-window boundaries are inclusive.",
             "Put severity values in the category argument, never in query_text.",
             "A failed tool call means evidence is unavailable.",
@@ -80,15 +79,7 @@
                         "operation",
                         "data"
                     ]
-                },
-                "examples": [
-                    {
-                        "purpose": "Get all PIDs in the log",
-                        "arguments": {
-                            "table_name": "log"
-                        }
-                    }
-                ]
+                }
             },
             {
                 "name": "get_services",
@@ -128,15 +119,7 @@
                         "operation",
                         "data"
                     ]
-                },
-                "examples": [
-                    {
-                        "purpose": "Get all services name in the log",
-                        "arguments": {
-                            "table_name": "log"
-                        }
-                    }
-                ]
+                }
             },
             {
                 "name": "get_event_ids",
@@ -176,15 +159,7 @@
                         "operation",
                         "data"
                     ]
-                },
-                "examples": [
-                    {
-                        "purpose": "Get all event_ids in the log",
-                        "arguments": {
-                            "table_name": "log"
-                        }
-                    }
-                ]
+                }
             },
             {
                 "name": "count_by_category",
@@ -249,14 +224,6 @@
                             "table_name": "log",
                             "category": "ERROR"
                         }
-                    },
-                    {
-                        "purpose": "Count logs of all severities",
-                        "arguments": {
-                            "start_time": "2026-10-07 09:00:00",
-                            "end_time": "2026-10-07 10:00:00",
-                            "table_name": "log"
-                        }
                     }
                 ]
             },
@@ -315,15 +282,6 @@
                     ]
                 },
                 "examples": [
-                    {
-                        "purpose": "Count ERROR logs during an incident window and group by pid",
-                        "arguments": {
-                            "start_time": "2026-10-07 09:00:00",
-                            "end_time": "2026-10-07 10:00:00",
-                            "table_name": "log",
-                            "category": "ERROR"
-                        }
-                    },
                     {
                         "purpose": "Count logs of all severities and group by pid",
                         "arguments": {
@@ -390,20 +348,12 @@
                 },
                 "examples": [
                     {
-                        "purpose": "Count ERROR logs during an incident window and group by service",
+                        "purpose": "Count WARNING logs during an incident window and group by service",
                         "arguments": {
                             "start_time": "2026-10-07 09:00:00",
                             "end_time": "2026-10-07 10:00:00",
                             "table_name": "log",
-                            "category": "ERROR"
-                        }
-                    },
-                    {
-                        "purpose": "Count logs of all severities and group by service",
-                        "arguments": {
-                            "start_time": "2026-10-07 09:00:00",
-                            "end_time": "2026-10-07 10:00:00",
-                            "table_name": "log"
+                            "category": "WARNING"
                         }
                     }
                 ]
@@ -464,20 +414,12 @@
                 },
                 "examples": [
                     {
-                        "purpose": "Count ERROR logs during an incident window and group by event_id",
+                        "purpose": "Count INFO logs during an incident window and group by event_id",
                         "arguments": {
                             "start_time": "2026-10-07 09:00:00",
                             "end_time": "2026-10-07 10:00:00",
                             "table_name": "log",
-                            "category": "ERROR"
-                        }
-                    },
-                    {
-                        "purpose": "Count logs of all severities and group by event_id",
-                        "arguments": {
-                            "start_time": "2026-10-07 09:00:00",
-                            "end_time": "2026-10-07 10:00:00",
-                            "table_name": "log"
+                            "category": "INFO"
                         }
                     }
                 ]
@@ -970,28 +912,6 @@
             "contradicts": "A successful tool call returned a fact that directly conflicts with the evidence requirement.",
             "not_found": "A successful tool call completed but returned no matching fact.",
             "unavailable": "The tool failed, required arguments are unknown, or no available tool can verify the evidence requirement."
-        },
-        "tool_selection_guide": [
-            {
-                "intent": "Count logs of a category in a time window",
-                "use": "count_by_category"
-            },
-            {
-                "intent": "Inspect a known process ID over time",
-                "use": "get_pid_trend"
-            },
-            {
-                "intent": "Find logs containing a text",
-                "use": "search_logs"
-            },
-            {
-                "intent": "Find the top x logs with a severity and/or rank them",
-                "use": "top_in_category_by_service"
-            },
-            {
-                "intent": "Compare certain services between 2 periods of time",
-                "use": "compare_periods"
-            }
-        ]
+        }
     }
 }
