@@ -21,7 +21,8 @@ class PipelinePrompts:
     def scope_request(self, state: PipelineState) -> ClassifierRequest:
         return {
             "state": {
-                "user_message": state["question"],
+                "conversation": state["normalized"],
+                "database_schema": LOG_SCHEMA,
             },
             "questions": {
                 "route": self.scope_question(),
@@ -29,84 +30,86 @@ class PipelinePrompts:
         }
 
     def scope_question(self) -> Noul:
-        return Noul(
+        return Choice(
             instructions=(
-                "Determine whether the user message requires investigation using "
-                "log data."
+                "Classify the user's latest request based on whether it concerns "
+                "log investigation and whether answering it requires retrieving "
+                "new evidence from the log database. "
+                "Use the full conversation to interpret follow-up questions and "
+                "references to earlier messages."
             ),
-            criteria=NoulCriteria(
-                true=(
-                    "The user asks about logs, errors, failures, incidents, traces, "
-                    "traces, recurring operational patterns, system impact, or priorities "
-                    "that require log evidence."
+            criteria={
+                "irrelevant": (
+                    "The user's request is unrelated to log investigation. This includes "
+                    "general conversation, unrelated technical questions, and requests "
+                    "that do not involve examining or reasoning about logs."
                 ),
-                false=(
-                    "The message is a greeting, thanks, casual conversation, general "
-                    "help request, or is unrelated to log investigation."
+                "resolved": (
+                    "The user's request concerns log investigation, but it can be answered "
+                    "without retrieving new log evidence. The necessary evidence is already "
+                    "available in the conversation, or the request asks for an explanation, "
+                    "summary, interpretation, or next step based on existing information."
                 ),
-            ),
+                "unresolved": (
+                    "The user's request concerns log investigation and cannot be answered "
+                    "accurately without retrieving new evidence from the log database. This "
+                    "includes requests to search, filter, count, aggregate, correlate, compare, "
+                    "or verify log records that have not already been provided."
+                ),
+            },
         )
 
     def normalize(self, state: PipelineState) -> str:
         return (
-            f"User question: {state['question']}\n\n"
-            "Normalize the user's question into a concise, structured format."
+            "<conversation>\n"
+            f"{state['conversation']}\n"
+            "</conversation>\n\n"
         )
 
-    def plan(self, state: PipelineState) -> str:
-        previous_plan = state.get("plan") or "None"
+    def find_evidence(self, state: PipelineState) -> str:
+        previous_report = state.get("evidence_report", [])
+        revision_feedback = state.get("revision_feedback", "No previous attempt exists.")
+
+        return (
+            "<role context>\n"
+            f"{self.role_context(state['role'])}\n"
+            "</role context>\n"
+            "<request>\n"
+            f"{state['normalized']}\n"
+            "</request>\n"
+            "<previous evidence report>\n"
+            f"{previous_report}\n"
+            "</previous evidence report>\n"
+            "<revision feedback>\n"
+            f"{revision_feedback}\n"
+            "</revision feedback>\n"
+            "<database schemas>\n"
+            f"{LOG_SCHEMA}\n"
+            "</database schemas>\n\n"
+        )
+
+    def answer(self, state: PipelineState) -> str:
         revision_feedback = state.get(
             "revision_feedback",
             "No previous attempt exists.",
         )
-        plan_history = state.get("plan_history", [])
 
         return (
+            "<grounding rules>\n"
+            f"{self.shared_grounding}\n\n"
+            "</grounding rules>\n"
+            "<role context>\n"
             f"{self.role_context(state['role'])}\n"
-            f"Normalized request: {state['normalized']}\n"
-            f"Log table schema:\n{LOG_SCHEMA}\n"
-            f"Previous plan: {previous_plan}\n"
-            f"Previous attempt history, including evidence statuses: {plan_history}\n"
-            f"Revision feedback: {revision_feedback}\n\n"
-            "Create an investigation plan containing the plausible hypotheses that "
-            "could explain the problem. For each hypothesis, describe why it matters "
-            "and list the specific evidence required to evaluate it. Do not name tools "
-            "or assume knowledge of the available tool set. If this is a revision, "
-            "change the hypotheses or evidence requirements to address the feedback; "
-            "do not repeat the previous plan unchanged."
-        )
-
-    def execute_evidence(self, state: PipelineState) -> str:
-        return (
-            f"Normalized request: {state['normalized']}\n"
-            f"Log table schema:\n{LOG_SCHEMA}\n"
-            f"Investigation plan: {state['plan']}\n\n"
-            # f"Tool schemas:\n{TOOL_SCHEMA}\n\n"
-            "Collect the required evidence for each hypothesis using the available "
-            "tools. Return only evidence that appears in tool results. If evidence "
-            "cannot be collected, mark it as unavailable rather than guessing."
-        )
-
-    def answer(self, state: PipelineState) -> str:
-        previous_confidence = (
-            state.get("confidence") or "No previous confidence evaluation."
-        )
-        revision_feedback = state.get(
-            "revision_feedback",
-            "No answer revision feedback is available.",
-        )
-        return (
-            f"{self.role_context(state['role'])}\n"
-            f"Normalized request: {state['normalized']}\n"
-            f"Investigation hypotheses: {state['plan']}\n"
-            f"Evidence: {state['evidence']}\n\n"
-            f"Previous confidence evaluation: {previous_confidence}\n"
-            f"Required revision: {revision_feedback}\n\n"
-            "Answer the user's question directly. Focus on supported hypotheses, exclude "
-            "contradicted hypotheses, and mention unresolved hypotheses only when they "
-            "materially limit the conclusion. Tailor the detail and recommendation to the "
-            "user's role. Apply the revision feedback.\n\n"
-            f"Grounding rules: {self.shared_grounding}"
+            "</role context>\n"
+            "<request>\n"
+            f"{state['normalized']}\n"
+            "</request>\n"
+            "<evidence report>\n"
+            f"{state['evidence_report']}\n"
+            "</evidence report>\n"
+            "<revision feedback>\n"
+            f"{revision_feedback}\n"
+            "</revision feedback>\n\n"
         )
 
     # def confidence_request(self, state: PipelineState) -> ClassifierRequest:
@@ -156,14 +159,14 @@ class PipelinePrompts:
                 f"{self.role_context(role)}"
             ),
             criteria={
-                "plan": (
+                "find_evidence": (
                     "Evidence is missing, unavailable, irrelevant, contradictory, "
                     "or no important hypothesis is supported."
                 ),
                 "answer": (
                     "Evidence is sufficient, but the answer must be generated or revised."
                 ),
-                "conclude": (
+                "end": (
                     "The answer is grounded, role-appropriate, and ready to return."
                 ),
             },

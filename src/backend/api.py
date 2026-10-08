@@ -61,7 +61,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     initial_state = cast(
         PipelineState,
         {
-            "question": req["message"],
+            "conversation": req["message"],
             "role": {
                 "name": req["role"],
                 "objective": ROLE_OBJECTIVES[req["role"]],

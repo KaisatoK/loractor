@@ -5,11 +5,10 @@ from langgraph.graph import END, StateGraph
 
 from backend.pipeline.agents import (
     answer_agent,
-    evidence_agent,
-    executor_agent,
-    general_agent,
     normalize_agent,
-    plan_agent,
+    general_agent,
+    evidence_report_agent,
+    find_evidence_agent,
 )
 from backend.pipeline.pipeline_prompts import PipelinePrompts
 from backend.pipeline.schemas import PipelineState
@@ -20,6 +19,17 @@ prompts = PipelinePrompts()
 SCOPE_CONFIDENCE_THRESHOLD = 0.64
 ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
 MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
+
+def normalize_node(state: PipelineState) -> PipelineState:
+    result = normalize_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.normalize(state)},
+            ]
+        }
+    )
+    normalized = result["structured_response"]
+    return {**state, "normalized": normalized.model_dump()}
 
 
 def scope_node(state: PipelineState) -> PipelineState:
@@ -36,7 +46,7 @@ def scope_node(state: PipelineState) -> PipelineState:
 
     return {
         **state,
-        "scope": "pipeline",
+        "scope": "unresolved",
     }
 
 
@@ -44,7 +54,7 @@ def general_node(state: PipelineState) -> PipelineState:
     result = general_agent.invoke(
         {
             "messages": [
-                {"role": "user", "content": state["question"]},
+                {"role": "user", "content": state["conversation"]},
             ]
         }
     )
@@ -56,90 +66,50 @@ def general_node(state: PipelineState) -> PipelineState:
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {**state, "answer": answer}
 
+def find_evidence_node(state: PipelineState) -> PipelineState:
+    evidence_report_history = list(state.get("evidence_report_history", []))
+    # if state.get("evidence_report"):
+    #     find_evidence_history.append(
+    #         {
+    #             ## ...
+    #         }
+    #     )
 
-def normalize_node(state: PipelineState) -> PipelineState:
-    result = normalize_agent.invoke(
+    result = find_evidence_agent.invoke(
         {
             "messages": [
-                {"role": "user", "content": prompts.normalize(state)},
-            ]
-        }
-    )
-    normalized = result["structured_response"]
-    return {**state, "normalized": normalized.model_dump()}
-
-
-def plan_node(state: PipelineState) -> PipelineState:
-    plan_history = list(state.get("plan_history", []))
-    if state.get("plan"):
-        plan_history.append(
-            {
-                "plan": state["plan"],
-                "evidence": state.get("evidence", {}),
-                "answer": state.get("answer", ""),
-                "confidence": state.get("confidence"),
-            }
-        )
-
-    result = plan_agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": prompts.plan(state)},
-            ]
-        }
-    )
-    plan = result["structured_response"]
-    plan_data = plan.model_dump()
-    return {
-        **state,
-        "plan": plan_data,
-        "plan_history": plan_history,
-        "evidence": {},
-        "answer": "",
-    }
-
-
-def execute_plan_node(state: PipelineState) -> PipelineState:
-    result = executor_agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": prompts.execute_evidence(state)},
+                {"role": "user", "content": prompts.find_evidence(state)},
             ]
         }
     )
 
-    tool_results = []
-    for message in result.get("messages", []):
-        if getattr(message, "type", None) != "tool":
-            continue
-        tool_results.append(
-            {
-                "source_tool": getattr(message, "name", "unknown"),
-                "content": message.content,
-                "tool_call_id": getattr(message, "tool_call_id", None),
-            }
-        )
-
-    evidence_result = evidence_agent.invoke(
+    investigation = "\n".join(
+        f"{message.type}: {message.content}"
+        for message in result["messages"]
+    )
+    report_result = evidence_report_agent.invoke(
         {
             "messages": [
                 {
                     "role": "user",
                     "content": (
-                        f"Investigation plan: {state['plan']}\n\n"
-                        f"Tool results: {tool_results}"
+                        f"{prompts.find_evidence(state)}\n"
+                        "<investigation transcript>\n"
+                        f"{investigation}\n"
+                        "</investigation transcript>"
                     ),
                 }
             ]
         }
     )
-    evidence_report = evidence_result["structured_response"].model_dump()
+
+    evidence_report = report_result["structured_response"].model_dump()
+
     return {
         **state,
-        "evidence": {
-            "report": evidence_report,
-            "tool_results": tool_results,
-        },
+        "evidence_report": evidence_report,
+        "evidence_report_history": evidence_report_history,
+        "answer": "",
     }
 
 
@@ -195,18 +165,15 @@ def confidence_node(state: PipelineState) -> PipelineState:
     #     },
     #     "revision_feedback": revision_feedback,
     # }
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("answer:", state["answer"])
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {
         **state,
         "confidence": {
-            "next_state": "conclude",
+            "next_state": "end",
             "pass_probability": 1,
             "probabilities": {
-                "plan": 0,
+                "find_evidence": 0,
                 "answer": 0,
-                "conclude": 1,
+                "end": 1,
             },
             "revision_reason": "No revision is required.",
         },
@@ -214,43 +181,41 @@ def confidence_node(state: PipelineState) -> PipelineState:
     }
 
 
-def route_after_scope(state: PipelineState) -> Literal["pipeline", "general"]:
+def route_after_scope(state: PipelineState) -> Literal["irrelevant", "resolved", "unresolved"]:
     return state["scope"]
 
 
-def route_after_confidence(
-    state: PipelineState,
-) -> Literal["plan", "answer", "conclude"]:
+def route_after_confidence(state: PipelineState) -> Literal["find_evidence", "answer", "end"]:
     return state["confidence"]["next_state"]
 
 
 graph = StateGraph(PipelineState)
+graph.add_node("normalize", normalize_node)
 graph.add_node("scope", scope_node)
 graph.add_node("general", general_node)
-graph.add_node("normalize", normalize_node)
-graph.add_node("plan", plan_node)
-graph.add_node("execute_plan", execute_plan_node)
+graph.add_node("find_evidence", find_evidence_node)
 graph.add_node("answer", answer_node)
 graph.add_node("confidence", confidence_node)
 
-graph.set_entry_point("scope")
+graph.set_entry_point("normalize")
+
+graph.add_edge("normalize", "scope")
 graph.add_conditional_edges(
     "scope",
     route_after_scope,
     {
-        "pipeline": "normalize",
-        "general": "general",
+        "irrelevant": "general",
+        "resolved": "answer",
+        "unresolved": "find_evidence",
     },
 )
 graph.add_edge("general", END)
-graph.add_edge("normalize", "plan")
-graph.add_edge("plan", "execute_plan")
-graph.add_edge("execute_plan", "answer")
+graph.add_edge("find_evidence", "answer")
 graph.add_edge("answer", "confidence")
 graph.add_conditional_edges(
     "confidence",
     route_after_confidence,
-    {"plan": "plan", "answer": "answer", "conclude": END},
+    {"find_evidence": "find_evidence", "answer": "answer", "end": END},
 )
 
 checkpointer = InMemorySaver()

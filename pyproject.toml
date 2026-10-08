@@ -85,4 +85,5 @@ dependencies = [
     "psycopg-pool==3.3.3",
     "pyperclip==1.11.0",
     "jsonref>=1.1.0",
+    "langchain-google-genai>=4.4.0",
 ]

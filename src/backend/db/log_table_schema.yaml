@@ -31,7 +31,7 @@ columns:
     description: Log level or type (INFO, WARNING, ERROR).
   - name: service
     type: TEXT
-    description: Service, module, or service that produced the line.
+    description: Service or module that produced the line.
   - name: addr
     type: TEXT
     description: Source address. May be NULL or empty.

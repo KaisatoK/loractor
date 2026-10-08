@@ -124,7 +124,7 @@ def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
 
 if __name__ == "__main__":
     ### CREATE AI SECRET REQUIRED TO RUN SERENEDB, ONLY NEED TO BE RAN ONCE
-    create_ai_secret()
+    # create_ai_secret()
 
     ### IMPORT FROM CSV
     import_from_csv("../data/OpenStack_2k.log_structured.csv")

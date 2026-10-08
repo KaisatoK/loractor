@@ -38,7 +38,7 @@ def count_pid_by_category_tool(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> dict:
-    """Count log rows by exact severity within an inclusive time window."""
+    """Count log rows by exact severity within an inclusive time window group by PID."""
     print("#########################################")
     print("Executing count_pid_by_category tool")
     print(f"table_name: {table_name}")
@@ -68,7 +68,7 @@ def count_service_by_category_tool(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> dict:
-    """Count log rows by exact severity within an inclusive time window."""
+    """Count log rows by exact severity within an inclusive time window group by service."""
     print("#########################################")
     print("Executing count_service_by_category tool")
     print(f"table_name: {table_name}")
@@ -98,7 +98,7 @@ def count_event_id_by_category_tool(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> dict:
-    """Count log rows by exact severity within an inclusive time window."""
+    """Count log rows by exact severity within an inclusive time window group by event ID."""
     print("#########################################")
     print("Executing count_event_id_by_category tool")
     print(f"table_name: {table_name}")
