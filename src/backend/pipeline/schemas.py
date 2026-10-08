@@ -120,3 +120,6 @@ class ComparePeriods(BaseModel):
     recent_end: Annotated[str, Field(pattern=DATETIME_REGEX, description="Timestamp in YYYY-MM-DD HH:MM:SS format.")]
     table_name: str = TABLE_NAME
     limit: Annotated[int, Field(ge=1, le=100, description="Maximum number of log entries to return. Must be between 1 and 100.")] = 5
+
+class GetTools(BaseModel):
+    table_name: str = TABLE_NAME
