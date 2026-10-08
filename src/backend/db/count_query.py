@@ -1,8 +1,8 @@
 from psycopg2 import sql
 
 from backend.db.utils import (
-    query_runner,
     TABLE_NAME,
+    query_runner,
 )
 
 

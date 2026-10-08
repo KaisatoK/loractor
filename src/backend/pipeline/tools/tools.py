@@ -1,12 +1,13 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.tools.utils import load_tool_schema, execute_database_tool
+from backend.pipeline.schemas import ComparePeriods, SearchLogs, TopInCategoryByService
+from backend.pipeline.tools.utils import execute_database_tool
 
 TABLE_NAME = "log"
 
 
-@tool("search_logs", args_schema=load_tool_schema("search_logs"))
+@tool("search_logs", args_schema=SearchLogs)
 def search_logs_tool(
     query_text: str,
     runtime: ToolRuntime,
@@ -32,7 +33,7 @@ def search_logs_tool(
 
 @tool(
     "top_in_category_by_service",
-    args_schema=load_tool_schema("top_in_category_by_service"),
+    args_schema=TopInCategoryByService,
 )
 def top_in_category_by_service_tool(
     start_time: str,
@@ -52,7 +53,7 @@ def top_in_category_by_service_tool(
     )
 
 
-@tool("compare_periods", args_schema=load_tool_schema("compare_periods"))
+@tool("compare_periods", args_schema=ComparePeriods)
 def compare_periods_tool(
     baseline_start: str,
     baseline_end: str,

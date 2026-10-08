@@ -1,12 +1,13 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.tools.utils import load_tool_schema, execute_database_tool
+from backend.pipeline.schemas import CountByCategory
+from backend.pipeline.tools.utils import execute_database_tool
 
 TABLE_NAME = "log"
 
 
-@tool("count_by_category", args_schema=load_tool_schema("count_by_category"))
+@tool("count_by_category", args_schema=CountByCategory)
 def count_by_category_tool(
     start_time: str,
     end_time: str,
@@ -31,7 +32,8 @@ def count_by_category_tool(
     )
 
 
-@tool("count_pid_by_category", args_schema=load_tool_schema("count_pid_by_category"))
+
+@tool("count_pid_by_category", args_schema=CountByCategory)
 def count_pid_by_category_tool(
     start_time: str,
     end_time: str,
@@ -60,7 +62,7 @@ def count_pid_by_category_tool(
 
 @tool(
     "count_service_by_category",
-    args_schema=load_tool_schema("count_service_by_category"),
+    args_schema=CountByCategory,
 )
 def count_service_by_category_tool(
     start_time: str,
@@ -90,7 +92,7 @@ def count_service_by_category_tool(
 
 @tool(
     "count_event_id_by_category",
-    args_schema=load_tool_schema("count_event_id_by_category"),
+    args_schema=CountByCategory,
 )
 def count_event_id_by_category_tool(
     start_time: str,

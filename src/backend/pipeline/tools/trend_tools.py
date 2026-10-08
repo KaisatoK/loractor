@@ -1,12 +1,13 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.tools.utils import load_tool_schema, execute_database_tool
+from backend.pipeline.schemas import GetTrendEvent, GetTrendPID, GetTrendService
+from backend.pipeline.tools.utils import execute_database_tool
 
 TABLE_NAME = "log"
 
 
-@tool("get_pid_trend", args_schema=load_tool_schema("get_pid_trend"))
+@tool("get_pid_trend", args_schema=GetTrendPID)
 def get_pid_trend_tool(
     start_time: str,
     end_time: str,
@@ -35,7 +36,7 @@ def get_pid_trend_tool(
     )
 
 
-@tool("get_service_trend", args_schema=load_tool_schema("get_service_trend"))
+@tool("get_service_trend", args_schema=GetTrendService)
 def get_service_trend_tool(
     start_time: str,
     end_time: str,
@@ -64,7 +65,7 @@ def get_service_trend_tool(
     )
 
 
-@tool("get_event_id_trend", args_schema=load_tool_schema("get_event_id_trend"))
+@tool("get_event_id_trend", args_schema=GetTrendEvent)
 def get_event_id_trend_tool(
     start_time: str,
     end_time: str,

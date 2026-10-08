@@ -1,9 +1,10 @@
-import psycopg2
 import functools
 import logging
-
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import Callable, ParamSpec
+from typing import ParamSpec
+
+import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 

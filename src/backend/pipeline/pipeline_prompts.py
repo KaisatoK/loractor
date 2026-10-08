@@ -1,6 +1,7 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
+
 from backend.pipeline.schemas import PipelineState, Role
-from backend.pipeline.tools.utils import LOG_SCHEMA, TOOL_SCHEMA
+from backend.pipeline.tools.utils import LOG_SCHEMA
 
 
 class PipelinePrompts:
@@ -80,7 +81,7 @@ class PipelinePrompts:
             f"Normalized request: {state['normalized']}\n"
             f"Log table schema:\n{LOG_SCHEMA}\n"
             f"Investigation plan: {state['plan']}\n\n"
-            f"Tool schemas:\n{TOOL_SCHEMA}\n\n"
+            # f"Tool schemas:\n{TOOL_SCHEMA}\n\n"
             "Collect the required evidence for each hypothesis using the available "
             "tools. Return only evidence that appears in tool results. If evidence "
             "cannot be collected, mark it as unavailable rather than guessing."

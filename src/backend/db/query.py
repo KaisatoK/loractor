@@ -1,10 +1,10 @@
 from psycopg2 import sql
 
 from backend.db.utils import (
-    query_runner,
-    EMBEDDING_MODEL,
     EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
     TABLE_NAME,
+    query_runner,
 )
 
 

@@ -1,7 +1,7 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.tools.utils import load_tool_schema, execute_database_tool
+from backend.pipeline.tools.utils import execute_database_tool, load_tool_schema
 
 TABLE_NAME = "log"
 

@@ -1,12 +1,12 @@
-from psycopg2 import sql
 from pathlib import Path
 
+from psycopg2 import sql
 from utils import (
-    db_cursor,
-    MODEL_BASE_URL,
-    EMBEDDING_MODEL,
     EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    MODEL_BASE_URL,
     TABLE_NAME,
+    db_cursor,
 )
 
 

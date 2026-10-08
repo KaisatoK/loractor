@@ -1,7 +1,8 @@
-import requests
 import json
-import streamlit as st
+
 import pyperclip
+import requests
+import streamlit as st
 
 API_URL = "http://localhost:8000/chat/stream"
 
@@ -13,7 +14,7 @@ def main_page():
         st.session_state.current_chat, {}
     )
 
-    for item in current_chat["history"]:
+    for idx, item in enumerate(current_chat["history"]):
         if (item["role"] == "assistant" and "progress" in item) and item[
             "progress"
         ] is not None:
@@ -25,7 +26,7 @@ def main_page():
         if st.button(
             label="Copy to Clipboard",
             icon=":material/content_copy:",
-            key=f"copy_{item["role"]}_{hash(item['content'])}",
+            key=f"copy_{item["role"]}_{hash(item['content'])}_{idx}",
         ):
             st.success("Copied to clipboard!")
             pyperclip.copy(item["content"])
@@ -46,6 +47,14 @@ def main_page():
         )
         with st.chat_message("user"):
             st.markdown(message.text)
+
+        if st.button(
+            label="Copy to Clipboard",
+            icon=":material/content_copy:",
+            key=f"copy_user_{hash(message.text)}_{len(current_chat['history'])}",
+        ):
+            st.success("Copied to clipboard!")
+            pyperclip.copy(message.text)
 
         progress = st.status(label="Processing...", type="compact", state="running")
 
@@ -79,10 +88,10 @@ def main_page():
                             full_answer += data["content"]
                             placeholder.markdown(full_answer + "▌")
                         elif data["type"] == "subgraph_name":
-                            progress.write(f"Currently at: {data['content']}")
+                            progress.caption(f"Currently at stage: {data['content']}")
                             progress_stages.append(data["content"])
                         elif data["type"] == "subgraph_message":
-                            progress.write(f"Thinking: {data['content']}")
+                            progress.caption(f"Thinking: {data['content']}")
                             progress_stages.append(data["content"])
                     # time.sleep(0.1)  # Simulate processing time for better UX
 
@@ -96,7 +105,7 @@ def main_page():
         if st.button(
             label="Copy to Clipboard",
             icon=":material/content_copy:",
-            key=f"copy_assistent_{hash(full_answer)}",
+            key=f"copy_assistent_{hash(full_answer)}_{len(current_chat['history'])}",
         ):
             st.success("Copied to clipboard!")
             pyperclip.copy(full_answer)
