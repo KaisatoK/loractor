@@ -43,8 +43,152 @@
         ],
         "tools": [
             {
+                "name": "get_pids",
+                "description": "Get all PIDs in the log.",
+                "operation": "get pids",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        }
+                    },
+                    "required": []
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "get pids"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the get_pids database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Get all PIDs in the log",
+                        "arguments": {
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "get_services",
+                "description": "Get all services name in the log.",
+                "operation": "get services",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        }
+                    },
+                    "required": []
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "get services"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the get_services database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Get all services name in the log",
+                        "arguments": {
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "get_event_ids",
+                "description": "Get all event_ids in the log.",
+                "operation": "get event_ids",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        }
+                    },
+                    "required": []
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "get event_ids"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the get_event_ids database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Get all event_ids in the log",
+                        "arguments": {
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
                 "name": "count_by_category",
-                "description": "Count log rows by exact severity within an inclusive time window. If category is omitted, count logs across all severities.",
+                "description": "Count log rows by exact severity within an inclusive time window. If category is omitted, count all severities.",
                 "operation": "count logs by severity",
                 "input_schema": {
                     "type": "object",
@@ -117,9 +261,9 @@
                 ]
             },
             {
-                "name": "get_trend",
-                "description": "Count logs per minute for one known process ID within an inclusive time window. Optionally restrict the result to one exact severity.",
-                "operation": "get PID log trend",
+                "name": "count_pid_by_category",
+                "description": "Count log rows by exact severity within an inclusive time window and group by pid. If category is omitted, count all severities.",
+                "operation": "count pid by severity",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -130,6 +274,230 @@
                         "end_time": {
                             "type": "Timestamp",
                             "$ref": "#/tool_catalog/shared_types/Timestamp"
+                        },
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        },
+                        "category": {
+                            "type": "LogCategory",
+                            "$ref": "#/tool_catalog/shared_types/LogCategory"
+                        }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time"
+                    ]
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "count pid by severity"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the count_pid_by_category database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Count ERROR logs during an incident window and group by pid",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log",
+                            "category": "ERROR"
+                        }
+                    },
+                    {
+                        "purpose": "Count logs of all severities and group by pid",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "count_service_by_category",
+                "description": "Count log rows by exact severity within an inclusive time window and group by service. If category is omitted, count all severities.",
+                "operation": "count service by severity",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp"
+                        },
+                        "end_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp"
+                        },
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        },
+                        "category": {
+                            "type": "LogCategory",
+                            "$ref": "#/tool_catalog/shared_types/LogCategory"
+                        }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time"
+                    ]
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "count service by severity"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the count_service_by_category database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Count ERROR logs during an incident window and group by service",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log",
+                            "category": "ERROR"
+                        }
+                    },
+                    {
+                        "purpose": "Count logs of all severities and group by service",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "count_event_id_by_category",
+                "description": "Count log rows by exact severity within an inclusive time window and group by event_id. If category is omitted, count all severities.",
+                "operation": "count event_id by severity",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp"
+                        },
+                        "end_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp"
+                        },
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        },
+                        "category": {
+                            "type": "LogCategory",
+                            "$ref": "#/tool_catalog/shared_types/LogCategory"
+                        }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time"
+                    ]
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "count event_id by severity"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Result returned by the count_event_id_by_category database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Count ERROR logs during an incident window and group by event_id",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log",
+                            "category": "ERROR"
+                        }
+                    },
+                    {
+                        "purpose": "Count logs of all severities and group by event_id",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "table_name": "log"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "get_pid_trend",
+                "description": "Count logs per minute for one known process ID within an inclusive time window. Optionally restrict the result to one exact severity.",
+                "operation": "get PID log trend",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive start timestamp. The time between start and end should be at least 2 minutes for meaningful data."
+                        },
+                        "end_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive end timestamp. The time between start and end should be at least 2 minutes for meaningful data."
                         },
                         "pid": {
                             "type": "integer",
@@ -167,7 +535,7 @@
                                 "object",
                                 "array"
                             ],
-                            "description": "Per-minute log counts returned by the get_trend_by_category database function."
+                            "description": "Per-minute log counts returned by the get_pid_trend_by_category database function."
                         }
                     },
                     "required": [
@@ -183,6 +551,154 @@
                             "start_time": "2026-10-07 09:00:00",
                             "end_time": "2026-10-07 10:00:00",
                             "pid": 4127,
+                            "table_name": "log",
+                            "category": "ERROR"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "get_service_trend",
+                "description": "Count logs per minute for one known service within an inclusive time window. Optionally restrict the result to one exact severity.",
+                "operation": "get service log trend",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive start timestamp. The time between start and end should be at least 2 minutes for meaningful data."
+                        },
+                        "end_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive end timestamp. The time between start and end should be at least 2 minutes for meaningful data."
+                        },
+                        "service": {
+                            "type": "string",
+                            "description": "Exact service name. The value must come from the user or from previously collected evidence."
+                        },
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        },
+                        "category": {
+                            "type": "LogCategory",
+                            "$ref": "#/tool_catalog/shared_types/LogCategory"
+                        }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time",
+                        "service"
+                    ]
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "get service log trend"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Per-minute log counts returned by the get_service_trend_by_category database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Get the ERROR-log trend for a known service name",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "service": "nova.virt.libvirt.imagecache",
+                            "table_name": "log",
+                            "category": "ERROR"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "get_event_id_trend",
+                "description": "Count logs per minute for one known event_id within an inclusive time window. Optionally restrict the result to one exact severity.",
+                "operation": "get event_id log trend",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive start timestamp. The time between start and end should be at least 2 minutes for meaningful data."
+                        },
+                        "end_time": {
+                            "type": "Timestamp",
+                            "$ref": "#/tool_catalog/shared_types/Timestamp",
+                            "description": "Inclusive end timestamp. The time between start and end should be at least 2 minutes for meaningful data."
+                        },
+                        "event_id": {
+                            "type": "string",
+                            "description": "Exact event id. The value must come from the user or from previously collected evidence."
+                        },
+                        "table_name": {
+                            "type": "TableName",
+                            "$ref": "#/tool_catalog/shared_types/TableName"
+                        },
+                        "category": {
+                            "type": "LogCategory",
+                            "$ref": "#/tool_catalog/shared_types/LogCategory"
+                        }
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time",
+                        "event_id"
+                    ]
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "const": "success"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "const": "get event_id log trend"
+                        },
+                        "data": {
+                            "type": [
+                                "object",
+                                "array"
+                            ],
+                            "description": "Per-minute log counts returned by the get_event_id_trend_by_category database function."
+                        }
+                    },
+                    "required": [
+                        "status",
+                        "operation",
+                        "data"
+                    ]
+                },
+                "examples": [
+                    {
+                        "purpose": "Get the ERROR-log trend for a known event id",
+                        "arguments": {
+                            "start_time": "2026-10-07 09:00:00",
+                            "end_time": "2026-10-07 10:00:00",
+                            "event_id": "E42",
                             "table_name": "log",
                             "category": "ERROR"
                         }
@@ -278,7 +794,7 @@
             },
             {
                 "name": "top_in_category_by_service",
-                "description": "Rank services or components by log volume within an inclusive time window. Optionally restrict the ranking to one exact severity.",
+                "description": "Rank services or services by log volume within an inclusive time window. Optionally restrict the ranking to one exact severity.",
                 "operation": "rank services by log volume",
                 "input_schema": {
                     "type": "object",
@@ -304,7 +820,7 @@
                             "minimum": 1,
                             "maximum": 100,
                             "default": 5,
-                            "description": "Maximum number of ranked services or components."
+                            "description": "Maximum number of ranked services or services."
                         }
                     },
                     "required": [
@@ -328,7 +844,7 @@
                                 "object",
                                 "array"
                             ],
-                            "description": "Ranked service or component counts returned by the top_in_category_by_service database function."
+                            "description": "Ranked service or service counts returned by the top_in_category_by_service database function."
                         }
                     },
                     "required": [
@@ -352,7 +868,7 @@
             },
             {
                 "name": "compare_periods",
-                "description": "Compare component and severity counts between an inclusive baseline period and an inclusive recent period.",
+                "description": "Compare service and severity counts between an inclusive baseline period and an inclusive recent period.",
                 "operation": "compare log periods",
                 "input_schema": {
                     "type": "object",
@@ -386,7 +902,7 @@
                             "minimum": 1,
                             "maximum": 100,
                             "default": 5,
-                            "description": "Maximum number of component and severity changes to return."
+                            "description": "Maximum number of service and severity changes to return."
                         }
                     },
                     "required": [
@@ -412,7 +928,7 @@
                                 "object",
                                 "array"
                             ],
-                            "description": "Component and severity count changes returned by the compare_periods database function."
+                            "description": "Service and severity count changes returned by the compare_periods database function."
                         }
                     },
                     "required": [
@@ -457,12 +973,12 @@
         },
         "tool_selection_guide": [
             {
-                "intent": "Count logs in a time window",
+                "intent": "Count logs of a category in a time window",
                 "use": "count_by_category"
             },
             {
                 "intent": "Inspect a known process ID over time",
-                "use": "get_trend"
+                "use": "get_pid_trend"
             },
             {
                 "intent": "Find logs containing a text",

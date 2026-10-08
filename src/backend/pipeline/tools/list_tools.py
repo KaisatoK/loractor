@@ -1,0 +1,61 @@
+from langchain.tools import ToolRuntime, tool
+
+from backend.db import *
+from backend.pipeline.utils import load_tool_schema
+from backend.pipeline.tools.utils import execute_database_tool
+
+TABLE_NAME = "log"
+
+
+@tool("get_pids", args_schema=load_tool_schema("get_pids"))
+def get_pids_tool(
+    runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
+) -> dict:
+    """Get all PIDs in the log."""
+    print("#########################################")
+    print("Executing get_pids tool")
+    print(f"table_name: {table_name}")
+    print("#########################################")
+
+    return execute_database_tool(
+        runtime=runtime,
+        operation="get pids",
+        function=lambda: get_pids(table_name),
+    )
+
+
+@tool("get_services", args_schema=load_tool_schema("get_services"))
+def get_services_tool(
+    runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
+) -> dict:
+    """Get all services name in the log."""
+    print("#########################################")
+    print("Executing get_services tool")
+    print(f"table_name: {table_name}")
+    print("#########################################")
+
+    return execute_database_tool(
+        runtime=runtime,
+        operation="get services",
+        function=lambda: get_pids(table_name),
+    )
+
+
+@tool("get_event_ids", args_schema=load_tool_schema("get_event_ids"))
+def get_event_ids_tool(
+    runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
+) -> dict:
+    """Get all event_ids in the log."""
+    print("#########################################")
+    print("Executing get_event_ids tool")
+    print(f"table_name: {table_name}")
+    print("#########################################")
+
+    return execute_database_tool(
+        runtime=runtime,
+        operation="get event_ids",
+        function=lambda: get_event_ids(table_name),
+    )

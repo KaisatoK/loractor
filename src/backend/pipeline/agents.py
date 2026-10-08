@@ -1,85 +1,22 @@
-import logging
 from collections.abc import Callable
-from typing import Any, Literal
 
 from langgraph.types import Command
 from langchain.agents import create_agent
 from langchain.agents.middleware import ToolCallLimitMiddleware, wrap_tool_call
 from langchain.messages import ToolMessage
-from langchain.tools import ToolRuntime, tool
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
 
-from backend.db import (
-    count_by_category,
-    get_trend_by_category,
-    search_logs,
-    top_in_category_by_service,
-    compare_periods,
-)
+from backend.pipeline.tools import *
 from backend.pipeline.schemas import (
     EvidenceReport,
     ExecutionPlan,
     NormalizedOutput,
 )
-from backend.pipeline.utils import load_tool_schema
-
-logger = logging.getLogger(__name__)
 
 model = ChatGroq(model="openai/gpt-oss-20b")
 general_model = ChatGroq(model="openai/gpt-oss-20b")
 # general_model = ChatOllama(model="qwen3.5:4b")
-
-TABLE_NAME = "log"
-TableName = Literal["log"]
-LogCategory = Literal["INFO", "WARNING", "ERROR"]
-
-
-def execute_database_tool(
-    *,
-    runtime: ToolRuntime,
-    operation: str,
-    function: Callable[[], Any],
-) -> dict:
-    writer = runtime.stream_writer
-    writer(
-        {
-            "type": "tool_progress",
-            "operation": operation,
-            "status": "started",
-            "message": f"Starting {operation}.",
-        }
-    )
-    print("#########################################")
-    print(f"Executing database tool: {operation}")
-    print(f"Tool runtime: {runtime}")
-    print(f"Tool function: {function}")
-    print("#########################################")
-
-    try:
-        data = function()
-    except Exception as e:
-        logger.exception("Database tool failed: %s", operation)
-        writer(
-            {
-                "type": "tool_progress",
-                "operation": operation,
-                "status": "failed",
-                "message": f"{operation} failed.",
-            }
-        )
-        raise RuntimeError(f"{operation} failed") from e
-
-    writer(
-        {
-            "type": "tool_progress",
-            "operation": operation,
-            "status": "completed",
-            "message": f"Completed {operation}.",
-        }
-    )
-    return {"status": "success", "operation": operation, "data": data}
 
 
 @wrap_tool_call
@@ -99,137 +36,6 @@ def handle_tool_errors(
             ),
             tool_call_id=request.tool_call["id"],
         )
-
-
-@tool(args_schema=load_tool_schema("count_by_category"))
-def count_by_category_tool(
-    start_time: str,
-    end_time: str,
-    runtime: ToolRuntime,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
-) -> dict:
-    """Count log rows by exact severity within an inclusive time window."""
-    print("#########################################")
-    print("Executing count_by_category tool")
-    print(f"table_name: {table_name}")
-    print(f"start_time: {start_time}")
-    print(f"end_time: {end_time}")
-    print(f"category: {category}")
-    print(f"runtime: {runtime}")
-    print("#########################################")
-
-    return execute_database_tool(
-        runtime=runtime,
-        operation="count logs by severity",
-        function=lambda: count_by_category(start_time, end_time, table_name, category),
-    )
-
-
-@tool(args_schema=load_tool_schema("get_trend"))
-def get_trend_tool(
-    start_time: str,
-    end_time: str,
-    pid: int,
-    runtime: ToolRuntime,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
-) -> dict:
-    """Count one known PID by minute; optionally restrict results to one severity."""
-    print("#########################################")
-    print("Executing get_trend tool")
-    print(f"table_name: {table_name}")
-    print(f"start_time: {start_time}")
-    print(f"end_time: {end_time}")
-    print(f"pid: {pid}")
-    print(f"category: {category}")
-    print(f"runtime: {runtime}")
-    print("#########################################")
-
-    return execute_database_tool(
-        runtime=runtime,
-        operation="get PID log trend",
-        function=lambda: get_trend_by_category(
-            start_time, end_time, pid, table_name, category
-        ),
-    )
-
-
-@tool(args_schema=load_tool_schema("search_logs"))
-def search_logs_tool(
-    query_text: str,
-    runtime: ToolRuntime,
-    category: str | None = None,
-    table_name: str = TABLE_NAME,
-    limit: int = 10,
-) -> dict:
-    """Search message content; put severity in category, not query_text."""
-    print("#########################################")
-    print("Executing search_logs tool")
-    print(f"table_name: {table_name}")
-    print(f"query_text: {query_text}")
-    print(f"category: {category}")
-    print(f"runtime: {runtime}")
-    print("#########################################")
-
-    return execute_database_tool(
-        runtime=runtime,
-        operation="search log messages",
-        function=lambda: search_logs(query_text, table_name, category, limit),
-    )
-
-
-@tool(args_schema=load_tool_schema("top_in_category_by_service"))
-def top_in_category_by_service_tool(
-    start_time: str,
-    end_time: str,
-    runtime: ToolRuntime,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
-    limit: int = 5,
-) -> dict:
-    """Rank components by log volume, optionally restricted to one severity."""
-    return execute_database_tool(
-        runtime=runtime,
-        operation="rank services by log volume",
-        function=lambda: top_in_category_by_service(
-            start_time, end_time, table_name, category, limit
-        ),
-    )
-
-
-@tool(args_schema=load_tool_schema("compare_periods"))
-def compare_periods_tool(
-    baseline_start: str,
-    baseline_end: str,
-    recent_start: str,
-    recent_end: str,
-    runtime: ToolRuntime,
-    table_name: str = TABLE_NAME,
-    limit: int = 5,
-) -> dict:
-    """Compare component/severity counts between baseline and recent windows."""
-    print("#########################################")
-    print("Executing compare_periods tool")
-    print(f"table_name: {table_name}")
-    print(f"baseline_start: {baseline_start}")
-    print(f"baseline_end: {baseline_end}")
-    print(f"recent_start: {recent_start}")
-    print(f"recent_end: {recent_end}")
-    print(f"runtime: {runtime}")
-    print("#########################################")
-    return execute_database_tool(
-        runtime=runtime,
-        operation="compare log periods",
-        function=lambda: compare_periods(
-            baseline_start,
-            baseline_end,
-            recent_start,
-            recent_end,
-            table_name,
-            limit,
-        ),
-    )
 
 
 general_agent = create_agent(
@@ -254,7 +60,15 @@ executor_agent = create_agent(
     model=model,
     tools=[
         count_by_category_tool,
-        get_trend_tool,
+        count_pid_by_category_tool,
+        count_service_by_category_tool,
+        count_event_id_by_category_tool,
+        get_pids_tool,
+        get_services_tool,
+        get_event_ids_tool,
+        get_pid_trend_tool,
+        get_service_trend_tool,
+        get_event_id_trend_tool,
         search_logs_tool,
         top_in_category_by_service_tool,
         compare_periods_tool,

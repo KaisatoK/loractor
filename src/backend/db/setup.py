@@ -54,7 +54,7 @@ def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
                 log_timestamp TIMESTAMP,
                 pid INT,
                 category VARCHAR(50),
-                component TEXT,
+                service TEXT,
                 addr TEXT,
                 content TEXT,
                 event_id VARCHAR(50),
@@ -71,7 +71,7 @@ def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
         copy_query = sql.SQL("""
             COPY {table_name} (
                 line_id, log_record, log_date, log_time, pid, 
-                category, component, addr, content, event_id, event_template
+                category, service, addr, content, event_id, event_template
             )
             FROM STDIN
             WITH CSV HEADER DELIMITER ','

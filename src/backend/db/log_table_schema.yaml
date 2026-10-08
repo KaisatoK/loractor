@@ -29,9 +29,9 @@ columns:
   - name: category
     type: VARCHAR(50)
     description: Log level or type (INFO, WARNING, ERROR).
-  - name: component
+  - name: service
     type: TEXT
-    description: Component, module, or service that produced the line.
+    description: Service, module, or service that produced the line.
   - name: addr
     type: TEXT
     description: Source address. May be NULL or empty.

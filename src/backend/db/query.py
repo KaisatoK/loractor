@@ -9,51 +9,6 @@ from backend.db.utils import (
 
 
 @query_runner
-def get_trend_by_category(
-    start_time: str,
-    end_time: str,
-    pid: int,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
-) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Getting minute-by-minute trend for pid {pid} and category {category} from {start_time} to {end_time}"
-    )
-
-    query = sql.SQL("""
-        WITH minute_counts AS (
-            SELECT 
-                EXTRACT(MINUTE FROM log_time) AS minute, 
-                COUNT(*) AS count
-            FROM {table_name}
-            WHERE pid = %s
-                AND log_timestamp >= %s::timestamp
-                AND log_timestamp <= %s::timestamp
-                {category_filter}
-            GROUP BY minute
-        )
-        SELECT 
-            minute,
-            count,
-            LAG(count) OVER (ORDER BY minute) AS prev_count,
-            CASE 
-                WHEN LAG(count) OVER (ORDER BY minute) IS NULL THEN 'initial'
-                WHEN count > LAG(count) OVER (ORDER BY minute) THEN 'up'
-                WHEN count < LAG(count) OVER (ORDER BY minute) THEN 'down'
-                ELSE 'flat'
-            END AS trend
-        FROM minute_counts
-        ORDER BY minute
-    """).format(
-        table_name=sql.Identifier(table_name),
-        category_filter=sql.SQL("AND category = %s") if category else sql.SQL(""),
-    )
-
-    params = [pid, start_time, end_time] + ([category] if category else [])
-    return query, params
-
-
-@query_runner
 def search_logs(
     query_text: str,
     table_name: str = TABLE_NAME,
@@ -88,12 +43,12 @@ def search_logs(
                 LIMIT 100
             ) vec
         )
-        SELECT t.log_timestamp, t.pid, t.category, t.component, t.content,
+        SELECT t.log_timestamp, t.pid, t.category, t.service, t.content,
             SUM(1.0 / (60 + f.rank)) AS relevance
         FROM fused f
         JOIN {table_name} t ON t.line_id = f.line_id
         {category_filter}
-        GROUP BY t.log_timestamp, t.pid, t.category, t.component, t.content
+        GROUP BY t.log_timestamp, t.pid, t.category, t.service, t.content
         ORDER BY SUM(1.0 / (60 + f.rank)) DESC
         LIMIT %s
     """).format(
@@ -121,12 +76,12 @@ def top_in_category_by_service(
     )
 
     query = sql.SQL("""
-        SELECT component, COUNT(*) AS count
+        SELECT service, COUNT(*) AS count
         FROM {table_name}
         WHERE log_timestamp >= %s::timestamp
             AND log_timestamp <= %s::timestamp
         {category_filter}
-        GROUP BY component
+        GROUP BY service
         ORDER BY count DESC
         LIMIT %s
     """).format(
@@ -153,21 +108,21 @@ def compare_periods(
 
     query = sql.SQL("""
         WITH baseline AS (
-            SELECT component, category, COUNT(*) AS baseline_count
+            SELECT service, category, COUNT(*) AS baseline_count
             FROM {table_name}
             WHERE log_timestamp >= %s::timestamp 
                 AND log_timestamp <= %s::timestamp
-            GROUP BY component, category
+            GROUP BY service, category
         ),
         recent AS (
-            SELECT component, category, COUNT(*) AS recent_count
+            SELECT service, category, COUNT(*) AS recent_count
             FROM {table_name}
             WHERE log_timestamp >= %s::timestamp 
                 AND log_timestamp <= %s::timestamp
-            GROUP BY component, category
+            GROUP BY service, category
         )
         SELECT 
-            COALESCE(r.component, b.component) AS component,
+            COALESCE(r.service, b.service) AS service,
             COALESCE(r.category, b.category) AS category,
             COALESCE(b.baseline_count, 0) AS baseline_count,
             COALESCE(r.recent_count, 0) AS recent_count,
@@ -178,7 +133,7 @@ def compare_periods(
             ) AS percentage_change
         FROM recent r
         FULL OUTER JOIN baseline b 
-            ON r.component = b.component AND r.category = b.category
+            ON r.service = b.service AND r.category = b.category
         ORDER BY volume_change DESC
         LIMIT %s
     """).format(table_name=sql.Identifier(table_name))
@@ -194,20 +149,6 @@ if __name__ == "__main__":
         for row in rows:
             print(row)
         print()
-
-    ### COUNT LINES BY CATEGORY (INFO, WARNING, ERROR)
-    # start = "2017-05-16 00:00:00"
-    # end = "2017-05-16 00:01:00"
-    # print_row(count_by_category(start, end))
-    # print_row(count_by_category(start, end, category="INFO"))
-    # print_row(count_by_category(start, end, category="WARNING"))
-    # print_row(count_by_category(start, end, category="ERROR"))
-
-    ### GET TREND OF A PID
-    # start = "2017-05-16 00:00:00"
-    # end = "2017-05-16 00:10:00"
-    # print_row(get_trend_by_category(start, end, 25746))
-    # print_row(get_trend_by_category(start, end, 2931, category="WARNING"))
 
     ### FULL-TEXT SEARCH LOG
     # print_row(search_logs("connection", category=None, limit=5))
