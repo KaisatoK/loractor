@@ -2,9 +2,10 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
 from backend.pipeline.schemas import GetTools
-from backend.pipeline.tools.utils import execute_database_tool, load_tool_schema
-
-TABLE_NAME = "log"
+from backend.pipeline.tools.utils import (
+    TABLE_NAME,
+    execute_database_tool,
+)
 
 
 @tool("get_pids", args_schema=GetTools)
@@ -43,7 +44,7 @@ def get_services_tool(
     )
 
 
-@tool("get_event_ids", args_schema=load_tool_schema("get_event_ids"))
+@tool("get_event_ids", args_schema=GetTools)
 def get_event_ids_tool(
     runtime: ToolRuntime,
     table_name: str = TABLE_NAME,

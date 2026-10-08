@@ -1,7 +1,6 @@
 from collections.abc import AsyncIterable
 from typing import Literal, TypedDict, cast
 from uuid import UUID
-
 from fastapi import FastAPI
 
 from backend.pipeline.graph import chatbot

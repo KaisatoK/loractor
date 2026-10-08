@@ -127,4 +127,4 @@ if __name__ == "__main__":
     create_ai_secret()
 
     ### IMPORT FROM CSV
-    import_from_csv("../csv/OpenStack_2k.log_structured.csv")
+    import_from_csv("../data/OpenStack_2k.log_structured.csv")

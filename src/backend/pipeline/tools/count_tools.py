@@ -2,9 +2,7 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
 from backend.pipeline.schemas import CountByCategory
-from backend.pipeline.tools.utils import execute_database_tool
-
-TABLE_NAME = "log"
+from backend.pipeline.tools.utils import TABLE_NAME, execute_database_tool
 
 
 @tool("count_by_category", args_schema=CountByCategory)
@@ -30,7 +28,6 @@ def count_by_category_tool(
         operation="count logs by severity",
         function=lambda: count_by_category(start_time, end_time, table_name, category),
     )
-
 
 
 @tool("count_pid_by_category", args_schema=CountByCategory)

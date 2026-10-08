@@ -1,27 +1,20 @@
 import logging
+import jsonref
+
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
-import jsonref
 from langchain.tools import ToolRuntime
 
 from backend.db import *
 
 logger = logging.getLogger(__name__)
+TABLE_NAME = "log"
 
 LOG_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "log_table_schema.yaml"
 LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")
-TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[0] / "tool_schema.json"
+TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "data" / "tool_schema.json"
 TOOL_SCHEMA = jsonref.loads(TOOL_SCHEMA_PATH.read_text(encoding="utf-8"))
-
-
-def load_tool_schema(name: str):
-    tools: list[dict] = TOOL_SCHEMA["tool_catalog"]["tools"]
-
-    for tool in tools:
-        if tool["name"] == name:
-            return tool
 
 
 def execute_database_tool(
