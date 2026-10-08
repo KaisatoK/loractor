@@ -20,6 +20,7 @@ SCOPE_CONFIDENCE_THRESHOLD = 0.64
 ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
 MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
 
+
 def normalize_node(state: PipelineState) -> PipelineState:
     result = normalize_agent.invoke(
         {
@@ -66,6 +67,7 @@ def general_node(state: PipelineState) -> PipelineState:
     print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {**state, "answer": answer}
 
+
 def find_evidence_node(state: PipelineState) -> PipelineState:
     evidence_report_history = list(state.get("evidence_report_history", []))
     # if state.get("evidence_report"):
@@ -84,8 +86,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     )
 
     investigation = "\n".join(
-        f"{message.type}: {message.content}"
-        for message in result["messages"]
+        f"{message.type}: {message.content}" for message in result["messages"]
     )
     report_result = evidence_report_agent.invoke(
         {
@@ -181,11 +182,15 @@ def confidence_node(state: PipelineState) -> PipelineState:
     }
 
 
-def route_after_scope(state: PipelineState) -> Literal["irrelevant", "resolved", "unresolved"]:
+def route_after_scope(
+    state: PipelineState,
+) -> Literal["irrelevant", "resolved", "unresolved"]:
     return state["scope"]
 
 
-def route_after_confidence(state: PipelineState) -> Literal["find_evidence", "answer", "end"]:
+def route_after_confidence(
+    state: PipelineState,
+) -> Literal["find_evidence", "answer", "end"]:
     return state["confidence"]["next_state"]
 
 

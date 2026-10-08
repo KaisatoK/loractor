@@ -60,15 +60,13 @@ class PipelinePrompts:
         )
 
     def normalize(self, state: PipelineState) -> str:
-        return (
-            "<conversation>\n"
-            f"{state['conversation']}\n"
-            "</conversation>\n\n"
-        )
+        return "<conversation>\n" f"{state['conversation']}\n" "</conversation>\n\n"
 
     def find_evidence(self, state: PipelineState) -> str:
         previous_report = state.get("evidence_report", [])
-        revision_feedback = state.get("revision_feedback", "No previous attempt exists.")
+        revision_feedback = state.get(
+            "revision_feedback", "No previous attempt exists."
+        )
 
         return (
             "<role context>\n"

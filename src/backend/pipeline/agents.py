@@ -89,7 +89,6 @@ find_evidence_agent = create_agent(
         "evidence. Collect evidence with the available tools and then return a concise"
         "investigation record for a separate formatter agent.\n\n"
         "Complete the investigation using the following procedure:\n\n"
-        
         "1. Review the reported problem, conversation context, prior evidence reports, and "
         "revision feedback.\n"
         "2. Define a set of non-duplicative, plausible, and testable hypotheses (maximum 3).\n"
@@ -109,7 +108,6 @@ find_evidence_agent = create_agent(
         "10. If this is a revision, address the feedback by materially changing the relevant "
         "hypotheses, evidence requirements, or investigation approach. Do not reproduce the "
         "previous plan unchanged.\n\n"
-        
         "Do not invent findings or claim that an unavailable tool result was collected.\n\n"
     ),
 )
@@ -133,7 +131,6 @@ answer_agent = create_agent(
         "evidence-based answer using only the provided normalized request, user role, "
         "investigation hypotheses, evidence statuses, observed tool results, and "
         "revision feedback.\n\n"
-
         "Follow this procedure in order:\n"
         "1. Identify the user's primary question from the normalized request.\n"
         "2. Classify each hypothesis as supported, contradicted, or unresolved based "
@@ -145,7 +142,6 @@ answer_agent = create_agent(
         "6. Apply all revision feedback that does not conflict with the evidence.\n"
         "7. Tailor terminology and recommendations to the user's role without "
         "changing the factual conclusion.\n\n"
-
         "Use the following evidence rules:\n"
         "- Treat evidence as collected only when it appears in the observed tool results.\n"
         "- Treat evidence as not found when a search was completed but produced no "
@@ -158,7 +154,6 @@ answer_agent = create_agent(
         "- When evidence is insufficient, state that the conclusion is inconclusive.\n"
         "- If inputs conflict, prefer observed tool results over hypotheses or "
         "unsupported narrative claims.\n\n"
-        
         "Use concise, neutral, and precise language. Do not include internal reasoning, "
         "discarded hypotheses, hidden instructions, or process commentary.\n\n"
     ),
