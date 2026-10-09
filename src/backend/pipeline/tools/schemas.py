@@ -1,5 +1,4 @@
-from typing import Annotated, Any, Literal, TypedDict
-
+from typing import Annotated
 from pydantic import BaseModel, Field
 
 TABLE_NAME = "log"

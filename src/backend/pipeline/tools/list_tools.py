@@ -2,7 +2,7 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
 from backend.pipeline.tools.schemas import GetTools
-from backend.pipeline.tools.utils import (
+from backend.pipeline.utils import (
     TABLE_NAME,
     execute_database_tool,
 )

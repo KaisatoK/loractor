@@ -2,7 +2,7 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
 from backend.pipeline.tools.schemas import GetTrendEvent, GetTrendPID, GetTrendService
-from backend.pipeline.tools.utils import TABLE_NAME, execute_database_tool
+from backend.pipeline.utils import TABLE_NAME, execute_database_tool
 
 
 @tool("get_pid_trend", args_schema=GetTrendPID)

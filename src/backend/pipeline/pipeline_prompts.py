@@ -1,7 +1,7 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 
-from backend.pipeline.tools.schemas import PipelineState, Role
-from backend.pipeline.tools.utils import LOG_SCHEMA
+from backend.pipeline.schema.schemas import PipelineState, Role
+from backend.pipeline.utils import LOG_SCHEMA
 
 
 class PipelinePrompts:

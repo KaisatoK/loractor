@@ -9,9 +9,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.types import Command
 from backend.pipeline.tools import *
 
-from backend.pipeline.tools.schemas import (
+from backend.pipeline.schema.schemas import (
     EvidenceReport,
-    NormalizeOutput,
+    NormalizedOutput,
 )
 from backend.pipeline.system_prompts import (
     ANSWER_SYSTEM_PROMPT,
@@ -35,6 +35,7 @@ def handle_tool_errors(
     except Exception as e:
         print(f"Tool call failed: {e}")
         return ToolMessage(
+            status="error",
             content=(
                 f"The tool could not complete the database operation: {e}"
                 " Do not infer or fabricate a result."
@@ -49,7 +50,7 @@ general_agent = create_agent(
 
 normalize_agent = create_agent(
     model=general_model,
-    response_format=NormalizeOutput,
+    response_format=NormalizedOutput,
     system_prompt=NORMALIZE_SYSTEM_PROMPT,
 )
 

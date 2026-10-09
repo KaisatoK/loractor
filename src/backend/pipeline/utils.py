@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Any
 from langchain.tools import ToolRuntime
 
-from backend.db import *
-
 logger = logging.getLogger(__name__)
 TABLE_NAME = "log"
 

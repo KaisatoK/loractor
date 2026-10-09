@@ -1,5 +1,4 @@
 from typing import Annotated, Any, Literal, TypedDict
-
 from pydantic import BaseModel, Field
 
 
@@ -18,24 +17,27 @@ class NormalizedOutput(BaseModel):
         str, Field(description="A free-form description of the user's desired outcome.")
     ]
     context: Annotated[
-        dict[str, Any], Field(
+        dict[str, Any],
+        Field(
             description=(
                 "Dynamic question-specific JSON."
                 "This may include important information from all conversation history "
                 "that is relevant to the latest question, including entities, constraints, "
                 "preferences, decisions, examples, and technical details."
             )
-        )
+        ),
     ]
     ambiguities: Annotated[
         list[str], Field(description="Uncertainties that could affect the result.")
     ]
+
 
 class PipelineRoute(TypedDict):
     next_state: Literal["find_evidence", "answer", "end"]
     pass_probability: float
     probabilities: dict[str, float]
     revision_reason: str
+
 
 class ToolStatus(BaseModel):
     name: str = Field(description="The exact name of the tool invoked.")
@@ -53,16 +55,17 @@ class ToolStatus(BaseModel):
         ),
     )
 
+
 class Evidence(BaseModel):
     name: str = Field(description="The name of the evidence item.")
-    description: str = Field(description="A description of why this evidence is needed and what it evaluates.")
+    description: str = Field(
+        description="A description of why this evidence is needed and what it evaluates."
+    )
     tool_used: list[ToolStatus] = Field(
         description="A list of tools used to collect the evidence item."
     )
     availability: Literal["available", "unavailable"] = Field(
-        description=(
-            "Whether the required evidence was successfully obtained."
-        )
+        description=("Whether the required evidence was successfully obtained.")
     )
 
 
@@ -91,12 +94,14 @@ class Hypothesis(BaseModel):
         )
     )
 
+
 class EvidenceReport(BaseModel):
     hypotheses: list[Hypothesis] = Field(
         description=(
             "The investigated hypotheses and the evidence-based conclusion for each."
         ),
     )
+
 
 class PipelineState(TypedDict):
     conversation: str

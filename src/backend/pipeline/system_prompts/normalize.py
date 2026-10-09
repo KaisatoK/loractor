@@ -12,5 +12,4 @@ NORMALIZE_SYSTEM_PROMPT = (
     "7. Put unresolved uncertainties into `ambiguities`.\n"
     "8. Do not answer the question.\n"
     "9. Do not invent information that is not present in the conversation.\n\n"
-
 )
