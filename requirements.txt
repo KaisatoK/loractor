@@ -15,6 +15,7 @@ annotated-types==0.8.0
 anyio==4.15.1
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   groq
     #   httpx
     #   httpx2
@@ -32,6 +33,8 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
 charset-normalizer==3.5.2
     # via
     #   ai-chatbot-test
@@ -41,13 +44,22 @@ click==8.5.0
     #   ai-chatbot-test
     #   streamlit
     #   uvicorn
+cryptography==50.0.2
+    # via google-auth
 distro==1.9.0
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   groq
     #   langsmith
 fastapi==0.142.2
     # via ai-chatbot-test
+filetype==1.2.0
+    # via langchain-google-genai
+google-auth==2.61.0
+    # via google-genai
+google-genai==2.29.0
+    # via langchain-google-genai
 groq==0.37.1
     # via
     #   ai-chatbot-test
@@ -73,6 +85,7 @@ httptools==0.8.0
 httpx==0.28.1
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   groq
     #   langchain-core
     #   langgraph-sdk
@@ -124,6 +137,7 @@ langchain-core==1.6.6
     # via
     #   ai-chatbot-test
     #   langchain
+    #   langchain-google-genai
     #   langchain-groq
     #   langchain-ollama
     #   langchain-serenedb
@@ -132,6 +146,8 @@ langchain-core==1.6.6
     #   langgraph-checkpoint
     #   langgraph-prebuilt
     #   langgraph-sdk
+langchain-google-genai==4.4.0
+    # via ai-chatbot-test
 langchain-groq==1.1.3
     # via ai-chatbot-test
 langchain-ollama==1.1.0
@@ -235,13 +251,21 @@ pyarrow==25.0.1
     # via
     #   ai-chatbot-test
     #   streamlit
+pyasn1==0.6.4
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==3.1 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.13.5
     # via
     #   ai-chatbot-test
     #   fastapi
+    #   google-genai
     #   groq
     #   langchain
     #   langchain-core
+    #   langchain-google-genai
     #   langgraph
     #   langsmith
     #   ollama
@@ -277,6 +301,8 @@ referencing==0.37.0
 requests==2.34.2
     # via
     #   ai-chatbot-test
+    #   google-auth
+    #   google-genai
     #   langsmith
     #   requests-toolbelt
     #   streamlit
@@ -296,6 +322,7 @@ six==1.17.0
 sniffio==1.3.1
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   groq
     #   langsmith
 starlette==1.7.0
@@ -308,6 +335,7 @@ streamlit==1.65.0
 tenacity==9.1.4
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   langchain-core
 toml==0.10.2
     # via
@@ -324,6 +352,7 @@ typing-extensions==4.16.0
     #   altair
     #   anyio
     #   fastapi
+    #   google-genai
     #   groq
     #   langchain-core
     #   langchain-protocol
@@ -364,6 +393,7 @@ watchdog==6.0.0
 websockets==16.1.1
     # via
     #   ai-chatbot-test
+    #   google-genai
     #   langgraph-sdk
     #   langsmith
     #   streamlit
