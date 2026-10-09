@@ -9,9 +9,9 @@ from langchain.tools import ToolRuntime
 logger = logging.getLogger(__name__)
 TABLE_NAME = "log"
 
-LOG_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "db" / "log_table_schema.yaml"
+LOG_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "db" / "log_table_schema.yaml"
 LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")
-TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "data" / "tool_schema.json"
+TOOL_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "data" / "tool_schema.json"
 TOOL_SCHEMA = jsonref.loads(TOOL_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
