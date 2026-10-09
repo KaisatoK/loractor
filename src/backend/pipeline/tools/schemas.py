@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 TABLE_NAME = "log"
 DATETIME_REGEX = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
 
+
 class CountByCategory(BaseModel):
     start_time: Annotated[
         str,
