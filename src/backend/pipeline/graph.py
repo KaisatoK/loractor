@@ -11,7 +11,7 @@ from backend.pipeline.agents import (
     find_evidence_agent,
 )
 from backend.pipeline.pipeline_prompts import PipelinePrompts
-from backend.pipeline.schemas import PipelineState
+from backend.pipeline.tools.schemas import PipelineState
 
 # router = TypeSafeClassifier()
 

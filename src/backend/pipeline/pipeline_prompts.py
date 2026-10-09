@@ -1,6 +1,6 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 
-from backend.pipeline.schemas import PipelineState, Role
+from backend.pipeline.tools.schemas import PipelineState, Role
 from backend.pipeline.tools.utils import LOG_SCHEMA
 
 

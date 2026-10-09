@@ -1,7 +1,7 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.schemas import GetTrendEvent, GetTrendPID, GetTrendService
+from backend.pipeline.tools.schemas import GetTrendEvent, GetTrendPID, GetTrendService
 from backend.pipeline.tools.utils import TABLE_NAME, execute_database_tool
 
 

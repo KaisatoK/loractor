@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import FastAPI
 
 from backend.pipeline.graph import chatbot
-from backend.pipeline.schemas import PipelineState
+from backend.pipeline.tools.schemas import PipelineState
 
 
 class ChatRequest(TypedDict):

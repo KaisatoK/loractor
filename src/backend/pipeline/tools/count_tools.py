@@ -1,7 +1,7 @@
 from langchain.tools import ToolRuntime, tool
 
 from backend.db import *
-from backend.pipeline.schemas import CountByCategory
+from backend.pipeline.tools.schemas import CountByCategory
 from backend.pipeline.tools.utils import TABLE_NAME, execute_database_tool
 
 
