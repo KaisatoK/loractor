@@ -18,7 +18,7 @@ from backend.pipeline.system_prompts import (
     FIND_EVIDENCE_SYSTEM_PROMPT,
     NORMALIZE_SYSTEM_PROMPT,
 )
-from backend.pipeline.utils import handle_tool_errors, handle_bad_tool_calls, handle_rate_limit_calls
+from backend.pipeline.utils import handle_tool_errors, handle_bad_tool_calls, make_error_middleware
 
 MAX_MODEL_RETRIES = 3
 MAX_TOOL_RETRIES = 2
@@ -45,13 +45,13 @@ normalize_agent = create_agent(
     model=general_model,
     response_format=NormalizedOutput,
     middleware=[
-        handle_rate_limit_calls,
-        ModelRetryMiddleware(
-            max_retries=MAX_MODEL_RETRIES, 
-            backoff_factor=1.5,
-            on_failure=(lambda e: f"Failed on all {MAX_MODEL_RETRIES} attempts: {e}"),
-            max_delay=5,
-        ),
+        make_error_middleware(lambda m: NormalizedOutput.model_construct(normalized_question="", intent="", context={}, ambiguities=[])),
+        # ModelRetryMiddleware(
+        #     max_retries=MAX_MODEL_RETRIES, 
+        #     backoff_factor=1.5,
+        #     on_failure="error",
+        #     max_delay=5,
+        # ),
     ],
     system_prompt=NORMALIZE_SYSTEM_PROMPT,
 )
@@ -86,13 +86,13 @@ find_evidence_agent = create_agent(
             on_failure="error",
             max_delay=5,
         ),
-        handle_rate_limit_calls,
-        ModelRetryMiddleware(
-            max_retries=MAX_MODEL_RETRIES, 
-            backoff_factor=1.5,
-            on_failure=(lambda e: f"Failed on all {MAX_MODEL_RETRIES} attempts: {e}"),
-            max_delay=5,
-        ),
+        make_error_middleware(),
+        # ModelRetryMiddleware(
+        #     max_retries=MAX_MODEL_RETRIES, 
+        #     backoff_factor=1.5,
+        #     on_failure="error",
+        #     max_delay=5,
+        # ),
         # LLMToolSelectorMiddleware(
         #     model=general_model, max_tools=7, always_include=["write_todos"]
         # ),
@@ -104,13 +104,13 @@ evidence_report_agent = create_agent(
     model=general_model,
     response_format=EvidenceReport,
     middleware=[
-        handle_rate_limit_calls,
-        ModelRetryMiddleware(
-            max_retries=MAX_MODEL_RETRIES, 
-            backoff_factor=1.5,
-            on_failure=(lambda e: f"Failed on all {MAX_MODEL_RETRIES} attempts: {e}"),
-            max_delay=5,
-        ),
+        make_error_middleware(lambda m: EvidenceReport.model_construct(hypotheses=[])),
+        # ModelRetryMiddleware(
+        #     max_retries=MAX_MODEL_RETRIES, 
+        #     backoff_factor=1.5,
+        #     on_failure="error",
+        #     max_delay=5,
+        # ),
     ],
     system_prompt=EVIDENCE_REPORT_SYSTEM_PROMPT,
 )
@@ -118,7 +118,13 @@ evidence_report_agent = create_agent(
 answer_agent = create_agent(
     model=thinking_model,
     middleware=[
-        handle_rate_limit_calls,
+        make_error_middleware(),
+        # ModelRetryMiddleware(
+        #     max_retries=MAX_MODEL_RETRIES, 
+        #     backoff_factor=1.5,
+        #     on_failure="error",
+        #     max_delay=5,
+        # ),
     ],
     system_prompt=ANSWER_SYSTEM_PROMPT,
 )

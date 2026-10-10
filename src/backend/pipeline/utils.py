@@ -1,5 +1,6 @@
 import logging
 import jsonref
+import time
 
 from collections.abc import Callable
 from pathlib import Path
@@ -68,52 +69,46 @@ def handle_bad_tool_calls(
     )
 
 
-@wrap_model_call
-def handle_rate_limit_calls(
-    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
-) -> ModelResponse:
-    try:
-        print(f"@@@ Model Check: Handling model request with {len(request.messages)} messages. Last message: {request.messages[-1].content[:100]}...")
-        return handler(request)
-    except Exception as e:
-        err = str(e)
+USER_MESSAGES = {
+    "rate_limit": "The model is rate-limited right now. Please try again in a few minutes.",
+    "too_large": "The request is too large for the model. Please shorten it.",
+    "connection": "Could not reach the model. Please try again.",
+    "unknown": f"The model failed to process the request after {MAX_MODEL_RETRIES} attempts. Please try again.",
+}
 
-        if "rate limit exceeded" in err.lower():
+def _classify(err: Exception) -> str | None:
+    s = str(err).lower()
+    if "rate limit" in s:
+        return "rate_limit"
+    if "request too large" in s:
+        return "too_large"
+    if "connection" in s or "timed out" in s:
+        return "connection"
+    return "general"
+
+def make_error_middleware(fallback_factory=None):
+    @wrap_model_call
+    def middleware(request, handler):
+        try:
+            return handler(request)
+        except Exception as e:
+            kind = _classify(e) 
+            msg = USER_MESSAGES[kind] + f" (Error: {e})"
             return ModelResponse(
-                result=[
-                    AIMessage(
-                        content=(
-                            "The model is currently rate-limited and cannot process "
-                            "the request. Please try again later."
-                        )
-                    )
-                ]
+                result=[AIMessage(content=msg)],
+                structured_response=fallback_factory(msg) if fallback_factory else None,
             )
-        elif "request too large for model" in err.lower():
-            return ModelResponse(
-                result=[
-                    AIMessage(
-                        content=(
-                            "The request is too large for the model to process. "
-                            "Please reduce the size of the input and try again."
-                        )
-                    )
-                ]
-            )
-        elif "connection" in err.lower():
-            return ModelResponse(
-                result=[
-                    AIMessage(
-                        content=(
-                            "The model is currently experiencing connection issues and "
-                            "cannot process the request. Please try again later."
-                        )
-                    )
-                ]
-            )
-        else:
-            raise
-            
+    return middleware
+
+
+def model_fail_check(e: Exception) -> str:
+    if "rate limit reached" in str(e).lower():
+        return "The model is currently rate-limited and cannot process the request. Please try again later."
+    elif "request too large for model" in str(e).lower():
+        return "The request is too large for the model to process. Please reduce the size of the input and try again."
+    elif "connection" in str(e).lower():
+        return "The model is currently experiencing connection issues and cannot process the request. Please try again later."
+    return f"Failed on all {MAX_MODEL_RETRIES} attempts: {e}"
 
 
 @wrap_tool_call
