@@ -5,10 +5,10 @@ from langgraph.graph import END, StateGraph
 
 from backend.pipeline.agents import (
     answer_agent,
-    normalize_agent,
-    general_agent,
     evidence_report_agent,
     find_evidence_agent,
+    general_agent,
+    normalize_agent,
 )
 from backend.pipeline.pipeline_prompts import PipelinePrompts
 from backend.pipeline.schema.schemas import PipelineState
