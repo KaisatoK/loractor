@@ -121,8 +121,8 @@ class SearchLogs(BaseModel):
         int,
         Field(
             ge=1,
-            le=1000,
-            description="Maximum number of log entries to return. Must be between 1 and 1000.",
+            le=20,
+            description="Maximum number of log entries to return. Must be between 1 and 20.",
         ),
     ] = 10
 

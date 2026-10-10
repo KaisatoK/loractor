@@ -1,12 +1,10 @@
-from collections.abc import Callable
-
 from langchain.agents import create_agent
-from langchain.agents.middleware import ToolCallLimitMiddleware, wrap_tool_call
-from langchain.messages import ToolMessage
-from langchain.tools.tool_node import ToolCallRequest
+from langchain.agents.middleware import (
+    LLMToolSelectorMiddleware,
+    TodoListMiddleware,
+    ToolCallLimitMiddleware,
+)
 from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.types import Command
 from backend.pipeline.tools import *
 
 from backend.pipeline.schema.schemas import (
@@ -19,29 +17,10 @@ from backend.pipeline.system_prompts import (
     FIND_EVIDENCE_SYSTEM_PROMPT,
     NORMALIZE_SYSTEM_PROMPT,
 )
+from backend.pipeline.utils import handle_tool_errors, handle_bad_tool_calls
 
 general_model = ChatGroq(model="openai/gpt-oss-20b")
 thinking_model = ChatGroq(model="openai/gpt-oss-20b")
-
-
-@wrap_tool_call
-def handle_tool_errors(
-    request: ToolCallRequest,
-    handler: Callable[[ToolCallRequest], ToolMessage | Command],
-) -> ToolMessage | Command:
-    """Convert tool exceptions into ToolMessages the model can handle."""
-    try:
-        return handler(request)
-    except Exception as e:
-        print(f"Tool call failed: {e}")
-        return ToolMessage(
-            status="error",
-            content=(
-                f"The tool could not complete the database operation: {e}"
-                " Do not infer or fabricate a result."
-            ),
-            tool_call_id=request.tool_call["id"],
-        )
 
 
 general_agent = create_agent(
@@ -73,7 +52,12 @@ find_evidence_agent = create_agent(
     ],
     middleware=[
         handle_tool_errors,
+        TodoListMiddleware,
         ToolCallLimitMiddleware(run_limit=6),
+        LLMToolSelectorMiddleware(
+            model=general_model, max_tools=7, always_include=["write_todos"]
+        ),
+        handle_bad_tool_calls,
     ],
     system_prompt=FIND_EVIDENCE_SYSTEM_PROMPT,
 )
