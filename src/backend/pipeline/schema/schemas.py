@@ -97,8 +97,10 @@ class Hypothesis(BaseModel):
 
 class EvidenceReport(BaseModel):
     hypotheses: list[Hypothesis] = Field(
+        max_length=3,
         description=(
-            "The investigated hypotheses and the evidence-based conclusion for each."
+            "The investigated hypotheses and the evidence-based conclusion for each. "
+            "Must be non-duplicative, plausible, and testable. Maximum of 3 hypotheses."
         ),
     )
 
@@ -114,3 +116,4 @@ class PipelineState(TypedDict):
     confidence: PipelineRoute
     revision_feedback: str
     answer: str
+    fail_reason: str | None = None

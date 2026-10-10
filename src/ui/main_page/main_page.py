@@ -5,6 +5,15 @@ import streamlit as st
 
 API_URL = "http://localhost:8000/chat/stream"
 
+@st.fragment(key="copy_to_clipboard_button")
+def copy_to_clipboard_button(content: str, role: str, idx: int):
+    if st.button(
+        label="Copy to Clipboard",
+        icon=":material/content_copy:",
+        key=f"copy_{role}_{hash(content)}_{idx}",
+    ):
+        pyperclip.copy(content)
+        st.toast(body="Copied to clipboard!", duration=1)
 
 def main_page():
     st.title("LangChain Chat Agent")
@@ -19,16 +28,10 @@ def main_page():
         ] is not None:
             with st.status(label="Done", type="compact", state="complete"):
                 for stage in item["progress"]:
-                    st.write(f"Currently at: {stage}")
+                    st.caption(stage)
         with st.chat_message(item["role"]):
             st.markdown(item["content"])
-        if st.button(
-            label="Copy to Clipboard",
-            icon=":material/content_copy:",
-            key=f"copy_{item["role"]}_{hash(item['content'])}_{idx}",
-        ):
-            st.success("Copied to clipboard!")
-            pyperclip.copy(item["content"])
+        copy_to_clipboard_button(item['content'], item['role'], idx)
 
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 
@@ -46,14 +49,7 @@ def main_page():
         )
         with st.chat_message("user"):
             st.markdown(message.text)
-
-        if st.button(
-            label="Copy to Clipboard",
-            icon=":material/content_copy:",
-            key=f"copy_user_{hash(message.text)}_{len(current_chat['history'])}",
-        ):
-            st.success("Copied to clipboard!")
-            pyperclip.copy(message.text)
+        copy_to_clipboard_button(message.text, "user", len(current_chat['history']) - 1)
 
         progress = st.status(label="Processing...", type="compact", state="running")
 
@@ -68,7 +64,7 @@ def main_page():
                     "user_id": st.session_state.user_id,
                     "role": current_chat["role"],
                     "effort": effort,
-                    "message": str(current_chat["history"]),
+                    "message": str([{"role": item["role"], "content": item["content"]} for item in current_chat["history"]]),
                 },
                 stream=True,
             ) as response:
@@ -84,14 +80,14 @@ def main_page():
                             else json.loads(chunk)
                         )
                         if data["type"] == "messages":
-                            full_answer += data["content"]
+                            full_answer = data["content"]
                             placeholder.markdown(full_answer + "▌")
                         elif data["type"] == "subgraph_name":
                             progress.caption(f"Currently at stage: {data['content']}")
-                            progress_stages.append(data["content"])
+                            progress_stages.append(f"Currently at stage: {data['content']}")
                         elif data["type"] == "subgraph_message":
                             progress.caption(f"Thinking: {data['content']}")
-                            progress_stages.append(data["content"])
+                            progress_stages.append(f"Thinking: {data['content']}")
                     # time.sleep(0.1)  # Simulate processing time for better UX
 
             progress.update(label="Done", state="complete")
@@ -100,11 +96,4 @@ def main_page():
         current_chat["history"].append(
             {"role": "assistant", "content": full_answer, "progress": progress_stages}
         )
-
-        if st.button(
-            label="Copy to Clipboard",
-            icon=":material/content_copy:",
-            key=f"copy_assistent_{hash(full_answer)}_{len(current_chat['history'])}",
-        ):
-            st.success("Copied to clipboard!")
-            pyperclip.copy(full_answer)
+        copy_to_clipboard_button(full_answer, "assistant", len(current_chat['history']) - 1)

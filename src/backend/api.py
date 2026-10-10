@@ -67,6 +67,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 "objective": ROLE_OBJECTIVES[req["role"]],
             },
             "effort": req["effort"],
+            "answer": "",
         },
     )
     run = chatbot.stream_events(
@@ -80,12 +81,16 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     )
 
     last_answer = None
-    for name, item in run.interleave("values", "subgraphs"):
-        if name == "values":
+    for name, item in run.interleave("messages", "values", "subgraphs"):
+        if name == "messages":
+            print(f"@@@ API check @@@ name={name}: text={item[-1].text}")
+        elif name == "values":
             answer = item.get("answer")
             if answer and answer != last_answer:
                 yield {"type": "messages", "content": answer}
                 last_answer = answer
+            if "fail_reason" in item:
+                print(f"@@@ API check @@@ name={name}: text={item['fail_reason']}")
         elif name == "subgraphs":
             # print(f"@@@ API check @@@ name={name}: graph_name={item.graph_name}")
             yield {"type": "subgraph_name", "content": str(item.graph_name)}

@@ -9,7 +9,7 @@ from backend.pipeline.tools.schemas import (
 from backend.pipeline.utils import TABLE_NAME, execute_database_tool
 
 
-@tool("search_logs", args_schema=SearchLogs)
+@tool(args_schema=SearchLogs)
 def search_logs_tool(
     query_text: str,
     runtime: ToolRuntime,
@@ -34,7 +34,6 @@ def search_logs_tool(
 
 
 @tool(
-    "top_in_category_by_service",
     args_schema=TopInCategoryByService,
 )
 def top_in_category_by_service_tool(
@@ -55,7 +54,7 @@ def top_in_category_by_service_tool(
     )
 
 
-@tool("compare_periods", args_schema=ComparePeriods)
+@tool(args_schema=ComparePeriods)
 def compare_periods_tool(
     baseline_start: str,
     baseline_end: str,

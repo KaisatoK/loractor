@@ -1,9 +1,10 @@
-from typing import Annotated
-from pydantic import BaseModel, Field
+from typing import Annotated, Literal
+from typing_extensions import Self
 
-TABLE_NAME = "log"
+from pydantic import BaseModel, Field, model_validator
+
 DATETIME_REGEX = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
-
+TABLE_NAME = "log"
 
 class CountByCategory(BaseModel):
     start_time: Annotated[
@@ -20,11 +21,17 @@ class CountByCategory(BaseModel):
             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
         ),
     ]
+    type: Annotated[
+        Literal["pid", "service", "event_id", "general"],
+        Field(
+            description="The type of count to perform. Must be one of 'pid', 'service', 'event_id', or 'general'.",
+        ),
+    ]
     table_name: str = TABLE_NAME
-    category: str | None = None
+    category: Literal["INFO", "WARNING", "ERROR"] | None = None
 
 
-class GetTrendPID(BaseModel):
+class GetTrend(BaseModel):
     start_time: Annotated[
         str,
         Field(
@@ -36,70 +43,78 @@ class GetTrendPID(BaseModel):
         str,
         Field(
             pattern=DATETIME_REGEX,
-            description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
+            description="Timestamp in YYYY-MM-DD HH:MM:SS format. Must be AFTER start_time, not equal to it.",
         ),
     ]
-    pid: Annotated[
-        int,
+    type: Annotated[
+        tuple[Literal["pid", "service", "event_id"], str],
         Field(
-            ge=0,
-            description="Exact process ID. The value must come from the user or from previously collected evidence.",
+            description=(
+                "The first element dictates the type of trend to retrieve. Must be one of 'pid', 'service', or 'event_id'."
+                "The second element dictates the exact pid, service or event_id corresponds to the first element"
+            ),
         ),
     ]
     table_name: str = TABLE_NAME
     category: str | None = None
 
-
-class GetTrendService(BaseModel):
-    start_time: Annotated[
-        str,
-        Field(
-            pattern=DATETIME_REGEX,
-            description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-        ),
-    ]
-    end_time: Annotated[
-        str,
-        Field(
-            pattern=DATETIME_REGEX,
-            description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-        ),
-    ]
-    service: Annotated[
-        str,
-        Field(
-            min_length=1,
-            description="Exact service name. The value must come from the user or from previously collected evidence.",
-        ),
-    ]
-    table_name: str = TABLE_NAME
-    category: str | None = None
+    @model_validator(mode='after')
+    def check_duration(self) -> Self:
+        if self.end_time <= self.start_time:
+            raise ValueError('end_time must be after start_time')
+        return self
 
 
-class GetTrendEvent(BaseModel):
-    start_time: Annotated[
-        str,
-        Field(
-            pattern=DATETIME_REGEX,
-            description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-        ),
-    ]
-    end_time: Annotated[
-        str,
-        Field(
-            pattern=DATETIME_REGEX,
-            description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-        ),
-    ]
-    event_id: Annotated[
-        str,
-        Field(
-            min_length=1,
-            description="Exact event ID. The value must come from the user or from previously collected evidence.",
-        ),
-    ]
-    table_name: str = TABLE_NAME
-    category: str | None = None
+# class GetTrendService(BaseModel):
+#     start_time: Annotated[
+#         str,
+#         Field(
+#             pattern=DATETIME_REGEX,
+#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
+#         ),
+#     ]
+#     end_time: Annotated[
+#         str,
+#         Field(
+#             pattern=DATETIME_REGEX,
+#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
+#         ),
+#     ]
+#     service: Annotated[
+#         str,
+#         Field(
+#             min_length=1,
+#             description="Exact service name. The value must come from the user or from previously collected evidence.",
+#         ),
+#     ]
+#     table_name: str = TABLE_NAME
+#     category: str | None = None
+
+
+# class GetTrendEvent(BaseModel):
+#     start_time: Annotated[
+#         str,
+#         Field(
+#             pattern=DATETIME_REGEX,
+#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
+#         ),
+#     ]
+#     end_time: Annotated[
+#         str,
+#         Field(
+#             pattern=DATETIME_REGEX,
+#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
+#         ),
+#     ]
+#     event_id: Annotated[
+#         str,
+#         Field(
+#             min_length=1,
+#             description="Exact event ID. The value must come from the user or from previously collected evidence.",
+#         ),
+#     ]
+#     table_name: str = TABLE_NAME
+#     category: str | None = None
 
 
 class SearchLogs(BaseModel):
@@ -108,11 +123,7 @@ class SearchLogs(BaseModel):
         Field(
             min_length=1,
             max_length=500,
-            description=(
-                "Text or concept to search for in log messages. "
-                "Do not include INFO, WARNING, ERROR (or any case variations like info, Warning, Err) "
-                "merely as severity filters. Do not include empty strings, whitespace-only strings, or strings that are only punctuation. "
-            ),
+            description="Text or concept to search for in log messages. Do not include INFO, WARNING, ERROR (or any case variations like info, Warning, Err) merely as severity filters.",
         ),
     ]
     category: str | None = None
@@ -195,4 +206,10 @@ class ComparePeriods(BaseModel):
 
 
 class GetTools(BaseModel):
+    type: Annotated[
+        Literal["pid", "service", "event_id"],
+        Field(
+            description="The type of tool to invoke. Must be one of 'pid', 'service', or 'event_id'.",
+        ),
+    ]
     table_name: str = TABLE_NAME

@@ -20,7 +20,6 @@ SCOPE_CONFIDENCE_THRESHOLD = 0.64
 ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
 MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
 
-
 def normalize_node(state: PipelineState) -> PipelineState:
     result = normalize_agent.invoke(
         {
@@ -31,6 +30,8 @@ def normalize_node(state: PipelineState) -> PipelineState:
     )
     normalized = result["structured_response"]
     return {**state, "normalized": normalized.model_dump()}
+
+    
 
 
 def scope_node(state: PipelineState) -> PipelineState:
@@ -62,9 +63,9 @@ def general_node(state: PipelineState) -> PipelineState:
 
     answer = result["messages"][-1].text
 
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("general answer:", answer)
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    # print("general answer:", answer)
+    # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {**state, "answer": answer}
 
 
@@ -88,6 +89,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     investigation = "\n".join(
         f"{message.type}: {message.content}" for message in result["messages"]
     )
+
     report_result = evidence_report_agent.invoke(
         {
             "messages": [
@@ -112,7 +114,6 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
         "evidence_report_history": evidence_report_history,
         "answer": "",
     }
-
 
 def answer_node(state: PipelineState) -> PipelineState:
     result = answer_agent.invoke(

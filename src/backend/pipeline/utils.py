@@ -68,6 +68,54 @@ def handle_bad_tool_calls(
     )
 
 
+@wrap_model_call
+def handle_rate_limit_calls(
+    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+) -> ModelResponse:
+    try:
+        print(f"@@@ Model Check: Handling model request with {len(request.messages)} messages. Last message: {request.messages[-1].content[:100]}...")
+        return handler(request)
+    except Exception as e:
+        err = str(e)
+
+        if "rate limit exceeded" in err.lower():
+            return ModelResponse(
+                result=[
+                    AIMessage(
+                        content=(
+                            "The model is currently rate-limited and cannot process "
+                            "the request. Please try again later."
+                        )
+                    )
+                ]
+            )
+        elif "request too large for model" in err.lower():
+            return ModelResponse(
+                result=[
+                    AIMessage(
+                        content=(
+                            "The request is too large for the model to process. "
+                            "Please reduce the size of the input and try again."
+                        )
+                    )
+                ]
+            )
+        elif "connection" in err.lower():
+            return ModelResponse(
+                result=[
+                    AIMessage(
+                        content=(
+                            "The model is currently experiencing connection issues and "
+                            "cannot process the request. Please try again later."
+                        )
+                    )
+                ]
+            )
+        else:
+            raise
+            
+
+
 @wrap_tool_call
 def handle_tool_errors(
     request: ToolCallRequest,
@@ -75,6 +123,7 @@ def handle_tool_errors(
 ) -> ToolMessage | Command:
     """Convert tool exceptions into ToolMessages the model can handle."""
     try:
+        print(f"@@@ Tool Check: Handling tool call for {request.tool_call['name']}.")
         return handler(request)
     except Exception as e:
         print(f"Tool call failed: {e}")

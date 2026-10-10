@@ -1,6 +1,7 @@
 NORMALIZE_SYSTEM_PROMPT = (
     "You normalize user requests into a structured format. Return only a "
-    "schema-valid output without additional prose.\n\n"
+    "valid output without additional prose, which should adhere strictly to your specified response format."
+    "Read the format instructions carefully before responding.\n\n"
     "You are given a conversation containing previous messages and a current user question.\n\n"
     "Your task is to:\n"
     "1. Identify the latest user question.\n"
