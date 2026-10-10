@@ -23,7 +23,6 @@ def search_logs_tool(
     print(f"table_name: {table_name}")
     print(f"query_text: {query_text}")
     print(f"category: {category}")
-    print(f"runtime: {runtime}")
     print("#########################################")
 
     return execute_database_tool(
@@ -72,7 +71,6 @@ def compare_periods_tool(
     print(f"baseline_end: {baseline_end}")
     print(f"recent_start: {recent_start}")
     print(f"recent_end: {recent_end}")
-    print(f"runtime: {runtime}")
     print("#########################################")
     return execute_database_tool(
         runtime=runtime,

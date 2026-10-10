@@ -21,7 +21,6 @@ def count_by_category_tool(
     print(f"start_time: {start_time}")
     print(f"end_time: {end_time}")
     print(f"category: {category}")
-    print(f"runtime: {runtime}")
     print("#########################################")
 
     match type:

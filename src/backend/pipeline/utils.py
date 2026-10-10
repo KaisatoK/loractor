@@ -84,7 +84,7 @@ def _classify(err: Exception) -> str | None:
         return "too_large"
     if "connection" in s or "timed out" in s:
         return "connection"
-    return "general"
+    return "unknown"
 
 def make_error_middleware(fallback_factory=None):
     @wrap_model_call
@@ -149,8 +149,6 @@ def execute_database_tool(
     )
     print("#########################################")
     print(f"Executing database tool: {operation}")
-    print(f"Tool runtime: {runtime}")
-    print(f"Tool function: {function}")
     print("#########################################")
 
     try:
