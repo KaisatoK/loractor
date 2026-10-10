@@ -1,10 +1,12 @@
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     LLMToolSelectorMiddleware,
+    ModelRetryMiddleware,
     TodoListMiddleware,
     ToolCallLimitMiddleware, ToolRetryMiddleware, ModelRetryMiddleware,
 )
-from langchain.agents.structured_output import ToolStrategy
+from langchain_deepseek import ChatDeepSeek
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
 from backend.pipeline.tools import *
 
@@ -24,17 +26,17 @@ MAX_MODEL_RETRIES = 3
 MAX_TOOL_RETRIES = 2
 
 general_model = ChatGroq(
-    model="openai/gpt-oss-20b", 
-    reasoning_effort="low"
-)
-tool_model = ChatGroq(
     model="openai/gpt-oss-20b",
-    temperature=0,
-    reasoning_effort="low"
 )
+tool_model = ChatDeepSeek(
+    model="deepseek-flash",
+)
+
+# tool_model = ChatGroq(
+#     model="openai/gpt-oss-20b", 
+# )
 thinking_model = ChatGroq(
-    model="openai/gpt-oss-20b",
-    reasoning_effort="medium"
+    model="openai/gpt-oss-120b",
 )
 
 general_agent = create_agent(
@@ -75,12 +77,11 @@ find_evidence_agent = create_agent(
         top_in_category_by_service_tool,
         compare_periods_tool,
     ],
-    # response_format=ToolStrategy(EvidenceReport),
     middleware=[
         handle_tool_errors,
         # handle_bad_tool_calls,
         TodoListMiddleware(),
-        ToolCallLimitMiddleware(run_limit=4),
+        ToolCallLimitMiddleware(run_limit=6),
         ToolRetryMiddleware(
             max_retries=MAX_TOOL_RETRIES,
             on_failure="error",
@@ -94,7 +95,8 @@ find_evidence_agent = create_agent(
         #     max_delay=5,
         # ),
         # LLMToolSelectorMiddleware(
-        #     model=general_model, max_tools=7, always_include=["write_todos"]
+        #     model=general_model,
+        #     always_include=["write_todos"]
         # ),
     ],
     system_prompt=FIND_EVIDENCE_SYSTEM_PROMPT,
