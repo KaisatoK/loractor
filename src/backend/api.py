@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterable
+import json
 from typing import Literal, TypedDict, cast
 from uuid import UUID
 from fastapi import FastAPI
@@ -81,10 +82,17 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     )
 
     last_answer = None
+    tool_results_sent = False
     for name, item in run.interleave("messages", "values", "subgraphs"):
         if name == "messages":
             print(f"@@@ API check @@@ name={name}: text={item[-1].text}")
         elif name == "values":
+            if not tool_results_sent and item.get("tool_results"):
+                yield {
+                    "type": "tool_results",
+                    "content": json.dumps(item["tool_results"]),
+                }
+                tool_results_sent = True
             answer = item.get("answer")
             if answer and answer != last_answer:
                 yield {"type": "messages", "content": answer}

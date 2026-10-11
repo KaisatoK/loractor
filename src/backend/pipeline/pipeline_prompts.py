@@ -92,6 +92,22 @@ class PipelinePrompts:
             "No previous attempt exists.",
         )
 
+        catalog_lines = []
+        for record in state.get("tool_results", []) or []:
+            rows = record.get("rows") or []
+            columns = ", ".join(rows[0].keys()) if rows else ""
+            preview = " | ".join(
+                "{" + ", ".join(f"{k}: {str(v)[:60]}" for k, v in row.items()) + "}"
+                for row in rows[:2]
+            )
+            catalog_lines.append(
+                f"- id: {record.get('id')} | marker: [[RESULT:{record.get('id')}]] | "
+                f"tool: {record.get('tool_name')} | "
+                f"args: {record.get('arguments')} | rows: {record.get('row_count')} | "
+                f"columns: {columns} | preview: {preview}"
+            )
+        tool_result_catalog = "\n".join(catalog_lines)
+
         return (
             "<grounding rules>\n"
             f"{self.shared_grounding}\n\n"
@@ -105,6 +121,9 @@ class PipelinePrompts:
             "<evidence report>\n"
             f"{state['evidence_report']}\n"
             "</evidence report>\n"
+            "<tool result catalog>\n"
+            f"{tool_result_catalog}\n"
+            "</tool result catalog>\n"
             "<revision feedback>\n"
             f"{revision_feedback}\n"
             "</revision feedback>\n\n"

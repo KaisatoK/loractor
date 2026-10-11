@@ -116,4 +116,6 @@ class PipelineState(TypedDict):
     confidence: PipelineRoute
     revision_feedback: str
     answer: str
+    # Display-only raw tool rows: {id, tool_name, arguments, row_count, rows}.
+    tool_results: list[dict[str, Any]]
     fail_reason: str | None = None

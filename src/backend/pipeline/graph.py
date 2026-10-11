@@ -12,6 +12,7 @@ from backend.pipeline.agents import (
 )
 from backend.pipeline.pipeline_prompts import PipelinePrompts
 from backend.pipeline.schema.schemas import PipelineState
+from backend.pipeline.utils import collect_tool_results
 
 # router = TypeSafeClassifier()
 
@@ -108,10 +109,13 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 
     evidence_report = report_result["structured_response"].model_dump()
 
+    tool_results = collect_tool_results(result["messages"])
+
     return {
         **state,
         "evidence_report": evidence_report,
         "evidence_report_history": evidence_report_history,
+        "tool_results": tool_results,
         "answer": "",
     }
 
