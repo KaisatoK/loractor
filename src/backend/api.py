@@ -149,7 +149,6 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
 
     last_answer = None
     last_tool_results_json = None
-    last_evidence_report_json = None
     for name, item in run.interleave("messages", "values", "subgraphs", "custom"):
         if name == "messages":
             print(f"@@@ API check @@@ name={name}: text={item[-1].text}")
@@ -165,12 +164,6 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
                 if payload != last_tool_results_json:
                     yield {"type": "tool_results", "content": payload}
                     last_tool_results_json = payload
-            report = item.get("evidence_report")
-            if report:
-                payload = json.dumps(report)
-                if payload != last_evidence_report_json:
-                    yield {"type": "evidence_report", "content": payload}
-                    last_evidence_report_json = payload
             answer = item.get("answer")
             if answer and answer != last_answer:
                 yield {"type": "messages", "content": answer}
