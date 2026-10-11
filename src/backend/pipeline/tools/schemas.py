@@ -1,10 +1,10 @@
-from typing import Annotated, Literal
-from typing_extensions import Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.db.config import TABLE_NAME
+
 DATETIME_REGEX = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
-TABLE_NAME = "log"
 
 
 class CountByCategory(BaseModel):
@@ -64,58 +64,6 @@ class GetTrend(BaseModel):
         if self.end_time <= self.start_time:
             raise ValueError("end_time must be after start_time")
         return self
-
-
-# class GetTrendService(BaseModel):
-#     start_time: Annotated[
-#         str,
-#         Field(
-#             pattern=DATETIME_REGEX,
-#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-#         ),
-#     ]
-#     end_time: Annotated[
-#         str,
-#         Field(
-#             pattern=DATETIME_REGEX,
-#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-#         ),
-#     ]
-#     service: Annotated[
-#         str,
-#         Field(
-#             min_length=1,
-#             description="Exact service name. The value must come from the user or from previously collected evidence.",
-#         ),
-#     ]
-#     table_name: str = TABLE_NAME
-#     category: str | None = None
-
-
-# class GetTrendEvent(BaseModel):
-#     start_time: Annotated[
-#         str,
-#         Field(
-#             pattern=DATETIME_REGEX,
-#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-#         ),
-#     ]
-#     end_time: Annotated[
-#         str,
-#         Field(
-#             pattern=DATETIME_REGEX,
-#             description="Timestamp in YYYY-MM-DD HH:MM:SS format.",
-#         ),
-#     ]
-#     event_id: Annotated[
-#         str,
-#         Field(
-#             min_length=1,
-#             description="Exact event ID. The value must come from the user or from previously collected evidence.",
-#         ),
-#     ]
-#     table_name: str = TABLE_NAME
-#     category: str | None = None
 
 
 class SearchLogs(BaseModel):

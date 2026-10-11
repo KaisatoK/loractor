@@ -1,13 +1,14 @@
 from pathlib import Path
 
 from psycopg2 import sql
-from utils import (
+
+from backend.db.config import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
     MODEL_BASE_URL,
     TABLE_NAME,
-    db_cursor,
 )
+from backend.db.connection import db_cursor
 
 
 def create_ai_secret():

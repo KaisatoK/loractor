@@ -1,12 +1,17 @@
 from langchain.tools import ToolRuntime, tool
 
-from backend.db import *
+from backend.db import (
+    compare_periods,
+    search_logs,
+    top_in_category_by_service,
+)
+from backend.db.config import TABLE_NAME
+from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import (
     ComparePeriods,
     SearchLogs,
     TopInCategoryByService,
 )
-from backend.pipeline.utils import TABLE_NAME, execute_database_tool
 
 
 @tool(args_schema=SearchLogs)
@@ -18,13 +23,6 @@ def search_logs_tool(
     limit: int = 10,
 ) -> dict:
     """Search message content; put severity in category, not query_text."""
-    print("#########################################")
-    print("Executing search_logs tool")
-    print(f"table_name: {table_name}")
-    print(f"query_text: {query_text}")
-    print(f"category: {category}")
-    print("#########################################")
-
     operation = f"search log messages for '{query_text}'"
     if category:
         operation += f" with severity '{category}'"
@@ -71,14 +69,6 @@ def compare_periods_tool(
     limit: int = 5,
 ) -> dict:
     """Compare service/severity counts between baseline and recent windows."""
-    print("#########################################")
-    print("Executing compare_periods tool")
-    print(f"table_name: {table_name}")
-    print(f"baseline_start: {baseline_start}")
-    print(f"baseline_end: {baseline_end}")
-    print(f"recent_start: {recent_start}")
-    print(f"recent_end: {recent_end}")
-    print("#########################################")
     return execute_database_tool(
         runtime=runtime,
         operation="compare log volume across two time windows",

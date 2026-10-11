@@ -1,8 +1,16 @@
+"""State-dependent prompt builders used by the pipeline nodes.
+
+``PipelinePrompts`` renders the per-stage prompts from ``PipelineState``. The
+TypeSafe classifier question builders (``scope_question``, ``pass_question``,
+``next_state_question``, ``revision_reason_question``) are retained for the
+scope/confidence routers, which are currently documented stubs in ``graph.py``.
+"""
+
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 
+from backend.db.config import LOG_SCHEMA
 from backend.pipeline.effort import get_effort_spec
-from backend.pipeline.schema.schemas import PipelineState, Role
-from backend.pipeline.utils import LOG_SCHEMA
+from backend.pipeline.state import PipelineState, Role
 
 ANSWER_EFFORT_NOTES = {
     "Low": "Be brief: lead with the verdict, keep it under ~150 words, at most one table, skip caveats unless critical.",
@@ -107,10 +115,14 @@ class PipelinePrompts:
             latest_answer = state.get("latest_answer", "")
             if latest_answer:
                 prompt += (
-                    "<previous answer>\n" f"{latest_answer}\n" "</previous answer>\n"
+                    "<previous answer>\n"
+                    f"{latest_answer}\n"
+                    "</previous answer>\n"
                 )
             prompt += (
-                "<new message>\n" f"{state['latest_message']}\n" "</new message>\n"
+                "<new message>\n"
+                f"{state['latest_message']}\n"
+                "</new message>\n"
             )
             return prompt
 
@@ -208,24 +220,6 @@ class PipelinePrompts:
             f"{self.REFRAME_INSTRUCTION}\n"
             "</reframe instructions>\n"
         )
-
-    # def confidence_request(self, state: PipelineState) -> ClassifierRequest:
-    #     role_guidance = self.role_guidance(state["role"])
-    #     return {
-    #         "state": {
-    #             "user_role": state["role"]["name"],
-    #             "role_objective": state["role"]["objective"],
-    #             "user_question": state["question"],
-    #             "hypotheses": state["plan"],
-    #             "evidence_report": state["evidence"],
-    #             "answer": state.get("answer", ""),
-    #         },
-    #         "question": {
-    #             "pass": self.pass_question(role_guidance),
-    #             "next_state": self.next_state_question(role_guidance),
-    #             "revision_reason": self.revision_reason_question(),
-    #         },
-    #     }
 
     def pass_question(self, role: Role) -> Noul:
         return Noul(

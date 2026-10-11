@@ -6,8 +6,13 @@ from langchain.agents.middleware import (
 )
 
 from backend.pipeline.effort import get_effort_spec
-from backend.pipeline.model import deepseek
-from backend.pipeline.system_prompts import FIND_EVIDENCE_SYSTEM_PROMPT
+from backend.pipeline.middleware import (
+    handle_tool_errors,
+    log_tool_calls,
+    make_error_middleware,
+)
+from backend.pipeline.models import deepseek
+from backend.pipeline.prompts import FIND_EVIDENCE_SYSTEM_PROMPT
 from backend.pipeline.tools import (
     compare_periods_tool,
     count_by_category_tool,
@@ -16,7 +21,6 @@ from backend.pipeline.tools import (
     search_logs_tool,
     top_in_category_by_service_tool,
 )
-from backend.pipeline.utils import handle_tool_errors, make_error_middleware
 
 MAX_TOOL_RETRIES = 2
 
@@ -38,6 +42,7 @@ def get_find_evidence_agent(effort: str):
                 compare_periods_tool,
             ],
             middleware=[
+                log_tool_calls,
                 handle_tool_errors,
                 TodoListMiddleware(),
                 ToolCallLimitMiddleware(run_limit=spec.max_tool_calls),

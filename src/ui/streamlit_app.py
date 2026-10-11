@@ -1,8 +1,8 @@
 import uuid
 import streamlit as st
 
-from main_page.main_page import main_page
-from new_chat.new_chat import new_chat
+from ui.main_page.main_page import main_page
+from ui.new_chat.new_chat import new_chat
 
 
 @st.dialog("Are you sure?")

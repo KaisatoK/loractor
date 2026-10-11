@@ -1,11 +1,11 @@
+import logging
+
 from psycopg2 import sql
 
-from backend.db.utils import (
-    EMBEDDING_DIMENSION,
-    EMBEDDING_MODEL,
-    TABLE_NAME,
-    query_runner,
-)
+from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL, TABLE_NAME
+from backend.db.connection import query_runner
+
+logger = logging.getLogger(__name__)
 
 
 @query_runner
@@ -15,7 +15,12 @@ def search_logs(
     category: str | None = None,
     limit: int = 10,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(f'Getting top {limit} logs related to "{query_text}" for category {category}')
+    logger.debug(
+        'Getting top %s logs related to "%s" for category %s',
+        limit,
+        query_text,
+        category,
+    )
 
     query = sql.SQL("""
         WITH query_embedding AS (
@@ -71,8 +76,12 @@ def top_in_category_by_service(
     category: str | None = None,
     limit: int = 5,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Getting top {limit} service(s) for category {category} from {start_time} to {end_time}"
+    logger.debug(
+        "Getting top %s service(s) for category %s from %s to %s",
+        limit,
+        category,
+        start_time,
+        end_time,
     )
 
     query = sql.SQL("""
@@ -102,8 +111,13 @@ def compare_periods(
     table_name: str = TABLE_NAME,
     limit: int = 5,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Comparing top {limit} service between baseline ({baseline_start} -> {baseline_end}) and recent period ({recent_start} -> {recent_end})."
+    logger.debug(
+        "Comparing top %s service between baseline (%s -> %s) and recent period (%s -> %s).",
+        limit,
+        baseline_start,
+        baseline_end,
+        recent_start,
+        recent_end,
     )
 
     query = sql.SQL("""
@@ -141,32 +155,3 @@ def compare_periods(
     params = [baseline_start, baseline_end, recent_start, recent_end, limit]
 
     return query, params
-
-
-if __name__ == "__main__":
-
-    def print_row(rows: list[dict]) -> None:
-        for row in rows:
-            print(row)
-        print()
-
-    ### FULL-TEXT SEARCH LOG
-    # print_row(search_logs("connection", category=None, limit=5))
-    # print_row(search_logs("nework", category=None, limit=5))
-    # print_row(search_logs("network", category="WARNING"))
-    # print_row(search_logs("resource", category=None))
-    # print_row(search_logs("Exception", category="ERROR"))
-
-    ### GET TOP OF A CATEGORY OF A SERVICE
-    # start = "2017-05-16 00:00:00"
-    # end = "2017-05-16 00:01:00"
-    # print_row(top_in_category_by_service(start, end, category=None))
-    # print_row(top_in_category_by_service(start, end, category="INFO", limit=10))
-    # print_row(top_in_category_by_service(start, end, category="ERROR", limit=2))
-
-    ### COMPARE SERVICES FOR A BASELINE AND A RECENT TIME PERIOD
-    # baseline_start = "2017-05-16 00:00:00"
-    # baseline_end = "2017-05-16 00:01:00"
-    # recent_start = "2017-05-16 00:02:00"
-    # recent_end = "2017-05-16 00:03:00"
-    # print_row(compare_periods(baseline_start, baseline_end, recent_start, recent_end))

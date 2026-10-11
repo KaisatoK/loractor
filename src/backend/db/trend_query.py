@@ -1,9 +1,11 @@
+import logging
+
 from psycopg2 import sql
 
-from backend.db.utils import (
-    TABLE_NAME,
-    query_runner,
-)
+from backend.db.config import TABLE_NAME
+from backend.db.connection import query_runner
+
+logger = logging.getLogger(__name__)
 
 
 @query_runner
@@ -14,8 +16,12 @@ def get_pid_trend_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Getting minute-by-minute trend for pid {pid} and category {category} from {start_time} to {end_time}"
+    logger.debug(
+        "Getting minute-by-minute trend for pid %s and category %s from %s to %s",
+        pid,
+        category,
+        start_time,
+        end_time,
     )
 
     query = sql.SQL("""
@@ -59,8 +65,12 @@ def get_service_trend_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Getting minute-by-minute trend for service {service} and category {category} from {start_time} to {end_time}"
+    logger.debug(
+        "Getting minute-by-minute trend for service %s and category %s from %s to %s",
+        service,
+        category,
+        start_time,
+        end_time,
     )
 
     query = sql.SQL("""
@@ -104,8 +114,12 @@ def get_event_id_trend_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str | int]]:
-    print(
-        f"Getting minute-by-minute trend for event_id {event_id} and category {category} from {start_time} to {end_time}"
+    logger.debug(
+        "Getting minute-by-minute trend for event_id %s and category %s from %s to %s",
+        event_id,
+        category,
+        start_time,
+        end_time,
     )
 
     query = sql.SQL("""
@@ -139,25 +153,3 @@ def get_event_id_trend_by_category(
 
     params = [event_id, start_time, end_time] + ([category] if category else [])
     return query, params
-
-
-if __name__ == "__main__":
-    start = "2017-05-16 00:00:00"
-    end = "2017-05-16 00:10:00"
-
-    def print_row(rows: list[dict]) -> None:
-        for row in rows:
-            print(row)
-        print()
-
-    ### GET TREND OF A PID
-    print(get_pid_trend_by_category(start, end, 25746))
-    # print_row(get_pid_trend_by_category(start, end, 2931, category="WARNING"))
-
-    ### GET TREND OF A SERVICE
-    # print_row(get_service_trend_by_category(start, end, "nova.compute.resource_tracker"))
-    # print_row(get_service_trend_by_category(start, end, "nova.virt.libvirt.imagecache", category="WARNING"))
-
-    ### GET TREND OF AN EVENT ID
-    # print_row(get_event_id_trend_by_category(start, end, "E35"))
-    # print_row(get_event_id_trend_by_category(start, end, "E42", category="WARNING"))

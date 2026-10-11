@@ -1,14 +1,16 @@
+import logging
+
 from psycopg2 import sql
 
-from backend.db.utils import (
-    TABLE_NAME,
-    query_runner,
-)
+from backend.db.config import TABLE_NAME
+from backend.db.connection import query_runner
+
+logger = logging.getLogger(__name__)
 
 
 @query_runner
 def get_pids(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[str]]:
-    print("Getting all pids")
+    logger.debug("Getting all pids")
 
     query = sql.SQL("""
             SELECT DISTINCT pid
@@ -24,7 +26,7 @@ def get_pids(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[str]]:
 
 @query_runner
 def get_services(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[str]]:
-    print("Getting all services")
+    logger.debug("Getting all services")
 
     query = sql.SQL("""
             SELECT DISTINCT service
@@ -40,7 +42,7 @@ def get_services(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[str
 
 @query_runner
 def get_event_ids(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[str]]:
-    print("Getting all event_ids")
+    logger.debug("Getting all event_ids")
 
     query = sql.SQL("""
             SELECT DISTINCT event_id
@@ -52,15 +54,3 @@ def get_event_ids(table_name: str = TABLE_NAME) -> tuple[sql.Composable, list[st
 
     params = []
     return query, params
-
-
-if __name__ == "__main__":
-
-    def print_row(rows: list[dict]) -> None:
-        for row in rows:
-            print(row)
-        print()
-
-    print_row(get_pids())
-    print_row(get_services())
-    print_row(get_event_ids())

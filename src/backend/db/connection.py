@@ -1,6 +1,8 @@
+"""SereneDB connection handling and the query-runner decorator."""
+
 import functools
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import ParamSpec
 
@@ -8,11 +10,7 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
-SERENEDB_PORT = 7890
-MODEL_BASE_URL = "http://host.docker.internal:11434"
-EMBEDDING_MODEL = "nomic-embed-text:v1.5"
-EMBEDDING_DIMENSION = 768
-TABLE_NAME = "log"
+from backend.db.config import SERENEDB_PORT
 
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")
@@ -25,7 +23,7 @@ def get_conn():
 
 
 @contextmanager
-def db_cursor():
+def db_cursor() -> Iterator[RealDictCursor]:
     conn = get_conn()
     cur = None
 
@@ -45,9 +43,11 @@ def db_cursor():
 def query_runner(
     func: Callable[P, tuple[sql.Composable, list]],
 ) -> Callable[P, list[dict]]:
+    """Turn a function that returns ``(query, params)`` into one that runs it."""
+
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> list[dict]:
-        logger.info("Running %s args=%s kwargs=%s", func.__name__, args, kwargs)
+        logger.debug("Running %s args=%s kwargs=%s", func.__name__, args, kwargs)
 
         query, params = func(*args, **kwargs)
 

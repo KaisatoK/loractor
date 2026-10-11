@@ -1,3 +1,6 @@
+"""LangGraph pipeline: normalize → scope → (general | find_evidence → answer → confidence)."""
+
+import logging
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -10,13 +13,17 @@ from backend.pipeline.agents import (
     get_find_evidence_agent,
     normalize_agent,
 )
-from backend.pipeline.pipeline_prompts import PipelinePrompts, normalized_is_usable
-from backend.pipeline.schema.schemas import PipelineState
-from backend.pipeline.utils import collect_tool_results
+from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
+from backend.pipeline.state import PipelineState
+from backend.pipeline.tools.results import collect_tool_results
 
-# router = TypeSafeClassifier()
+logger = logging.getLogger(__name__)
 
 prompts = PipelinePrompts()
+
+# Reserved for the scope classifier: probability above which a request is routed
+# into the evidence pipeline rather than to the general agent. Used once the
+# scope_node stub below is replaced with the TypeSafe classifier.
 SCOPE_CONFIDENCE_THRESHOLD = 0.64
 
 
@@ -41,17 +48,9 @@ def normalize_node(state: PipelineState) -> PipelineState:
 
 
 def scope_node(state: PipelineState) -> PipelineState:
-    # response = router.invoke(prompts.scope_request(state))
-
-    # pipeline_probability = response.nouls["requires_pipeline"].noul
-
-    # route = "pipeline" if pipeline_probability > SCOPE_CONFIDENCE_THRESHOLD else "general"
-
-    # return {
-    #     **state,
-    #     "scope": route,
-    # }
-
+    # TODO(scope routing): classify the request with prompts.scope_request(state)
+    # and route to "pipeline"/"general" using SCOPE_CONFIDENCE_THRESHOLD. Until
+    # then every request is treated as unresolved and goes to find_evidence.
     return {
         **state,
         "scope": "unresolved",
@@ -68,22 +67,10 @@ def general_node(state: PipelineState) -> PipelineState:
     )
 
     answer = result["messages"][-1].text
-
-    # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    # print("general answer:", answer)
-    # print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
     return {**state, "answer": answer}
 
 
 def find_evidence_node(state: PipelineState) -> PipelineState:
-    evidence_report_history = list(state.get("evidence_report_history", []))
-    # if state.get("evidence_report"):
-    #     find_evidence_history.append(
-    #         {
-    #             ## ...
-    #         }
-    #     )
-
     result = get_find_evidence_agent(state.get("effort")).invoke(
         {
             "messages": [
@@ -113,13 +100,11 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     )
 
     evidence_report = report_result["structured_response"].model_dump()
-
     tool_results = collect_tool_results(result["messages"])
 
     return {
         **state,
         "evidence_report": evidence_report,
-        "evidence_report_history": evidence_report_history,
         "tool_results": tool_results,
         "answer": "",
     }
@@ -134,53 +119,15 @@ def answer_node(state: PipelineState) -> PipelineState:
         }
     )
     answer = result["messages"][-1].text
-
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-    print("answer:", answer)
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+    logger.debug("answer: %s", answer)
     return {**state, "answer": answer}
 
 
 def confidence_node(state: PipelineState) -> PipelineState:
-    # response = router.invoke(prompts.confidence_request(state))
-
-    # route_answer = response.choices["next_state"]
-    # next_state = max(route_answer.probabilities, key=route_answer.probabilities.get)
-    # reason_answer = response.choices["revision_reason"]
-    # revision_reason = max(
-    #     reason_answer.probabilities, key=reason_answer.probabilities.get
-    # )
-
-    # revision_feedback = {
-    #     "missing_evidence": "Add or change tool calls to collect the missing evidence.",
-    #     "irrelevant_evidence": "Change the search criteria or tools so the evidence directly addresses the question.",
-    #     "unsupported_answer": "Keep the useful evidence, but revise the answer so every claim is supported.",
-    #     "role_mismatch": "Adjust the evidence plan and answer to the user's role and decision needs.",
-    #     "none": "No revision is required.",
-    # }[revision_reason]
-
-    # # Debug output while the confidence policy is being tuned.
-    # print(
-    #     f"confidence pass={response.nouls['pass'].noul:.3f} "
-    #     f"next_state={next_state} next_state_confidence={route_answer.confidence:.3f} "
-    #     f"revision_reason={revision_reason} "
-    #     f"revision_reason_confidence={reason_answer.confidence:.3f}"
-    # )
-
-    # return {
-    #     **state,
-    #     "confidence": {
-    #         "next_state": next_state,
-    #         "pass_probability": response.nouls["pass"].noul,
-    #         "probabilities": route_answer.probabilities,
-    #         "revision_reason": revision_reason,
-    #     },
-    #     "revision_feedback": revision_feedback,
-    # }
-    # When enabled, gate on the effort spec:
-    # spec = get_effort_spec(state["effort"])
-    # accept = pass_probability >= spec.answer_confidence_threshold
-    # loop again only while iteration_count < spec.max_iterations
+    # TODO(confidence routing): score the answer with prompts.pass_question /
+    # next_state_question / revision_reason_question and, when it fails, set
+    # confidence["next_state"] to "find_evidence" or "answer" to trigger a
+    # revision, gated by the effort spec's threshold and iteration budget.
     return {
         **state,
         "confidence": {

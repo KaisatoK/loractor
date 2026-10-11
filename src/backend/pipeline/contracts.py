@@ -1,10 +1,8 @@
-from typing import Annotated, Any, Literal, TypedDict
+"""Pydantic response contracts produced by the pipeline's LLM agents."""
+
+from typing import Annotated, Any, Literal
+
 from pydantic import BaseModel, Field
-
-
-class Role(TypedDict):
-    name: Literal["engineer", "team_lead", "manager"]
-    objective: str
 
 
 class NormalizedOutput(BaseModel):
@@ -30,13 +28,6 @@ class NormalizedOutput(BaseModel):
     ambiguities: Annotated[
         list[str], Field(description="Uncertainties that could affect the result.")
     ]
-
-
-class PipelineRoute(TypedDict):
-    next_state: Literal["find_evidence", "answer", "end"]
-    pass_probability: float
-    probabilities: dict[str, float]
-    revision_reason: str
 
 
 class ToolStatus(BaseModel):
@@ -103,21 +94,3 @@ class EvidenceReport(BaseModel):
             "Must be non-duplicative, plausible, and testable. Maximum of 3 hypotheses."
         ),
     )
-
-
-class PipelineState(TypedDict):
-    conversation: str
-    latest_message: str
-    latest_answer: str
-    role: Role
-    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
-    scope: Literal["irrelevant", "resolved", "unresolved"]
-    normalized: NormalizedOutput
-    evidence_report: EvidenceReport
-    evidence_report_history: list[EvidenceReport]
-    confidence: PipelineRoute
-    revision_feedback: str
-    answer: str
-    # Display-only raw tool rows: {id, tool_name, arguments, row_count, rows}.
-    tool_results: list[dict[str, Any]]
-    fail_reason: str | None = None
