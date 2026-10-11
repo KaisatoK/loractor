@@ -107,6 +107,8 @@ class EvidenceReport(BaseModel):
 
 class PipelineState(TypedDict):
     conversation: str
+    latest_message: str
+    latest_answer: str
     role: Role
     effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
     scope: Literal["irrelevant", "resolved", "unresolved"]

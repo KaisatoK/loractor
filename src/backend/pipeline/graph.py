@@ -10,7 +10,7 @@ from backend.pipeline.agents import (
     general_agent,
     normalize_agent,
 )
-from backend.pipeline.pipeline_prompts import PipelinePrompts
+from backend.pipeline.pipeline_prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.schema.schemas import PipelineState
 from backend.pipeline.utils import collect_tool_results
 
@@ -22,15 +22,23 @@ ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
 MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
 
 def normalize_node(state: PipelineState) -> PipelineState:
+    prompt = prompts.normalize(state)
     result = normalize_agent.invoke(
         {
             "messages": [
-                {"role": "user", "content": prompts.normalize(state)},
+                {"role": "user", "content": prompt},
             ]
         }
     )
-    normalized = result["structured_response"]
-    return {**state, "normalized": normalized.model_dump()}
+    normalized = result["structured_response"].model_dump()
+
+    # A failed model call yields the empty fallback shape; never overwrite a
+    # valid previous normalization with it.
+    previous = state.get("normalized")
+    if not normalized_is_usable(normalized) and normalized_is_usable(previous):
+        return {**state, "normalized": previous}
+
+    return {**state, "normalized": normalized}
 
     
 

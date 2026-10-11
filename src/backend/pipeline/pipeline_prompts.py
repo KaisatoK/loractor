@@ -4,6 +4,20 @@ from backend.pipeline.schema.schemas import PipelineState, Role
 from backend.pipeline.utils import LOG_SCHEMA
 
 
+def normalized_is_usable(previous: object) -> bool:
+    """Whether a normalized result is real (not missing or the empty fallback).
+
+    The error middleware falls back to ``NormalizedOutput`` with empty
+    ``normalized_question`` and ``intent``; that shape must not be treated as
+    accumulated context.
+    """
+    if isinstance(previous, dict):
+        return bool(previous.get("normalized_question")) or bool(previous.get("intent"))
+    return bool(getattr(previous, "normalized_question", "")) or bool(
+        getattr(previous, "intent", "")
+    )
+
+
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
@@ -60,6 +74,31 @@ class PipelinePrompts:
         )
 
     def normalize(self, state: PipelineState) -> str:
+        # Raw tool_results are intentionally excluded from the carried context:
+        # they are display-only, regenerated every turn by find_evidence, and
+        # including their rows would bloat the compact prompt.
+        previous = state.get("normalized")
+
+        if previous and normalized_is_usable(previous):
+            prompt = (
+                "<previous normalized context>\n"
+                f"{previous}\n"
+                "</previous normalized context>\n"
+            )
+            latest_answer = state.get("latest_answer", "")
+            if latest_answer:
+                prompt += (
+                    "<previous answer>\n"
+                    f"{latest_answer}\n"
+                    "</previous answer>\n"
+                )
+            prompt += (
+                "<new message>\n"
+                f"{state['latest_message']}\n"
+                "</new message>\n"
+            )
+            return prompt
+
         return "<conversation>\n" f"{state['conversation']}\n" "</conversation>\n\n"
 
     def find_evidence(self, state: PipelineState) -> str:

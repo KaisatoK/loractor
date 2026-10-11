@@ -1,3 +1,6 @@
+import ast
+import hashlib
+
 from collections.abc import AsyncIterable
 import json
 from typing import Literal, TypedDict, cast
@@ -57,12 +60,70 @@ ROLE_OBJECTIVES: dict[str, str] = {
 app = FastAPI()
 
 
+def _parse_history(message: str) -> list[dict[str, str]]:
+    """Parse the UI's Python-repr history string into a list of chat items.
+
+    The UI sends an append-only list of ``{"role", "content"}`` dicts rendered
+    with ``str(...)``. ``ast.literal_eval`` handles both that repr and the
+    double-quoted JSON-style form. On any parse failure the raw string is
+    treated as a single user message.
+    """
+    try:
+        parsed = ast.literal_eval(message)
+    except (ValueError, SyntaxError):
+        return [{"role": "user", "content": message}]
+
+    if not isinstance(parsed, list):
+        return [{"role": "user", "content": message}]
+
+    history: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if isinstance(role, str) and isinstance(content, str):
+            history.append({"role": role, "content": content})
+    return history or [{"role": "user", "content": message}]
+
+
+def _thread_id(user_id: UUID, role: str, history: list[dict[str, str]]) -> str:
+    """Stable per-chat thread key.
+
+    The UI never sends a chat id, but the opening message is append-only and
+    therefore constant for the life of a chat. Hashing it, together with the
+    user and role, keeps each chat on its own LangGraph thread.
+
+    Known limitation: two chats from the same user with the same role AND an
+    identical opening message collide onto one thread. Acceptable for this
+    prototype (the UI does not expose a chat id).
+    """
+    first_user_message = next(
+        (item["content"] for item in history if item["role"] == "user"),
+        "",
+    )
+    digest = hashlib.sha1(first_user_message.encode("utf-8")).hexdigest()[:12]
+    return f"{user_id}:{role}:{digest}"
+
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
+    history = _parse_history(req["message"])
+    latest_message = next(
+        (item["content"] for item in reversed(history) if item["role"] == "user"),
+        req["message"],
+    )
+    latest_answer = next(
+        (item["content"] for item in reversed(history) if item["role"] == "assistant"),
+        "",
+    )
+
     initial_state = cast(
         PipelineState,
         {
             "conversation": req["message"],
+            "latest_message": latest_message,
+            "latest_answer": latest_answer,
             "role": {
                 "name": req["role"],
                 "objective": ROLE_OBJECTIVES[req["role"]],
@@ -75,7 +136,7 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
         initial_state,
         config={
             "configurable": {
-                "thread_id": str(req["user_id"]),
+                "thread_id": _thread_id(req["user_id"], req["role"], history),
             }
         },
         version="v3",
