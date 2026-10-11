@@ -173,7 +173,6 @@ class PipelinePrompts:
             )
             catalog_lines.append(
                 f"- id: {record.get('id')}\n"
-                f"  marker: [[RESULT:{record.get('id')}]]\n"
                 f"  tool: {record.get('tool_name')}\n"
                 f"  args: {record.get('arguments')}\n"
                 f"  rows: {record.get('row_count')}\n"

@@ -46,9 +46,14 @@ Create `.env` in the repo root with the API keys for the providers in use:
 GROQ_API_KEY=...
 DEEPSEEK_API_KEY=...
 GOOGLE_API_KEY=...
+
+# Optional ports (defaults: 8000 backend, 8501 UI)
+BACKEND_PORT=8000
+FRONTEND_PORT=8501
 ```
 
-Keys are loaded automatically on import via `python-dotenv`.
+Keys and ports are loaded automatically on import via `python-dotenv`. The UI
+reads `BACKEND_PORT` to reach the backend, so both scripts stay in sync.
 
 ## Setup
 
@@ -64,11 +69,13 @@ builds the inverted index. It is safe to re-run, but it discards existing rows.
 ## Running
 
 ```bash
-./backend.sh     # uv run uvicorn backend.api:app --reload  (http://localhost:8000)
-./frontend.sh    # uv run streamlit run src/ui/streamlit_app.py
+./backend.sh     # uvicorn backend.api:app --port $BACKEND_PORT --reload
+./frontend.sh    # streamlit run src/ui/streamlit_app.py --server.port $FRONTEND_PORT
 ```
 
-Both commands run from the repository root.
+Both commands run from the repository root. Set `BACKEND_PORT`/`FRONTEND_PORT`
+in `.env` (or the environment) to run on non-default ports; `8000`/`8501` are
+used when unset.
 
 ## Testing
 
@@ -114,8 +121,9 @@ Streams newline-delimited JSON events, each `{"type", "content"}`:
 | `subgraph_name`   | current pipeline stage name                              |
 | `subgraph_message`| reasoning text from a subgraph                           |
 
-Assistants embed `[[RESULT:R1]]` markers in the answer; the UI replaces each
-marker with the corresponding table from `tool_results`.
+Assistants return structured prose/table blocks; the backend serializes them into
+`[[RESULT:R1]]` markers (alone on their own line) and the UI replaces each marker
+with the corresponding table from `tool_results`.
 
 ### `POST /chat/reframe`
 
@@ -138,6 +146,7 @@ src/
 │       ├── graph.py      LangGraph nodes and wiring
 │       ├── state.py      pipeline state schema
 │       ├── contracts.py  Pydantic agent response models
+│       ├── answers.py    structured-answer → marker text serialization
 │       ├── roles.py      role objectives
 │       ├── effort.py     per-effort budgets
 │       ├── middleware.py model/tool error handling

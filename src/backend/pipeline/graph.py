@@ -13,6 +13,7 @@ from backend.pipeline.agents import (
     get_find_evidence_agent,
     normalize_agent,
 )
+from backend.pipeline.answers import serialize_answer
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.state import PipelineState
 from backend.pipeline.tools.results import collect_tool_results
@@ -118,7 +119,8 @@ def answer_node(state: PipelineState) -> PipelineState:
             ]
         }
     )
-    answer = result["messages"][-1].text
+    valid_ids = {record.get("id") for record in state.get("tool_results") or []}
+    answer = serialize_answer(result["structured_response"], valid_ids)
     logger.debug("answer: %s", answer)
     return {**state, "answer": answer}
 

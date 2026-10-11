@@ -1,12 +1,16 @@
 """HTTP client for the backend chat API."""
 
 import json
+import os
 from collections.abc import Iterator
 
 import requests
 
-API_URL = "http://localhost:8000/chat/stream"
-REFRAME_URL = "http://localhost:8000/chat/reframe"
+# Backend port from the environment (.env via ui/__init__), default 8000.
+BACKEND_PORT = os.environ.get("BACKEND_PORT", "8000")
+API_BASE = f"http://localhost:{BACKEND_PORT}"
+API_URL = f"{API_BASE}/chat/stream"
+REFRAME_URL = f"{API_BASE}/chat/reframe"
 
 
 def stream_chat(

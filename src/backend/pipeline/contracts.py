@@ -94,3 +94,42 @@ class EvidenceReport(BaseModel):
             "Must be non-duplicative, plausible, and testable. Maximum of 3 hypotheses."
         ),
     )
+
+
+class AnswerText(BaseModel):
+    """A prose section of the final answer, rendered as markdown."""
+
+    type: Literal["text"] = "text"
+    text: str = Field(
+        description=(
+            "One section of the answer written as markdown prose. Never include "
+            "table syntax, pipe characters, or result markers here."
+        )
+    )
+
+
+class AnswerTable(BaseModel):
+    """A tool result to display as a table, referenced by its catalog id."""
+
+    type: Literal["table"] = "table"
+    result_id: str = Field(
+        description=(
+            "The id of the tool result to render as a table (for example 'R1'). "
+            "Must be an id from the tool result catalog."
+        )
+    )
+
+
+AnswerBlock = Annotated[AnswerText | AnswerTable, Field(discriminator="type")]
+
+
+class AnswerOutput(BaseModel):
+    """The final answer as an ordered sequence of prose and table blocks."""
+
+    blocks: list[AnswerBlock] = Field(
+        description=(
+            "The answer in reading order. Mix prose blocks with table blocks so each "
+            "referenced table appears where it belongs. Show only the tables the "
+            "reader needs and reference only ids from the tool result catalog."
+        )
+    )

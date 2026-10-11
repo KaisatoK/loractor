@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from langgraph.stream.transformers import CustomTransformer
 
 from backend.pipeline.agents import answer_agent
+from backend.pipeline.answers import serialize_answer
 from backend.pipeline.graph import chatbot, prompts
 from backend.pipeline.roles import ROLE_OBJECTIVES
 from backend.pipeline.state import PipelineState, RoleName
@@ -170,4 +171,6 @@ async def chat_reframe(req: ReframeRequest) -> dict:
     result = answer_agent.invoke(
         {"messages": [{"role": "user", "content": prompts.reframe(state)}]}
     )
-    return {"answer": result["messages"][-1].text}
+    valid_ids = {record.get("id") for record in req["tool_results"] or []}
+    answer = serialize_answer(result["structured_response"], valid_ids)
+    return {"answer": answer}
