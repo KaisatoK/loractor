@@ -45,6 +45,30 @@ def render_answer(container, text, results):
         container.markdown(tail)
 
 
+STATUS_ICONS = {"supported": "✅", "unsupported": "❌", "inconclusive": "❓"}
+
+
+def render_evidence_report(container, report):
+    if not report or not report.get("hypotheses"):
+        return
+    hyps = report["hypotheses"]
+    supported = sum(1 for h in hyps if h.get("status") == "supported")
+    with container.expander(
+        f"🔍 Evidence & reasoning — {len(hyps)} hypotheses, {supported} supported"
+    ):
+        for h in hyps:
+            icon = STATUS_ICONS.get(h.get("status", ""), "•")
+            container.markdown(
+                f"{icon} **{h.get('status', 'unknown').capitalize()}:** "
+                f"{h.get('hypothesis', '')}"
+            )
+            if h.get("description"):
+                container.caption(h["description"])
+            for ev in h.get("required_evidence", []):
+                mark = "✓" if ev.get("availability") == "available" else "✗"
+                container.caption(f"{mark} {ev.get('name', '')}")
+
+
 @st.fragment(key="copy_to_clipboard_button")
 def copy_to_clipboard_button(content: str, role: str, idx: int):
     if st.button(
@@ -54,6 +78,83 @@ def copy_to_clipboard_button(content: str, role: str, idx: int):
     ):
         pyperclip.copy(content)
         st.toast(body="Copied to clipboard!", duration=1)
+
+def process_message(current_chat, text, effort):
+    current_chat["history"].append(
+        {"role": "user", "content": text, "progress": None}
+    )
+    with st.chat_message("user"):
+        st.markdown(text)
+    copy_to_clipboard_button(text, "user", len(current_chat['history']) - 1)
+
+    progress = st.status(label="Processing...", type="compact", state="running")
+
+    full_answer = ""
+    progress_stages = []
+    tool_results = []
+    evidence_report = None
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+
+        with requests.post(
+            API_URL,
+            json={
+                "user_id": st.session_state.user_id,
+                "role": current_chat["role"],
+                "effort": effort,
+                "message": str([{"role": item["role"], "content": item["content"]} for item in current_chat["history"]]),
+            },
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+
+            for chunk in response.iter_content(
+                chunk_size=None, decode_unicode=True
+            ):
+                if chunk:
+                    data = (
+                        json.loads(chunk.decode("utf-8"))
+                        if isinstance(chunk, bytes)
+                        else json.loads(chunk)
+                    )
+                    if data["type"] == "messages":
+                        full_answer = data["content"]
+                        placeholder.markdown(
+                            MARKER_RE.sub("_loading table…_", full_answer) + "▌"
+                        )
+                    elif data["type"] == "tool_results":
+                        tool_results = json.loads(data["content"])
+                    elif data["type"] == "evidence_report":
+                        evidence_report = json.loads(data["content"])
+                    elif data["type"] == "tool_progress":
+                        op = json.loads(data["content"])
+                        progress.caption(f"🛠 {op['operation']} — {op['status']}")
+                        if op["status"] in ("completed", "failed"):
+                            progress_stages.append(f"🛠 {op['operation']} — {op['status']}")
+                    elif data["type"] == "subgraph_name":
+                        progress.caption(f"Currently at stage: {data['content']}")
+                        progress_stages.append(f"Currently at stage: {data['content']}")
+                    elif data["type"] == "subgraph_message":
+                        progress.caption(f"Thinking: {data['content']}")
+                        progress_stages.append(f"Thinking: {data['content']}")
+                # time.sleep(0.1)  # Simulate processing time for better UX
+
+        progress.update(label="Done", state="complete")
+        placeholder.empty()
+        render_answer(st, full_answer, tool_results)
+        render_evidence_report(st, evidence_report)
+
+    current_chat["history"].append(
+        {
+            "role": "assistant",
+            "content": full_answer,
+            "progress": progress_stages,
+            "tool_results": tool_results,
+            "evidence_report": evidence_report,
+        }
+    )
+    copy_to_clipboard_button(full_answer, "assistant", len(current_chat['history']) - 1)
+
 
 def main_page():
     st.title("LangChain Chat Agent")
@@ -72,6 +173,7 @@ def main_page():
         with st.chat_message(item["role"]):
             if item["role"] == "assistant":
                 render_answer(st, item["content"], item.get("tool_results"))
+                render_evidence_report(st, item.get("evidence_report"))
             else:
                 st.markdown(item["content"])
         copy_to_clipboard_button(item['content'], item['role'], idx)
@@ -90,67 +192,4 @@ def main_page():
     )
 
     if message:
-        current_chat["history"].append(
-            {"role": "user", "content": message.text, "progress": None}
-        )
-        with st.chat_message("user"):
-            st.markdown(message.text)
-        copy_to_clipboard_button(message.text, "user", len(current_chat['history']) - 1)
-
-        progress = st.status(label="Processing...", type="compact", state="running")
-
-        full_answer = ""
-        progress_stages = []
-        tool_results = []
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-
-            with requests.post(
-                API_URL,
-                json={
-                    "user_id": st.session_state.user_id,
-                    "role": current_chat["role"],
-                    "effort": effort,
-                    "message": str([{"role": item["role"], "content": item["content"]} for item in current_chat["history"]]),
-                },
-                stream=True,
-            ) as response:
-                response.raise_for_status()
-
-                for chunk in response.iter_content(
-                    chunk_size=None, decode_unicode=True
-                ):
-                    if chunk:
-                        data = (
-                            json.loads(chunk.decode("utf-8"))
-                            if isinstance(chunk, bytes)
-                            else json.loads(chunk)
-                        )
-                        if data["type"] == "messages":
-                            full_answer = data["content"]
-                            placeholder.markdown(
-                                MARKER_RE.sub("_loading table…_", full_answer) + "▌"
-                            )
-                        elif data["type"] == "tool_results":
-                            tool_results = json.loads(data["content"])
-                        elif data["type"] == "subgraph_name":
-                            progress.caption(f"Currently at stage: {data['content']}")
-                            progress_stages.append(f"Currently at stage: {data['content']}")
-                        elif data["type"] == "subgraph_message":
-                            progress.caption(f"Thinking: {data['content']}")
-                            progress_stages.append(f"Thinking: {data['content']}")
-                    # time.sleep(0.1)  # Simulate processing time for better UX
-
-            progress.update(label="Done", state="complete")
-            placeholder.empty()
-            render_answer(st, full_answer, tool_results)
-
-        current_chat["history"].append(
-            {
-                "role": "assistant",
-                "content": full_answer,
-                "progress": progress_stages,
-                "tool_results": tool_results,
-            }
-        )
-        copy_to_clipboard_button(full_answer, "assistant", len(current_chat['history']) - 1)
+        process_message(current_chat, message.text, effort)

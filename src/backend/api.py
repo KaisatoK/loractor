@@ -6,6 +6,7 @@ import json
 from typing import Literal, TypedDict, cast
 from uuid import UUID
 from fastapi import FastAPI
+from langgraph.stream.transformers import CustomTransformer
 
 from backend.pipeline.graph import chatbot
 from backend.pipeline.schema.schemas import PipelineState
@@ -140,20 +141,36 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
             }
         },
         version="v3",
+        # `custom` is not registered by default; the class is a scope-aware
+        # factory, so it is cloned into every subgraph mini-mux. Tool progress
+        # events therefore surface on each subgraph handle's `.custom`.
+        transformers=[CustomTransformer],
     )
 
     last_answer = None
-    tool_results_sent = False
-    for name, item in run.interleave("messages", "values", "subgraphs"):
+    last_tool_results_json = None
+    last_evidence_report_json = None
+    for name, item in run.interleave("messages", "values", "subgraphs", "custom"):
         if name == "messages":
             print(f"@@@ API check @@@ name={name}: text={item[-1].text}")
         elif name == "values":
-            if not tool_results_sent and item.get("tool_results"):
-                yield {
-                    "type": "tool_results",
-                    "content": json.dumps(item["tool_results"]),
-                }
-                tool_results_sent = True
+            # Change detection (not a once-per-request flag): a follow-up turn
+            # re-emits the *previous* turn's persisted payloads in its first
+            # values event, then the fresh payload once find_evidence completes.
+            # Sending on every change means the UI's final payload is always the
+            # current turn's; the transient stale one is replaced before render.
+            tool_results = item.get("tool_results")
+            if tool_results:
+                payload = json.dumps(tool_results)
+                if payload != last_tool_results_json:
+                    yield {"type": "tool_results", "content": payload}
+                    last_tool_results_json = payload
+            report = item.get("evidence_report")
+            if report:
+                payload = json.dumps(report)
+                if payload != last_evidence_report_json:
+                    yield {"type": "evidence_report", "content": payload}
+                    last_evidence_report_json = payload
             answer = item.get("answer")
             if answer and answer != last_answer:
                 yield {"type": "messages", "content": answer}
@@ -163,9 +180,17 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
         elif name == "subgraphs":
             # print(f"@@@ API check @@@ name={name}: graph_name={item.graph_name}")
             yield {"type": "subgraph_name", "content": str(item.graph_name)}
-            for message in item.messages:
-                # print(f"@@@ API check @@@ name={name}: reasoning={message.reasoning}, text={message.text}")
-                yield {"type": "subgraph_message", "content": str(message.reasoning)}
+            for sub_name, sub_item in item.interleave("messages", "custom"):
+                if sub_name == "messages":
+                    # print(f"@@@ API check @@@ name={name}: reasoning={message.reasoning}, text={message.text}")
+                    yield {"type": "subgraph_message", "content": str(sub_item.reasoning)}
+                elif isinstance(sub_item, dict) and sub_item.get("type") == "tool_progress":
+                    yield {"type": "tool_progress", "content": json.dumps(sub_item)}
+        elif name == "custom":
+            # No root-scope custom producers today, but forward the same shape
+            # so a future node-level writer is surfaced without UI changes.
+            if isinstance(item, dict) and item.get("type") == "tool_progress":
+                yield {"type": "tool_progress", "content": json.dumps(item)}
 
 
 @app.post("/chat/test")

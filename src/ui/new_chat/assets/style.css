@@ -20,8 +20,10 @@
 
 #MainMenu,
 footer,
-[data-testid="stToolbar"],
-[data-testid="stDecoration"] {
+[data-testid="stDecoration"],
+[data-testid="stAppDeployButton"],
+[data-testid="stMainMenu"],
+[data-testid="stStatusWidget"] {
   display: none;
 }
 
