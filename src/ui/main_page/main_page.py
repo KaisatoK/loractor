@@ -246,3 +246,6 @@ def main_page():
 
     if message:
         process_message(current_chat, message.text, effort)
+        # Re-render from history so the new answer immediately gets its reframe
+        # buttons/caption (those are only emitted by the history loop above).
+        st.rerun()
