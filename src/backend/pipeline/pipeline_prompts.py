@@ -157,19 +157,25 @@ class PipelinePrompts:
             "No previous attempt exists.",
         )
 
+        # One result per block, newline-separated — deliberately NO pipe (`|`)
+        # separators: the catalog is shown to the model, and pipe-delimited
+        # lines primed it to emit stray markdown-table pipes in the answer.
         catalog_lines = []
         for record in state.get("tool_results", []) or []:
             rows = record.get("rows") or []
             columns = ", ".join(rows[0].keys()) if rows else ""
-            preview = " | ".join(
+            preview = " ; ".join(
                 "{" + ", ".join(f"{k}: {str(v)[:60]}" for k, v in row.items()) + "}"
                 for row in rows[:2]
             )
             catalog_lines.append(
-                f"- id: {record.get('id')} | marker: [[RESULT:{record.get('id')}]] | "
-                f"tool: {record.get('tool_name')} | "
-                f"args: {record.get('arguments')} | rows: {record.get('row_count')} | "
-                f"columns: {columns} | preview: {preview}"
+                f"- id: {record.get('id')}\n"
+                f"  marker: [[RESULT:{record.get('id')}]]\n"
+                f"  tool: {record.get('tool_name')}\n"
+                f"  args: {record.get('arguments')}\n"
+                f"  rows: {record.get('row_count')}\n"
+                f"  columns: {columns}\n"
+                f"  preview: {preview}"
             )
         tool_result_catalog = "\n".join(catalog_lines)
 
