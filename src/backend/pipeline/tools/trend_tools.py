@@ -26,11 +26,16 @@ def get_trend_tool(
     print(f"runtime: {runtime}")
     print("#########################################")
 
+    kind = {"pid": "pid", "service": "service", "event_id": "event id"}.get(type[0])
+    operation = f"get the {kind} trend for '{type[1]}'"
+    if category:
+        operation += f" by '{category}' severity"
+
     match type[0]:
         case "pid":
             return execute_database_tool(
                 runtime=runtime,
-                operation="get PID log trend",
+                operation=operation,
                 function=lambda: get_pid_trend_by_category(
                     start_time, end_time, int(type[1]), table_name, category
                 ),
@@ -38,7 +43,7 @@ def get_trend_tool(
         case "service":
             return execute_database_tool(
                 runtime=runtime,
-                operation="get service log trend",
+                operation=operation,
                 function=lambda: get_service_trend_by_category(
                     start_time, end_time, type[1], table_name, category
                 ),
@@ -46,7 +51,7 @@ def get_trend_tool(
         case "event_id":
             return execute_database_tool(
                 runtime=runtime,
-                operation="get event_id log trend",
+                operation=operation,
                 function=lambda: get_event_id_trend_by_category(
                     start_time, end_time, type[1], table_name, category
                 ),

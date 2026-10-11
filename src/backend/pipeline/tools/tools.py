@@ -25,9 +25,13 @@ def search_logs_tool(
     print(f"category: {category}")
     print("#########################################")
 
+    operation = f"search log messages for '{query_text}'"
+    if category:
+        operation += f" with severity '{category}'"
+
     return execute_database_tool(
         runtime=runtime,
-        operation="search log messages",
+        operation=operation,
         function=lambda: search_logs(query_text, table_name, category, limit),
     )
 
@@ -44,9 +48,12 @@ def top_in_category_by_service_tool(
     limit: int = 5,
 ) -> dict:
     """Rank services by log volume, optionally restricted to one severity."""
+    operation = "rank services by log volume"
+    if category:
+        operation += f" for '{category}' severity"
     return execute_database_tool(
         runtime=runtime,
-        operation="rank services by log volume",
+        operation=operation,
         function=lambda: top_in_category_by_service(
             start_time, end_time, table_name, category, limit
         ),
@@ -74,7 +81,7 @@ def compare_periods_tool(
     print("#########################################")
     return execute_database_tool(
         runtime=runtime,
-        operation="compare log periods",
+        operation="compare log volume across two time windows",
         function=lambda: compare_periods(
             baseline_start,
             baseline_end,

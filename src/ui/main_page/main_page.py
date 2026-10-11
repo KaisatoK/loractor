@@ -101,9 +101,15 @@ def process_message(current_chat, text, effort):
                         tool_results = json.loads(data["content"])
                     elif data["type"] == "tool_progress":
                         op = json.loads(data["content"])
-                        progress.caption(f"🛠 {op['operation']} — {op['status']}")
-                        if op["status"] in ("completed", "failed"):
-                            progress_stages.append(f"🛠 {op['operation']} — {op['status']}")
+                        action, status = op["operation"], op["status"]
+                        if status == "started":
+                            progress.caption(f"{action[0].upper()}{action[1:]}…")
+                        elif status == "completed":
+                            progress.caption(f"✓ {action}")
+                            progress_stages.append(f"✓ {action}")
+                        else:
+                            progress.caption(f"{action} — failed")
+                            progress_stages.append(f"{action} — failed")
                     elif data["type"] == "subgraph_name":
                         progress.caption(f"Currently at stage: {data['content']}")
                         progress_stages.append(f"Currently at stage: {data['content']}")
