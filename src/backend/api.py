@@ -8,7 +8,8 @@ from uuid import UUID
 from fastapi import FastAPI
 from langgraph.stream.transformers import CustomTransformer
 
-from backend.pipeline.graph import chatbot
+from backend.pipeline.agents import answer_agent
+from backend.pipeline.graph import chatbot, prompts
 from backend.pipeline.schema.schemas import PipelineState
 
 
@@ -22,6 +23,16 @@ class ChatRequest(TypedDict):
 class ChatResponse(TypedDict):
     type: str
     content: str
+
+
+class ReframeRequest(TypedDict):
+    user_id: UUID
+    target_role: Literal["engineer", "team_lead", "manager"]
+    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
+    question: str
+    previous_answer: str
+    evidence_report: dict
+    tool_results: list
 
 
 ROLE_OBJECTIVES: dict[str, str] = {
@@ -193,3 +204,32 @@ async def chat_test(req: ChatRequest) -> AsyncIterable[ChatResponse]:
     yield {"type": "subgraphs", "content": "retrieval"}
     yield {"type": "subgraphs", "content": "search"}
     yield {"type": "messages", "content": "can I help you?"}
+
+
+@app.post("/chat/reframe")
+async def chat_reframe(req: ReframeRequest) -> dict:
+    """Re-explain an already-completed investigation for another role.
+
+    Stateless one-shot: builds a synthetic prompt state from the supplied
+    evidence and invokes the answer agent once. No graph, no tools, no thread
+    or checkpointer involvement.
+    """
+    state = cast(
+        PipelineState,
+        {
+            "role": {
+                "name": req["target_role"],
+                "objective": ROLE_OBJECTIVES[req["target_role"]],
+            },
+            "effort": req["effort"],
+            "normalized": req["question"],
+            "evidence_report": req["evidence_report"],
+            "tool_results": req["tool_results"],
+            "revision_feedback": "No revision is required.",
+            "latest_answer": req["previous_answer"],
+        },
+    )
+    result = answer_agent.invoke(
+        {"messages": [{"role": "user", "content": prompts.reframe(state)}]}
+    )
+    return {"answer": result["messages"][-1].text}

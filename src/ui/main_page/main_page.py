@@ -6,6 +6,12 @@ import requests
 import streamlit as st
 
 API_URL = "http://localhost:8000/chat/stream"
+REFRAME_URL = "http://localhost:8000/chat/reframe"
+ROLE_LABELS = {
+    "engineer": "🛠 Engineer",
+    "team_lead": "👔 Team Lead",
+    "manager": "📊 Manager",
+}
 # Canonical marker is [[RESULT:R1]], but models sometimes emit variants such as
 # [RESULT:R1], 【RESULT:R1】, ［RESULT:R1］, or 【R1】 with CJK/fullwidth brackets.
 # Accept all of them so a table still renders and no raw marker leaks into the UI.
@@ -149,7 +155,77 @@ def main_page():
                     st.caption(stage)
         with st.chat_message(item["role"]):
             if item["role"] == "assistant":
+                if item.get("reframed_for"):
+                    st.caption(
+                        f"Reframed for {ROLE_LABELS[item['reframed_for']]} — "
+                        "same evidence, no new collection."
+                    )
                 render_answer(st, item["content"], item.get("tool_results"))
+                if item.get("tool_results"):
+                    for target in ROLE_LABELS:
+                        # Original answers offer only the other roles; a reframed
+                        # answer may be re-framed for any role (chaining is fine).
+                        if (
+                            target == current_chat["role"]
+                            and not item.get("reframed_for")
+                        ):
+                            continue
+                        if st.button(
+                            ROLE_LABELS[target],
+                            key=f"reframe_{target}_{idx}",
+                        ):
+                            question = next(
+                                (
+                                    h["content"]
+                                    for h in reversed(
+                                        current_chat["history"][:idx]
+                                    )
+                                    if h["role"] == "user"
+                                ),
+                                "",
+                            )
+                            try:
+                                with st.spinner(
+                                    f"Reframing for {ROLE_LABELS[target]}…"
+                                ):
+                                    resp = requests.post(
+                                        REFRAME_URL,
+                                        json={
+                                            "user_id": st.session_state.user_id,
+                                            "target_role": target,
+                                            "effort": st.session_state.get(
+                                                "effort", "Medium"
+                                            ),
+                                            "question": question,
+                                            "previous_answer": item["content"],
+                                            "evidence_report": item.get(
+                                                "evidence_report"
+                                            )
+                                            or {},
+                                            "tool_results": item.get("tool_results")
+                                            or [],
+                                        },
+                                        timeout=120,
+                                    )
+                                    resp.raise_for_status()
+                                    answer = resp.json()["answer"]
+                            except Exception as e:
+                                st.error(f"Reframe failed: {e}")
+                            else:
+                                current_chat["history"].append(
+                                    {
+                                        "role": "assistant",
+                                        "content": answer,
+                                        "progress": None,
+                                        "tool_results": item.get("tool_results")
+                                        or [],
+                                        "evidence_report": item.get(
+                                            "evidence_report"
+                                        ),
+                                        "reframed_for": target,
+                                    }
+                                )
+                                st.rerun()
             else:
                 st.markdown(item["content"])
         copy_to_clipboard_button(item['content'], item['role'], idx)
@@ -161,6 +237,7 @@ def main_page():
         ["Low", "Medium", "High", "Extreme", "Brutal"],
         index=1,
         help="Low: quick check — fewer tool calls, 1 hypothesis. Brutal: deepest investigation.",
+        key="effort",
     )
 
     message = col2.chat_input(

@@ -39,6 +39,16 @@ class PipelinePrompts:
         "evidence references, and confidence."
     )
 
+    REFRAME_INSTRUCTION = (
+        "This is a REFRAME of an already-completed investigation for a different role. "
+        "Re-explain the SAME findings for the target role's decision needs. "
+        "Base every claim exclusively on the provided evidence report and tool result "
+        "catalog. "
+        "Do not introduce new facts, causes, numbers, or impact that the evidence does "
+        "not support. "
+        "The marker rules apply unchanged: reuse only ids from the tool result catalog."
+    )
+
     def role_context(self, role: Role) -> str:
         return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
 
@@ -185,6 +195,17 @@ class PipelinePrompts:
             "<revision feedback>\n"
             f"{revision_feedback}\n"
             "</revision feedback>\n\n"
+        )
+
+    def reframe(self, state: PipelineState) -> str:
+        return (
+            f"{self.answer(state)}"
+            "<previous answer>\n"
+            f"{state.get('latest_answer', '')}\n"
+            "</previous answer>\n"
+            "<reframe instructions>\n"
+            f"{self.REFRAME_INSTRUCTION}\n"
+            "</reframe instructions>\n"
         )
 
     # def confidence_request(self, state: PipelineState) -> ClassifierRequest:
