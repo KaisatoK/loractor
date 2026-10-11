@@ -166,12 +166,13 @@ def main_page():
                     # originals use the chat's role, reframed items their target.
                     own_role = item.get("reframed_for") or current_chat["role"]
                     targets = [t for t in ROLE_LABELS if t != own_role]
-                    cols = st.columns(len(targets))
-                    for col, target in zip(cols, targets):
-                        with col:
+                    # Left-aligned, tightly packed buttons (not full-width columns).
+                    with st.container(horizontal=True, horizontal_alignment="left"):
+                        for target in targets:
                             if st.button(
                                 ROLE_LABELS[target],
                                 key=f"reframe_{target}_{idx}",
+                                width="content",
                             ):
                                 question = next(
                                     (
