@@ -198,10 +198,6 @@ def main_page():
                                                 ),
                                                 "question": question,
                                                 "previous_answer": item["content"],
-                                                "evidence_report": item.get(
-                                                    "evidence_report"
-                                                )
-                                                or {},
                                                 "tool_results": item.get(
                                                     "tool_results"
                                                 )
@@ -221,9 +217,6 @@ def main_page():
                                             "progress": None,
                                             "tool_results": item.get("tool_results")
                                             or [],
-                                            "evidence_report": item.get(
-                                                "evidence_report"
-                                            ),
                                             "reframed_for": target,
                                         }
                                     )

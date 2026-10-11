@@ -31,7 +31,6 @@ class ReframeRequest(TypedDict):
     effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
     question: str
     previous_answer: str
-    evidence_report: dict
     tool_results: list
 
 
@@ -223,7 +222,7 @@ async def chat_reframe(req: ReframeRequest) -> dict:
             },
             "effort": req["effort"],
             "normalized": req["question"],
-            "evidence_report": req["evidence_report"],
+            "evidence_report": {},
             "tool_results": req["tool_results"],
             "revision_feedback": "No revision is required.",
             "latest_answer": req["previous_answer"],
