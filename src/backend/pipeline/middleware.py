@@ -4,7 +4,6 @@ import logging
 from collections.abc import Callable
 
 from langchain.agents.middleware import (
-    ModelRequest,
     ModelResponse,
     wrap_model_call,
     wrap_tool_call,

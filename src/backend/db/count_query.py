@@ -15,7 +15,9 @@ def count_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str]]:
-    logger.debug("Counting for category %s from %s to %s", category, start_time, end_time)
+    logger.debug(
+        "Counting for category %s from %s to %s", category, start_time, end_time
+    )
 
     query = sql.SQL("""
         SELECT category, COUNT(*) AS count
@@ -41,7 +43,9 @@ def count_pid_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str]]:
-    logger.debug("Counting pid for category %s from %s to %s", category, start_time, end_time)
+    logger.debug(
+        "Counting pid for category %s from %s to %s", category, start_time, end_time
+    )
 
     query = sql.SQL("""
         SELECT pid, category, COUNT(*) AS count
@@ -67,7 +71,9 @@ def count_service_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str]]:
-    logger.debug("Counting service for category %s from %s to %s", category, start_time, end_time)
+    logger.debug(
+        "Counting service for category %s from %s to %s", category, start_time, end_time
+    )
 
     query = sql.SQL("""
         SELECT service, category, COUNT(*) AS count
@@ -93,7 +99,12 @@ def count_event_id_by_category(
     table_name: str = TABLE_NAME,
     category: str | None = None,
 ) -> tuple[sql.Composable, list[str]]:
-    logger.debug("Counting event_id for category %s from %s to %s", category, start_time, end_time)
+    logger.debug(
+        "Counting event_id for category %s from %s to %s",
+        category,
+        start_time,
+        end_time,
+    )
 
     query = sql.SQL("""
         SELECT event_id, category, COUNT(*) AS count

@@ -25,11 +25,13 @@ def collect_tool_results(messages) -> list[dict]:
         if not data:
             continue
         name, args = calls.get(m.tool_call_id, (None, None))
-        records.append({
-            "id": f"R{len(records) + 1}",
-            "tool_name": name,
-            "arguments": args,
-            "row_count": len(data),
-            "rows": data[:MAX_RESULT_ROWS],
-        })
+        records.append(
+            {
+                "id": f"R{len(records) + 1}",
+                "tool_name": name,
+                "arguments": args,
+                "row_count": len(data),
+                "rows": data[:MAX_RESULT_ROWS],
+            }
+        )
     return records

@@ -115,14 +115,10 @@ class PipelinePrompts:
             latest_answer = state.get("latest_answer", "")
             if latest_answer:
                 prompt += (
-                    "<previous answer>\n"
-                    f"{latest_answer}\n"
-                    "</previous answer>\n"
+                    "<previous answer>\n" f"{latest_answer}\n" "</previous answer>\n"
                 )
             prompt += (
-                "<new message>\n"
-                f"{state['latest_message']}\n"
-                "</new message>\n"
+                "<new message>\n" f"{state['latest_message']}\n" "</new message>\n"
             )
             return prompt
 

@@ -20,9 +20,7 @@ def copy_to_clipboard_button(content: str, role: str, idx: int):
 
 
 def process_message(current_chat, text, effort):
-    current_chat["history"].append(
-        {"role": "user", "content": text, "progress": None}
-    )
+    current_chat["history"].append({"role": "user", "content": text, "progress": None})
     with st.chat_message("user"):
         st.markdown(text)
     copy_to_clipboard_button(text, "user", len(current_chat["history"]) - 1)
@@ -125,9 +123,7 @@ def main_page():
                                 question = next(
                                     (
                                         h["content"]
-                                        for h in reversed(
-                                            current_chat["history"][:idx]
-                                        )
+                                        for h in reversed(current_chat["history"][:idx])
                                         if h["role"] == "user"
                                     ),
                                     "",
@@ -143,8 +139,7 @@ def main_page():
                                             ),
                                             question=question,
                                             previous_answer=item["content"],
-                                            tool_results=item.get("tool_results")
-                                            or [],
+                                            tool_results=item.get("tool_results") or [],
                                         )
                                 except Exception as e:
                                     st.error(f"Reframe failed: {e}")

@@ -119,8 +119,14 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
             yield {"type": "subgraph_name", "content": str(item.graph_name)}
             for sub_name, sub_item in item.interleave("messages", "custom"):
                 if sub_name == "messages":
-                    yield {"type": "subgraph_message", "content": str(sub_item.reasoning)}
-                elif isinstance(sub_item, dict) and sub_item.get("type") == "tool_progress":
+                    yield {
+                        "type": "subgraph_message",
+                        "content": str(sub_item.reasoning),
+                    }
+                elif (
+                    isinstance(sub_item, dict)
+                    and sub_item.get("type") == "tool_progress"
+                ):
                     yield {"type": "tool_progress", "content": json.dumps(sub_item)}
         elif name == "custom":
             # No root-scope custom producers today, but forward the same shape

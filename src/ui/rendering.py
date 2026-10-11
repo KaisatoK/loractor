@@ -7,9 +7,7 @@ import pandas as pd
 # Canonical marker is [[RESULT:R1]], but models sometimes emit variants such as
 # [RESULT:R1], 【RESULT:R1】, ［RESULT:R1］, or 【R1】 with CJK/fullwidth brackets.
 # Accept all of them so a table still renders and no raw marker leaks into the UI.
-MARKER_RE = re.compile(
-    r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}"
-)
+MARKER_RE = re.compile(r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}")
 # Sentence/clause punctuation that belongs to the text preceding a marker.
 TRAILING_PUNCT = ".,;:!?"
 

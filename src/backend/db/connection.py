@@ -2,14 +2,13 @@
 
 import functools
 import logging
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from typing import ParamSpec
-
 import psycopg2
+
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
-
+from collections.abc import Callable
+from contextlib import contextmanager
+from typing import Generator, ParamSpec
 from backend.db.config import SERENEDB_PORT
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ def get_conn():
 
 
 @contextmanager
-def db_cursor() -> Iterator[RealDictCursor]:
+def db_cursor() -> Generator[str, None, None]:
     conn = get_conn()
     cur = None
 

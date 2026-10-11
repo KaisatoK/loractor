@@ -35,7 +35,9 @@ def count_by_category_tool(
         case "service":
             return execute_database_tool(
                 runtime=runtime,
-                operation=f"count services {sev}" if sev else "count services by severity",
+                operation=(
+                    f"count services {sev}" if sev else "count services by severity"
+                ),
                 function=lambda: count_service_by_category(
                     start_time, end_time, table_name, category
                 ),
