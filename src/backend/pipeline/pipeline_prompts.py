@@ -1,7 +1,17 @@
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 
+from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.schema.schemas import PipelineState, Role
 from backend.pipeline.utils import LOG_SCHEMA
+
+
+ANSWER_EFFORT_NOTES = {
+    "Low": "Be brief: lead with the verdict, keep it under ~150 words, at most one table, skip caveats unless critical.",
+    "Medium": "Balanced: key findings with brief evidence references, at most two tables, short next steps.",
+    "High": "Thorough: full role structure, evidence references, a timeline if relevant, explicit limitations.",
+    "Extreme": "Exhaustive: every material finding, per-hypothesis status, limitations, and confidence per claim.",
+    "Brutal": "Maximum depth: everything from Extreme plus alternative explanations considered and ruled out, and explicit uncertainty bounds.",
+}
 
 
 def normalized_is_usable(previous: object) -> bool:
@@ -106,11 +116,17 @@ class PipelinePrompts:
         revision_feedback = state.get(
             "revision_feedback", "No previous attempt exists."
         )
+        spec = get_effort_spec(state.get("effort"))
 
         return (
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
+            "<effort guidance>\n"
+            f"Effort level: {state.get('effort', 'Medium')}.\n"
+            f"Tool-call budget: at most {spec.max_tool_calls} tool calls (hard limit).\n"
+            f"Hypothesis budget: define at most {spec.max_hypotheses} hypotheses (never more than 3).\n"
+            "</effort guidance>\n"
             "<request>\n"
             f"{state['normalized']}\n"
             "</request>\n"
@@ -154,6 +170,9 @@ class PipelinePrompts:
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
+            "<effort guidance>\n"
+            f"Depth guidance: {ANSWER_EFFORT_NOTES.get(state.get('effort', 'Medium'), ANSWER_EFFORT_NOTES['Medium'])}\n"
+            "</effort guidance>\n"
             "<request>\n"
             f"{state['normalized']}\n"
             "</request>\n"

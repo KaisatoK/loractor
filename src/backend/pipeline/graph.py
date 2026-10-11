@@ -6,10 +6,11 @@ from langgraph.graph import END, StateGraph
 from backend.pipeline.agents import (
     answer_agent,
     evidence_report_agent,
-    find_evidence_agent,
     general_agent,
+    get_find_evidence_agent,
     normalize_agent,
 )
+from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.pipeline_prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.schema.schemas import PipelineState
 from backend.pipeline.utils import collect_tool_results
@@ -18,8 +19,6 @@ from backend.pipeline.utils import collect_tool_results
 
 prompts = PipelinePrompts()
 SCOPE_CONFIDENCE_THRESHOLD = 0.64
-ANSWER_CONFIDENCE_THRESHOLD = [0.5, 0.6, 0.7, 0.75, 0.9]
-MAXIMUM_ITERATIONS = [5, 10, 15, 20, 25]
 
 def normalize_node(state: PipelineState) -> PipelineState:
     prompt = prompts.normalize(state)
@@ -87,7 +86,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     #         }
     #     )
 
-    result = find_evidence_agent.invoke(
+    result = get_find_evidence_agent(state.get("effort")).invoke(
         {
             "messages": [
                 {"role": "user", "content": prompts.find_evidence(state)},
@@ -179,6 +178,10 @@ def confidence_node(state: PipelineState) -> PipelineState:
     #     },
     #     "revision_feedback": revision_feedback,
     # }
+    # When enabled, gate on the effort spec:
+    # spec = get_effort_spec(state["effort"])
+    # accept = pass_probability >= spec.answer_confidence_threshold
+    # loop again only while iteration_count < spec.max_iterations
     return {
         **state,
         "confidence": {

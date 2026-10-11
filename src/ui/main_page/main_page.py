@@ -79,7 +79,10 @@ def main_page():
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 
     effort = col1.selectbox(
-        "Effort Level", ["Low", "Medium", "High", "Extreme", "Brutal"], index=1
+        "Effort Level",
+        ["Low", "Medium", "High", "Extreme", "Brutal"],
+        index=1,
+        help="Low: quick check — fewer tool calls, 1 hypothesis. Brutal: deepest investigation.",
     )
 
     message = col2.chat_input(
