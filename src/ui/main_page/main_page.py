@@ -162,70 +162,71 @@ def main_page():
                     )
                 render_answer(st, item["content"], item.get("tool_results"))
                 if item.get("tool_results"):
-                    for target in ROLE_LABELS:
-                        # Original answers offer only the other roles; a reframed
-                        # answer may be re-framed for any role (chaining is fine).
-                        if (
-                            target == current_chat["role"]
-                            and not item.get("reframed_for")
-                        ):
-                            continue
-                        if st.button(
-                            ROLE_LABELS[target],
-                            key=f"reframe_{target}_{idx}",
-                        ):
-                            question = next(
-                                (
-                                    h["content"]
-                                    for h in reversed(
-                                        current_chat["history"][:idx]
-                                    )
-                                    if h["role"] == "user"
-                                ),
-                                "",
-                            )
-                            try:
-                                with st.spinner(
-                                    f"Reframing for {ROLE_LABELS[target]}…"
-                                ):
-                                    resp = requests.post(
-                                        REFRAME_URL,
-                                        json={
-                                            "user_id": st.session_state.user_id,
-                                            "target_role": target,
-                                            "effort": st.session_state.get(
-                                                "effort", "Medium"
-                                            ),
-                                            "question": question,
-                                            "previous_answer": item["content"],
-                                            "evidence_report": item.get(
-                                                "evidence_report"
-                                            )
-                                            or {},
+                    # Never offer the role the answer is already written for:
+                    # originals use the chat's role, reframed items their target.
+                    own_role = item.get("reframed_for") or current_chat["role"]
+                    targets = [t for t in ROLE_LABELS if t != own_role]
+                    cols = st.columns(len(targets))
+                    for col, target in zip(cols, targets):
+                        with col:
+                            if st.button(
+                                ROLE_LABELS[target],
+                                key=f"reframe_{target}_{idx}",
+                            ):
+                                question = next(
+                                    (
+                                        h["content"]
+                                        for h in reversed(
+                                            current_chat["history"][:idx]
+                                        )
+                                        if h["role"] == "user"
+                                    ),
+                                    "",
+                                )
+                                try:
+                                    with st.spinner(
+                                        f"Reframing for {ROLE_LABELS[target]}…"
+                                    ):
+                                        resp = requests.post(
+                                            REFRAME_URL,
+                                            json={
+                                                "user_id": st.session_state.user_id,
+                                                "target_role": target,
+                                                "effort": st.session_state.get(
+                                                    "effort", "Medium"
+                                                ),
+                                                "question": question,
+                                                "previous_answer": item["content"],
+                                                "evidence_report": item.get(
+                                                    "evidence_report"
+                                                )
+                                                or {},
+                                                "tool_results": item.get(
+                                                    "tool_results"
+                                                )
+                                                or [],
+                                            },
+                                            timeout=120,
+                                        )
+                                        resp.raise_for_status()
+                                        answer = resp.json()["answer"]
+                                except Exception as e:
+                                    st.error(f"Reframe failed: {e}")
+                                else:
+                                    current_chat["history"].append(
+                                        {
+                                            "role": "assistant",
+                                            "content": answer,
+                                            "progress": None,
                                             "tool_results": item.get("tool_results")
                                             or [],
-                                        },
-                                        timeout=120,
+                                            "evidence_report": item.get(
+                                                "evidence_report"
+                                            ),
+                                            "reframed_for": target,
+                                        }
                                     )
-                                    resp.raise_for_status()
-                                    answer = resp.json()["answer"]
-                            except Exception as e:
-                                st.error(f"Reframe failed: {e}")
-                            else:
-                                current_chat["history"].append(
-                                    {
-                                        "role": "assistant",
-                                        "content": answer,
-                                        "progress": None,
-                                        "tool_results": item.get("tool_results")
-                                        or [],
-                                        "evidence_report": item.get(
-                                            "evidence_report"
-                                        ),
-                                        "reframed_for": target,
-                                    }
-                                )
-                                st.rerun()
+                                    st.rerun()
             else:
                 st.markdown(item["content"])
         copy_to_clipboard_button(item['content'], item['role'], idx)
