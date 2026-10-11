@@ -5,7 +5,6 @@ from backend.pipeline.schema.schemas import EvidenceReport
 from backend.pipeline.system_prompts import EVIDENCE_REPORT_SYSTEM_PROMPT
 from backend.pipeline.utils import make_error_middleware
 
-
 evidence_report_agent = create_agent(
     model=gemini_3_7_flash,
     response_format=EvidenceReport,

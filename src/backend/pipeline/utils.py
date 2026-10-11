@@ -1,7 +1,6 @@
 import json
 import logging
 import jsonref
-import time
 
 from collections.abc import Callable
 from pathlib import Path
@@ -77,6 +76,7 @@ USER_MESSAGES = {
     "unknown": f"The model failed to process the request after {MAX_MODEL_RETRIES} attempts. Please try again.",
 }
 
+
 def _classify(err: Exception) -> str | None:
     s = str(err).lower()
     if "rate limit" in s:
@@ -87,18 +87,20 @@ def _classify(err: Exception) -> str | None:
         return "connection"
     return "unknown"
 
+
 def make_error_middleware(fallback_factory=None):
     @wrap_model_call
     def middleware(request, handler):
         try:
             return handler(request)
         except Exception as e:
-            kind = _classify(e) 
+            kind = _classify(e)
             msg = USER_MESSAGES[kind] + f" (Error: {e})"
             return ModelResponse(
                 result=[AIMessage(content=msg)],
                 structured_response=fallback_factory(msg) if fallback_factory else None,
             )
+
     return middleware
 
 
@@ -197,11 +199,13 @@ def collect_tool_results(messages) -> list[dict]:
         if not data:
             continue
         name, args = calls.get(m.tool_call_id, (None, None))
-        records.append({
-            "id": f"R{len(records) + 1}",
-            "tool_name": name,
-            "arguments": args,
-            "row_count": len(data),
-            "rows": data[:MAX_RESULT_ROWS],
-        })
+        records.append(
+            {
+                "id": f"R{len(records) + 1}",
+                "tool_name": name,
+                "arguments": args,
+                "row_count": len(data),
+                "rows": data[:MAX_RESULT_ROWS],
+            }
+        )
     return records

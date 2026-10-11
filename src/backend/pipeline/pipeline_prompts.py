@@ -4,7 +4,6 @@ from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.schema.schemas import PipelineState, Role
 from backend.pipeline.utils import LOG_SCHEMA
 
-
 ANSWER_EFFORT_NOTES = {
     "Low": "Be brief: lead with the verdict, keep it under ~150 words, at most one table, skip caveats unless critical.",
     "Medium": "Balanced: key findings with brief evidence references, at most two tables, short next steps.",
@@ -108,14 +107,10 @@ class PipelinePrompts:
             latest_answer = state.get("latest_answer", "")
             if latest_answer:
                 prompt += (
-                    "<previous answer>\n"
-                    f"{latest_answer}\n"
-                    "</previous answer>\n"
+                    "<previous answer>\n" f"{latest_answer}\n" "</previous answer>\n"
                 )
             prompt += (
-                "<new message>\n"
-                f"{state['latest_message']}\n"
-                "</new message>\n"
+                "<new message>\n" f"{state['latest_message']}\n" "</new message>\n"
             )
             return prompt
 

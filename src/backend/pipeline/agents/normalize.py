@@ -5,7 +5,6 @@ from backend.pipeline.schema.schemas import NormalizedOutput
 from backend.pipeline.system_prompts import NORMALIZE_SYSTEM_PROMPT
 from backend.pipeline.utils import make_error_middleware
 
-
 normalize_agent = create_agent(
     model=groq_gpt_oss_20b,
     response_format=NormalizedOutput,

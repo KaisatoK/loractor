@@ -10,7 +10,6 @@ from backend.pipeline.agents import (
     get_find_evidence_agent,
     normalize_agent,
 )
-from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.pipeline_prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.schema.schemas import PipelineState
 from backend.pipeline.utils import collect_tool_results
@@ -19,6 +18,7 @@ from backend.pipeline.utils import collect_tool_results
 
 prompts = PipelinePrompts()
 SCOPE_CONFIDENCE_THRESHOLD = 0.64
+
 
 def normalize_node(state: PipelineState) -> PipelineState:
     prompt = prompts.normalize(state)
@@ -38,8 +38,6 @@ def normalize_node(state: PipelineState) -> PipelineState:
         return {**state, "normalized": previous}
 
     return {**state, "normalized": normalized}
-
-    
 
 
 def scope_node(state: PipelineState) -> PipelineState:
@@ -125,6 +123,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
         "tool_results": tool_results,
         "answer": "",
     }
+
 
 def answer_node(state: PipelineState) -> PipelineState:
     result = answer_agent.invoke(

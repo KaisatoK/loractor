@@ -26,34 +26,42 @@ def count_by_category_tool(
     sev = f"by '{category}' severity" if category else None
 
     match type:
-        case "pid": return execute_database_tool(
-            runtime=runtime,
-            operation=f"count pids {sev}" if sev else "count pids by severity",
-            function=lambda: count_pid_by_category(
-                start_time, end_time, table_name, category
-            ),
-        )
-        case "service": return execute_database_tool(
-            runtime=runtime,
-            operation=f"count services {sev}" if sev else "count services by severity",
-            function=lambda: count_service_by_category(
-                start_time, end_time, table_name, category
-            ),
-        )
-        case "event_id": return execute_database_tool(
-            runtime=runtime,
-            operation=(
-                f"count event ids {sev}" if sev else "count event ids by severity"
-            ),
-            function=lambda: count_event_id_by_category(
-                start_time, end_time, table_name, category
-            ),
-        )
-        case "general": return execute_database_tool(
-            runtime=runtime,
-            operation=f"count log {sev}" if sev else "count logs by severity",
-            function=lambda: count_by_category(start_time, end_time, table_name, category),
-        )
+        case "pid":
+            return execute_database_tool(
+                runtime=runtime,
+                operation=f"count pids {sev}" if sev else "count pids by severity",
+                function=lambda: count_pid_by_category(
+                    start_time, end_time, table_name, category
+                ),
+            )
+        case "service":
+            return execute_database_tool(
+                runtime=runtime,
+                operation=(
+                    f"count services {sev}" if sev else "count services by severity"
+                ),
+                function=lambda: count_service_by_category(
+                    start_time, end_time, table_name, category
+                ),
+            )
+        case "event_id":
+            return execute_database_tool(
+                runtime=runtime,
+                operation=(
+                    f"count event ids {sev}" if sev else "count event ids by severity"
+                ),
+                function=lambda: count_event_id_by_category(
+                    start_time, end_time, table_name, category
+                ),
+            )
+        case "general":
+            return execute_database_tool(
+                runtime=runtime,
+                operation=f"count log {sev}" if sev else "count logs by severity",
+                function=lambda: count_by_category(
+                    start_time, end_time, table_name, category
+                ),
+            )
 
 
 # @tool("count_pid_by_category", args_schema=CountByCategory)

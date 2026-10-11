@@ -21,8 +21,8 @@ NORMALIZE_SYSTEM_PROMPT = (
     "message.\n"
     "2. Add new facts found only in the new message.\n"
     "3. Rewrite the newest question as a concise, self-contained question.\n"
-    "4. Resolve references (such as \"it\", \"those errors\", \"the WARNING "
-    "ones\", \"same window\", \"the second one you listed\") against the "
+    '4. Resolve references (such as "it", "those errors", "the WARNING '
+    'ones", "same window", "the second one you listed") against the '
     "accumulated context so the rewritten question stands alone.\n"
     "5. Drop context that no longer affects the answer; keep the context "
     "focused on what the newest question needs.\n"

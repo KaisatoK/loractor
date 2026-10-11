@@ -15,9 +15,7 @@ ROLE_LABELS = {
 # Canonical marker is [[RESULT:R1]], but models sometimes emit variants such as
 # [RESULT:R1], 【RESULT:R1】, ［RESULT:R1］, or 【R1】 with CJK/fullwidth brackets.
 # Accept all of them so a table still renders and no raw marker leaks into the UI.
-MARKER_RE = re.compile(
-    r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}"
-)
+MARKER_RE = re.compile(r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}")
 # Sentence/clause punctuation that belongs to the text preceding a marker.
 TRAILING_PUNCT = ".,;:!?"
 
@@ -61,13 +59,12 @@ def copy_to_clipboard_button(content: str, role: str, idx: int):
         pyperclip.copy(content)
         st.toast(body="Copied to clipboard!", duration=1)
 
+
 def process_message(current_chat, text, effort):
-    current_chat["history"].append(
-        {"role": "user", "content": text, "progress": None}
-    )
+    current_chat["history"].append({"role": "user", "content": text, "progress": None})
     with st.chat_message("user"):
         st.markdown(text)
-    copy_to_clipboard_button(text, "user", len(current_chat['history']) - 1)
+    copy_to_clipboard_button(text, "user", len(current_chat["history"]) - 1)
 
     progress = st.status(label="Processing...", type="compact", state="running")
 
@@ -83,15 +80,18 @@ def process_message(current_chat, text, effort):
                 "user_id": st.session_state.user_id,
                 "role": current_chat["role"],
                 "effort": effort,
-                "message": str([{"role": item["role"], "content": item["content"]} for item in current_chat["history"]]),
+                "message": str(
+                    [
+                        {"role": item["role"], "content": item["content"]}
+                        for item in current_chat["history"]
+                    ]
+                ),
             },
             stream=True,
         ) as response:
             response.raise_for_status()
 
-            for chunk in response.iter_content(
-                chunk_size=None, decode_unicode=True
-            ):
+            for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
                 if chunk:
                     data = (
                         json.loads(chunk.decode("utf-8"))
@@ -136,7 +136,7 @@ def process_message(current_chat, text, effort):
             "tool_results": tool_results,
         }
     )
-    copy_to_clipboard_button(full_answer, "assistant", len(current_chat['history']) - 1)
+    copy_to_clipboard_button(full_answer, "assistant", len(current_chat["history"]) - 1)
 
 
 def main_page():
@@ -177,9 +177,7 @@ def main_page():
                                 question = next(
                                     (
                                         h["content"]
-                                        for h in reversed(
-                                            current_chat["history"][:idx]
-                                        )
+                                        for h in reversed(current_chat["history"][:idx])
                                         if h["role"] == "user"
                                     ),
                                     "",
@@ -198,9 +196,7 @@ def main_page():
                                                 ),
                                                 "question": question,
                                                 "previous_answer": item["content"],
-                                                "tool_results": item.get(
-                                                    "tool_results"
-                                                )
+                                                "tool_results": item.get("tool_results")
                                                 or [],
                                             },
                                             timeout=120,
@@ -223,7 +219,7 @@ def main_page():
                                     st.rerun()
             else:
                 st.markdown(item["content"])
-        copy_to_clipboard_button(item['content'], item['role'], idx)
+        copy_to_clipboard_button(item["content"], item["role"], idx)
 
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 

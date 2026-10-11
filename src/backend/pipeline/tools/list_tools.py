@@ -22,21 +22,25 @@ def get_data_tool(
     print("#########################################")
 
     match type:
-        case "pid": return execute_database_tool(
-            runtime=runtime,
-            operation="list the known pids",
-            function=lambda: get_pids(table_name),
-        )
-        case "service": return execute_database_tool(
-            runtime=runtime,
-            operation="list the known services",
-            function=lambda: get_services(table_name),
-        )
-        case "event_id": return execute_database_tool(
-            runtime=runtime,
-            operation="list the known event ids",
-            function=lambda: get_event_ids(table_name),
-        )
+        case "pid":
+            return execute_database_tool(
+                runtime=runtime,
+                operation="list the known pids",
+                function=lambda: get_pids(table_name),
+            )
+        case "service":
+            return execute_database_tool(
+                runtime=runtime,
+                operation="list the known services",
+                function=lambda: get_services(table_name),
+            )
+        case "event_id":
+            return execute_database_tool(
+                runtime=runtime,
+                operation="list the known event ids",
+                function=lambda: get_event_ids(table_name),
+            )
+
 
 # @tool("get_pids", args_schema=GetTools)
 # def get_pids_tool(

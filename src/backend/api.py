@@ -81,7 +81,7 @@ def _parse_history(message: str) -> list[dict[str, str]]:
     """
     try:
         parsed = ast.literal_eval(message)
-    except (ValueError, SyntaxError):
+    except ValueError, SyntaxError:
         return [{"role": "user", "content": message}]
 
     if not isinstance(parsed, list):
@@ -186,8 +186,14 @@ async def chat_stream(req: ChatRequest) -> AsyncIterable[ChatResponse]:
             for sub_name, sub_item in item.interleave("messages", "custom"):
                 if sub_name == "messages":
                     # print(f"@@@ API check @@@ name={name}: reasoning={message.reasoning}, text={message.text}")
-                    yield {"type": "subgraph_message", "content": str(sub_item.reasoning)}
-                elif isinstance(sub_item, dict) and sub_item.get("type") == "tool_progress":
+                    yield {
+                        "type": "subgraph_message",
+                        "content": str(sub_item.reasoning),
+                    }
+                elif (
+                    isinstance(sub_item, dict)
+                    and sub_item.get("type") == "tool_progress"
+                ):
                     yield {"type": "tool_progress", "content": json.dumps(sub_item)}
         elif name == "custom":
             # No root-scope custom producers today, but forward the same shape

@@ -5,7 +5,6 @@ from backend.pipeline.tools.schemas import GetTrend
 from backend.pipeline.utils import TABLE_NAME, execute_database_tool
 
 
-
 @tool(args_schema=GetTrend)
 def get_trend_tool(
     runtime: ToolRuntime,
@@ -58,13 +57,6 @@ def get_trend_tool(
             )
         case _:
             raise ValueError("Invalid type provided")
-    # return execute_database_tool(
-    #     runtime=runtime,
-    #     operation="get PID log trend",
-    #     function=lambda: get_pid_trend_by_category(
-    #         start_time, end_time, pid, table_name, category
-    #     ),
-    # )
 
 
 # @tool("get_service_trend", args_schema=GetTrendService)

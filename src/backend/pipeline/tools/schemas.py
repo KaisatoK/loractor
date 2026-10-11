@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 DATETIME_REGEX = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
 TABLE_NAME = "log"
 
+
 class CountByCategory(BaseModel):
     start_time: Annotated[
         str,
@@ -58,10 +59,10 @@ class GetTrend(BaseModel):
     table_name: str = TABLE_NAME
     category: str | None = None
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def check_duration(self) -> Self:
         if self.end_time <= self.start_time:
-            raise ValueError('end_time must be after start_time')
+            raise ValueError("end_time must be after start_time")
         return self
 
 
