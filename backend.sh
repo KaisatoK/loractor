@@ -8,7 +8,9 @@ fi
 PORT="${PORT:-8000}"
 
 if command -v uv &> /dev/null; then
+    uv run python -m backend.appdb.manage abc 12345678
     uv run uvicorn backend.api:app --port "$PORT" --reload
 else
+    python -m backend.appdb.manage abc 12345678
     uvicorn backend.api:app --port "$PORT" --reload
 fi
