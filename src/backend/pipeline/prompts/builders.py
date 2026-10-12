@@ -1,9 +1,10 @@
 """State-dependent prompt builders used by the pipeline nodes.
 
 ``PipelinePrompts`` renders the per-stage prompts from ``PipelineState``. The
-TypeSafe classifier question builders (``scope_question``, ``pass_question``,
-``next_state_question``, ``revision_reason_question``) are retained for the
-scope/confidence routers, which are currently documented stubs in ``graph.py``.
+TypeSafe classifier question builders (``needs_clarification_question``,
+``route_question``, ``pass_question``, ``next_state_question``,
+``revision_reason_question``, ``worth_follow_up_question``) back the scope and
+confidence routers wired up in ``graph.py``.
 """
 
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
@@ -66,38 +67,109 @@ class PipelinePrompts:
                 "database_schema": LOG_SCHEMA,
             },
             "questions": {
-                "route": self.scope_question(),
+                "needs_clarification": self.needs_clarification_question(),
+                "route": self.route_question(),
             },
         }
 
-    def scope_question(self) -> Noul:
+    def needs_clarification_question(self) -> Noul:
+        return Noul(
+            instructions=(
+                "Decide whether producing a useful response or beginning a meaningful "
+                "investigation requires more information from the user. "
+                "Use the full conversation to interpret follow-up questions and "
+                "references to earlier messages."
+            ),
+            criteria=NoulCriteria(
+                true=(
+                    "The request is too ambiguous or underspecified to answer or "
+                    "investigate now; ask the user to clarify."
+                ),
+                false=(
+                    "The request is specific enough to answer or investigate now "
+                    "without asking the user for more information."
+                ),
+            ),
+        )
+
+    def route_question(self) -> Choice:
         return Choice(
             instructions=(
-                "Classify the user's latest request based on whether it concerns "
-                "log investigation and whether answering it requires retrieving "
-                "new evidence from the log database. "
+                "Assuming the request can be answered or investigated without asking "
+                "the user for more information, choose the action that answers it. "
                 "Use the full conversation to interpret follow-up questions and "
                 "references to earlier messages."
             ),
             criteria={
-                "irrelevant": (
-                    "The user's request is unrelated to log investigation. This includes "
-                    "general conversation, unrelated technical questions, and requests "
-                    "that do not involve examining or reasoning about logs."
+                "general": (
+                    "Respond directly as a general assistant. The request is unrelated "
+                    "to log investigation: greetings, small talk, questions about what "
+                    "the assistant can do, or unrelated technical questions."
                 ),
-                "resolved": (
-                    "The user's request concerns log investigation, but it can be answered "
-                    "without retrieving new log evidence. The necessary evidence is already "
-                    "available in the conversation, or the request asks for an explanation, "
-                    "summary, interpretation, or next step based on existing information."
+                "direct_answer": (
+                    "Answer without retrieving new log evidence. The request concerns "
+                    "log investigation but the needed evidence is already available in "
+                    "the conversation, or it asks for an explanation, summary, "
+                    "interpretation, or next step based on existing information."
                 ),
-                "unresolved": (
-                    "The user's request concerns log investigation and cannot be answered "
-                    "accurately without retrieving new evidence from the log database. This "
-                    "includes requests to search, filter, count, aggregate, correlate, compare, "
-                    "or verify log records that have not already been provided."
+                "find_evidence": (
+                    "Retrieve new log evidence before answering. The request concerns "
+                    "log investigation and cannot be answered accurately without "
+                    "searching, filtering, counting, aggregating, correlating, "
+                    "comparing, or verifying log records not already provided."
                 ),
             },
+        )
+
+    def confidence_request(self, state: PipelineState) -> ClassifierRequest:
+        return {
+            "state": {
+                "request": state["normalized"],
+                "role": state["role"],
+                "evidence_report": state.get("evidence_report", {}),
+                "answer": state.get("answer", ""),
+                "revision_feedback": state.get("revision_feedback", ""),
+            },
+            "questions": {
+                "pass": self.pass_question(state["role"]),
+                "next_state": self.next_state_question(state["role"]),
+                "revision_reason": self.revision_reason_question(),
+                "worth_follow_up": self.worth_follow_up_question(),
+            },
+        }
+
+    def worth_follow_up_question(self) -> Noul:
+        return Noul(
+            instructions=(
+                "Decide whether asking the user a single, specific follow-up question "
+                "would materially improve the next turn's answer or investigation. "
+                "Say no when the answer is complete or a question would be awkward, "
+                "redundant, or only marginally useful."
+            ),
+            criteria=NoulCriteria(
+                true=(
+                    "A specific, natural follow-up question would materially improve "
+                    "the next turn, for example it would unlock missing evidence or a "
+                    "clearer scope."
+                ),
+                false=(
+                    "The answer is complete, or no single follow-up question would "
+                    "meaningfully improve the next turn."
+                ),
+            ),
+        )
+
+    def clarify(self, state: PipelineState) -> str:
+        return (
+            "<role context>\n"
+            f"{self.role_context(state['role'])}\n"
+            "</role context>\n"
+            "<request>\n"
+            f"{state['normalized']}\n"
+            "</request>\n"
+            "<conversation>\n"
+            f"{state.get('conversation', '')}\n"
+            "</conversation>\n\n"
         )
 
     def normalize(self, state: PipelineState) -> str:
@@ -195,7 +267,7 @@ class PipelinePrompts:
             f"{state['normalized']}\n"
             "</request>\n"
             "<evidence report>\n"
-            f"{state['evidence_report']}\n"
+            f"{state.get('evidence_report', {})}\n"
             "</evidence report>\n"
             "<tool result catalog>\n"
             f"{tool_result_catalog}\n"

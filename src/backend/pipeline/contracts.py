@@ -133,3 +133,11 @@ class AnswerOutput(BaseModel):
             "reader needs and reference only ids from the tool result catalog."
         )
     )
+    follow_up: str | None = Field(
+        default=None,
+        description=(
+            "At most one short, natural follow-up question to ask the user when the "
+            "next turn would materially improve with more information. Use null when "
+            "no follow-up is warranted; never restate the answer or pad with questions."
+        ),
+    )

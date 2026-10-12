@@ -1,4 +1,9 @@
-"""LangGraph pipeline: normalize → scope → (general | find_evidence → answer → confidence)."""
+"""LangGraph pipeline: normalize → scope → (clarify | general | answer) → confidence.
+
+The scope and confidence routers are TypeSafe classifiers (see ``decision.py``):
+``scope`` picks one action-oriented route and ``confidence`` decides whether to
+return the answer or revise it.
+"""
 
 import logging
 from typing import Literal
@@ -8,12 +13,19 @@ from langgraph.graph import END, StateGraph
 
 from backend.pipeline.agents import (
     answer_agent,
+    clarify_agent,
     evidence_report_agent,
     general_agent,
     get_find_evidence_agent,
     normalize_agent,
 )
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.decision import (
+    FOLLOW_UP_THRESHOLD,
+    classifier,
+    decide_confidence,
+    decide_scope,
+)
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.state import PipelineState
 from backend.pipeline.tools.results import collect_tool_results
@@ -22,10 +34,21 @@ logger = logging.getLogger(__name__)
 
 prompts = PipelinePrompts()
 
-# Reserved for the scope classifier: probability above which a request is routed
-# into the evidence pipeline rather than to the general agent. Used once the
-# scope_node stub below is replaced with the TypeSafe classifier.
-SCOPE_CONFIDENCE_THRESHOLD = 0.64
+# Human-readable revision feedback for each revision_reason label the confidence
+# classifier can return. It is fed to the find_evidence/answer prompts on a
+# revision so those agents know what to change.
+REVISION_FEEDBACK = {
+    "missing_evidence": "More evidence is required.",
+    "irrelevant_evidence": (
+        "The collected evidence does not address the important hypotheses."
+    ),
+    "unsupported_answer": (
+        "The evidence is adequate, but the answer misuses or omits it."
+    ),
+    "role_mismatch": "The answer does not support the user's role objective.",
+    "none": "No revision is required.",
+}
+NO_REVISION = "No revision is required."
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
@@ -40,22 +63,44 @@ def normalize_node(state: PipelineState) -> PipelineState:
     normalized = result["structured_response"].model_dump()
 
     # A failed model call yields the empty fallback shape; never overwrite a
-    # valid previous normalization with it.
+    # valid previous normalization with it. A new turn also resets the revision
+    # budget consumed by the confidence loop.
     previous = state.get("normalized")
     if not normalized_is_usable(normalized) and normalized_is_usable(previous):
-        return {**state, "normalized": previous}
+        return {**state, "normalized": previous, "revision_count": 0}
 
-    return {**state, "normalized": normalized}
+    return {**state, "normalized": normalized, "revision_count": 0}
 
 
 def scope_node(state: PipelineState) -> PipelineState:
-    # TODO(scope routing): classify the request with prompts.scope_request(state)
-    # and route to "pipeline"/"general" using SCOPE_CONFIDENCE_THRESHOLD. Until
-    # then every request is treated as unresolved and goes to find_evidence.
-    return {
-        **state,
-        "scope": "unresolved",
-    }
+    clarify_count = state.get("clarify_count", 0)
+    try:
+        response = classifier.invoke(prompts.scope_request(state))
+        scope = decide_scope(response, clarify_count)
+    except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
+        logger.warning("scope classifier failed, investigating instead: %s", error)
+        scope = "find_evidence"
+
+    # Track consecutive clarification turns so a vague back-and-forth cannot ask
+    # forever. Any non-clarify route clears the count.
+    if scope == "clarify":
+        clarify_count += 1
+    else:
+        clarify_count = 0
+
+    return {**state, "scope": scope, "clarify_count": clarify_count}
+
+
+def clarify_node(state: PipelineState) -> PipelineState:
+    result = clarify_agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": prompts.clarify(state)},
+            ]
+        }
+    )
+    question = result["messages"][-1].text
+    return {**state, "answer": question}
 
 
 def general_node(state: PipelineState) -> PipelineState:
@@ -102,12 +147,14 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 
     evidence_report = report_result["structured_response"].model_dump()
     tool_results = collect_tool_results(result["messages"])
+    history = [*(state.get("evidence_report_history") or []), evidence_report]
 
     return {
         **state,
         "evidence_report": evidence_report,
         "tool_results": tool_results,
         "answer": "",
+        "evidence_report_history": history,
     }
 
 
@@ -119,36 +166,66 @@ def answer_node(state: PipelineState) -> PipelineState:
             ]
         }
     )
+    structured = result["structured_response"]
     valid_ids = {record.get("id") for record in state.get("tool_results") or []}
-    answer = serialize_answer(result["structured_response"], valid_ids)
+    answer = serialize_answer(structured, valid_ids)
+    # The answer agent drafts the optional follow-up; confidence decides whether
+    # to show it, so keep the draft in state either way.
+    if isinstance(structured, dict):
+        follow_up = structured.get("follow_up")
+    else:
+        follow_up = getattr(structured, "follow_up", None)
     logger.debug("answer: %s", answer)
-    return {**state, "answer": answer}
+    return {**state, "answer": answer, "follow_up": follow_up or None}
 
 
 def confidence_node(state: PipelineState) -> PipelineState:
-    # TODO(confidence routing): score the answer with prompts.pass_question /
-    # next_state_question / revision_reason_question and, when it fails, set
-    # confidence["next_state"] to "find_evidence" or "answer" to trigger a
-    # revision, gated by the effort spec's threshold and iteration budget.
-    return {
-        **state,
-        "confidence": {
+    revision_count = state.get("revision_count", 0)
+    try:
+        response = classifier.invoke(prompts.confidence_request(state))
+        route = decide_confidence(response, state.get("effort"), revision_count)
+    except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
+        logger.warning("confidence classifier failed, returning answer: %s", error)
+        route = {
             "next_state": "end",
-            "pass_probability": 1,
-            "probabilities": {
-                "find_evidence": 0,
-                "answer": 0,
-                "end": 1,
-            },
-            "revision_reason": "No revision is required.",
-        },
-        "revision_feedback": "No revision is required.",
+            "pass_probability": 1.0,
+            "probabilities": {"find_evidence": 0.0, "answer": 0.0, "end": 1.0},
+            "revision_reason": "none",
+            "worth_follow_up": 0.0,
+        }
+
+    next_state = route["next_state"]
+    confidence = {
+        "next_state": next_state,
+        "pass_probability": route["pass_probability"],
+        "probabilities": route["probabilities"],
+        "revision_reason": route["revision_reason"],
     }
+
+    # Only a final (non-revising) answer gets the drafted follow-up question, and
+    # only when the classifier judged it materially useful.
+    answer = state.get("answer", "")
+    if next_state == "end" and route.get("worth_follow_up", 0.0) >= FOLLOW_UP_THRESHOLD:
+        follow_up = (state.get("follow_up") or "").strip()
+        if follow_up:
+            answer = f"{answer}\n\n{follow_up}".strip()
+
+    updated = {
+        **state,
+        "confidence": confidence,
+        "revision_feedback": REVISION_FEEDBACK.get(
+            route["revision_reason"], NO_REVISION
+        ),
+        "answer": answer,
+    }
+    if next_state != "end":
+        updated["revision_count"] = revision_count + 1
+    return updated
 
 
 def route_after_scope(
     state: PipelineState,
-) -> Literal["irrelevant", "resolved", "unresolved"]:
+) -> Literal["clarify", "general", "direct_answer", "find_evidence"]:
     return state["scope"]
 
 
@@ -161,6 +238,7 @@ def route_after_confidence(
 graph = StateGraph(PipelineState)
 graph.add_node("normalize", normalize_node)
 graph.add_node("scope", scope_node)
+graph.add_node("clarify", clarify_node)
 graph.add_node("general", general_node)
 graph.add_node("find_evidence", find_evidence_node)
 graph.add_node("answer", answer_node)
@@ -173,11 +251,13 @@ graph.add_conditional_edges(
     "scope",
     route_after_scope,
     {
-        "irrelevant": "general",
-        "resolved": "answer",
-        "unresolved": "find_evidence",
+        "clarify": "clarify",
+        "general": "general",
+        "direct_answer": "answer",
+        "find_evidence": "find_evidence",
     },
 )
+graph.add_edge("clarify", END)
 graph.add_edge("general", END)
 graph.add_edge("find_evidence", "answer")
 graph.add_edge("answer", "confidence")
