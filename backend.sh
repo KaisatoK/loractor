@@ -8,9 +8,11 @@ fi
 PORT="${PORT:-8000}"
 
 if command -v uv &> /dev/null; then
-    uv run python -m backend.appdb.manage abc 12345678
+    # Demo provisioning (temporary): delete backend/appdb/demo.py and
+    # ui/login/demo.py to remove it.
+    uv run python -m backend.appdb.demo
     uv run uvicorn backend.api:app --port "$PORT" --reload
 else
-    python -m backend.appdb.manage abc 12345678
-    uvicorn backend.api:app --port "$PORT" --reload
+    echo "uv is required to run the backend: https://docs.astral.sh/uv/" >&2
+    exit 1
 fi

@@ -8,15 +8,20 @@ from ui import chat_client
 
 def _error_detail(err: requests.HTTPError) -> str:
     response = getattr(err, "response", None)
-    if response is not None:
-        try:
-            return str(response.json().get("detail", "Request failed."))
-        except Exception:
-            return f"Request failed ({response.status_code})."
-    return str(err)
+    if response is None:
+        return str(err)
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        return f"Request failed ({response.status_code})."
+    if isinstance(detail, list):
+        # FastAPI validation errors: [{"msg": ..., "loc": [...]}, ...]
+        messages = [str(item.get("msg", item)) for item in detail]
+        return "; ".join(messages) or f"Request failed ({response.status_code})."
+    return str(detail) if detail else f"Request failed ({response.status_code})."
 
 
-def _sign_in(call) -> None:
+def sign_in(call) -> None:
     try:
         data = call()
     except requests.HTTPError as err:
@@ -33,23 +38,6 @@ def _sign_in(call) -> None:
         st.session_state.chats_loaded = False
         st.rerun()
 
-def auto_login() -> None:
-    """Automatically log in the user if registration is closed and a default user exists."""
-    try:
-        data = chat_client.login("abc", "12345678")
-    except requests.HTTPError as err:
-        st.error(_error_detail(err))
-    except requests.RequestException as err:
-        st.error(f"Could not reach the backend: {err}")
-    else:
-        st.session_state.auth = {
-            "token": data["token"],
-            "user": data["user"],
-            "expires_at": data.get("expires_at"),
-        }
-        # Force a fresh chat list for the newly authenticated user.
-        st.session_state.chats_loaded = False
-        st.rerun()
 
 def login_page() -> None:
     st.title("LangChain Chat Agent")
@@ -66,7 +54,7 @@ def login_page() -> None:
             if not username or not password:
                 st.error("Enter your username and password.")
             else:
-                _sign_in(lambda: chat_client.login(username, password))
+                sign_in(lambda: chat_client.login(username, password))
 
     with register_tab:
         with st.form("register_form"):
@@ -77,11 +65,7 @@ def login_page() -> None:
             )
             registered = st.form_submit_button("Create account", type="primary")
         if registered:
-            if len(new_username) < 3:
-                st.error("Username must be at least 3 characters.")
-            elif len(new_password) < 8:
-                st.error("Password must be at least 8 characters.")
-            elif new_password != confirm:
+            if new_password != confirm:
                 st.error("Passwords do not match.")
             else:
-                _sign_in(lambda: chat_client.register(new_username, new_password))
+                sign_in(lambda: chat_client.register(new_username, new_password))

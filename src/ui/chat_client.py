@@ -9,9 +9,6 @@ import requests
 # Backend port from the environment (.env via ui/__init__), default 8000.
 BACKEND_PORT = os.environ.get("BACKEND_PORT", "8000")
 API_BASE = f"http://localhost:{BACKEND_PORT}"
-API_URL = f"{API_BASE}/chat/stream"
-REFRAME_URL = f"{API_BASE}/chat/reframe"
-
 STREAM_URL = f"{API_BASE}/chat/stream"
 REFRAME_URL = f"{API_BASE}/chat/reframe"
 

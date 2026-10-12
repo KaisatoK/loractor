@@ -85,6 +85,16 @@ def test_duplicate_username_conflicts(client):
     )
 
 
+def test_registration_closed_returns_403(client, monkeypatch):
+    from backend.appdb import auth
+
+    monkeypatch.setattr(auth, "REGISTRATION_OPEN", False)
+    response = client.post(
+        "/auth/register", json={"username": "newuser", "password": "password123"}
+    )
+    assert response.status_code == 403
+
+
 # --- Chats --------------------------------------------------------------------
 
 

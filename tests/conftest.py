@@ -10,6 +10,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 os.environ.setdefault("DEEPSEEK_API_KEY", "test-key")
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 os.environ.setdefault("CHECKPOINT_BACKEND", "memory")
+os.environ.setdefault("AUTH_REGISTRATION_OPEN", "true")
 
 import pytest  # noqa: E402
 

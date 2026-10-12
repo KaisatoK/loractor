@@ -1,7 +1,8 @@
 import streamlit as st
 
 from ui import chat_client
-from ui.login.login import auto_login, login_page
+from ui.login import demo
+from ui.login.login import login_page
 from ui.main_page.main_page import main_page
 from ui.new_chat.new_chat import new_chat
 
@@ -10,14 +11,19 @@ st.set_page_config(
 )
 
 # --- Authentication gate ------------------------------------------------------
+# Demo auto-login (temporary): see ui/login/demo.py. On success it reruns and
+# never returns; on failure or when disabled we fall through to the real page.
 
 if "auth" not in st.session_state:
     st.session_state.auth = None
 
 if not st.session_state.auth:
-    # login_page()
-    # st.stop()
-    auto_login()
+    # Demo auto-login (temporary): see ui/login/demo.py. Skipped after an explicit
+    # Log out so the sign-in page stays reachable for the rest of the session.
+    if demo.enabled() and not demo.logged_out():
+        demo.auto_login()
+    login_page()
+    st.stop()
 
 token: str = st.session_state.auth["token"]
 username: str = st.session_state.auth["user"]["username"]
@@ -62,6 +68,7 @@ def _logout() -> None:
         chat_client.logout(token)
     except Exception:  # noqa: BLE001 - logging out should never fail loudly
         pass
+    demo.mark_logged_out()  # demo-only: stop the gate auto-signing back in
     for key in ("auth", "chat_histories", "current_chat", "chats_loaded", "effort"):
         st.session_state.pop(key, None)
     st.rerun()

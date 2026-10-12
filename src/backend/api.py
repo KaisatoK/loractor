@@ -277,8 +277,12 @@ def chat_reframe(req: ReframeRequest, user: dict = Depends(require_user)) -> dic
 
 
 class Credentials(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=8, max_length=256)
+    username: str = Field(
+        min_length=auth.USERNAME_MIN_LENGTH, max_length=auth.USERNAME_MAX_LENGTH
+    )
+    password: str = Field(
+        min_length=auth.PASSWORD_MIN_LENGTH, max_length=auth.PASSWORD_MAX_LENGTH
+    )
 
 
 @app.post("/auth/register")

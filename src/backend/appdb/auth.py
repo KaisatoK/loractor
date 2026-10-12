@@ -24,12 +24,25 @@ _SCRYPT_R = 8
 _SCRYPT_P = 1
 _DKLEN = 32
 
+# Credential policy: the single source of truth for the API, the CLI, and the UI.
+USERNAME_MIN_LENGTH = 3
+USERNAME_MAX_LENGTH = 64
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 256
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Parse a boolean environment flag, falling back to ``default`` when unset."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "168"))
-REGISTRATION_OPEN = os.getenv("AUTH_REGISTRATION_OPEN", "true").lower() in {
-    "1",
-    "true",
-    "yes",
-}
+# Registration defaults to closed; accounts are provisioned with
+# `backend.appdb.manage`.
+REGISTRATION_OPEN = _env_flag("AUTH_REGISTRATION_OPEN", default=False)
 
 
 def _now() -> datetime:
@@ -125,25 +138,38 @@ def create_session(user_id: str) -> tuple[str, str]:
     return token, _iso(expires)
 
 
+def _delete_session(token_hash: str) -> None:
+    with db() as cur:
+        cur.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
 def resolve_session(token: str) -> dict | None:
+    """Resolve a bearer token to its user.
+
+    An expired session is deleted opportunistically here (cheap, and keeps the
+    table from accumulating dead rows); ``purge_expired_sessions`` sweeps the
+    rest at startup. Expiry is compared in Python rather than SQL because
+    ``expires_at`` is ISO text and a lexicographic comparison is not
+    order-correct across the microsecond boundary.
+    """
+    token_hash = _hash_token(token)
     with db() as cur:
         row = cur.execute(
             "SELECT u.id, u.username, s.expires_at "
             "FROM sessions s JOIN users u ON u.id = s.user_id "
             "WHERE s.token_hash = ?",
-            (_hash_token(token),),
+            (token_hash,),
         ).fetchone()
     if row is None:
         return None
     if datetime.fromisoformat(row["expires_at"]) <= _now():
-        revoke_session(token)
+        _delete_session(token_hash)
         return None
     return {"id": row["id"], "username": row["username"]}
 
 
 def revoke_session(token: str) -> None:
-    with db() as cur:
-        cur.execute("DELETE FROM sessions WHERE token_hash = ?", (_hash_token(token),))
+    _delete_session(_hash_token(token))
 
 
 def purge_expired_sessions() -> None:

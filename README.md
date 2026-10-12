@@ -79,7 +79,7 @@ a few dozen concurrent investigations.
 | `MODEL_MAX_RETRIES` / `MODEL_RETRY_BASE_DELAY` / `MODEL_RETRY_MAX_DELAY` | `3` / `1.0` / `20.0` | Retry/backoff for rate-limit and connection errors |
 | `APP_DB_PATH` | `./.data/app.sqlite` | Users, sessions, chats, and messages |
 | `SESSION_TTL_HOURS` | `168` | Bearer-session lifetime |
-| `AUTH_REGISTRATION_OPEN` | `true` | Allow self-service sign-up via `/auth/register` |
+| `AUTH_REGISTRATION_OPEN` | `false` | Allow self-service sign-up via `/auth/register` |
 
 ## Concurrency
 
@@ -113,15 +113,49 @@ Streamlit UI is a thin client that holds a bearer token.
 - Passwords are hashed with scrypt (stdlib only); only a SHA-256 digest of each
   session token is stored.
 - `POST /auth/register`, `/auth/login`, `/auth/logout`, and `GET /auth/me`
-  manage accounts and sessions. Registration is open by default; set
-  `AUTH_REGISTRATION_OPEN=false` to disable it and provision users with:
+  manage accounts and sessions. Registration is closed by default; set
+  `AUTH_REGISTRATION_OPEN=true` to allow self-service sign-up, or provision
+  users with:
   ```bash
   uv run python -m backend.appdb.manage <username> <password>
   ```
 - Every `/chat/*` and `/chats*` endpoint requires `Authorization: Bearer <token>`;
   the caller's `user_id` is taken from the token, never from the request body.
-- The UI shows a sign-in page until authenticated, lists the user's chats in the
-  sidebar, and loads each chat's history on demand.
+
+### Demo auto-login (temporary)
+
+The demo auto-login is isolated so it can be deleted later. It lives in exactly
+two modules, `src/ui/login/demo.py` (UI flag + credentials + auto sign-in) and
+`src/backend/appdb/demo.py` (provisions the account), and is controlled by
+`AUTH_DEMO_AUTOLOGIN` (**default ON**). Set `AUTH_DEMO_AUTOLOGIN=false` to skip
+the demo and see the real sign-in page.
+
+When the demo is active, the auth gate auto-signs in as the demo account before
+the chat UI renders; the sidebar then lists that account's chats and loads each
+chat's history on demand. `./backend.sh` provisions the demo account on start;
+`./frontend.sh` alone does not, so the UI will not boot until the account exists.
+
+To remove the demo:
+
+1. Delete `src/ui/login/demo.py` and `src/backend/appdb/demo.py`.
+2. Delete `tests/test_demo.py`.
+3. Delete the demo provisioning comment and the
+   `uv run python -m backend.appdb.demo` line from `backend.sh`.
+4. In `src/ui/streamlit_app.py`: delete the `from ui.login import demo` import,
+   delete the demo comment lines above the gate, delete the
+   `demo.mark_logged_out()` line from `_logout()`, and reduce the gate to
+   `login_page(); st.stop()`.
+5. Delete the "Demo auto-login (temporary)" section from `src/ui/login/README.md`
+   (the file itself stays — it also documents the permanent auth flow).
+6. Delete the "Demo auto-login" section from `README.md`.
+
+Once the demo is gone, `login_page()` is the only way in, so you need either
+`AUTH_REGISTRATION_OPEN=true` (to create an account from the UI) or an account
+provisioned ahead of time with:
+
+```bash
+uv run python -m backend.appdb.manage <username> <password>
+```
 
 ## Setup
 
