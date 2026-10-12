@@ -1,7 +1,7 @@
 import streamlit as st
 
 from ui import chat_client
-from ui.login.login import login_page
+from ui.login.login import auto_login, login_page
 from ui.main_page.main_page import main_page
 from ui.new_chat.new_chat import new_chat
 
@@ -15,8 +15,9 @@ if "auth" not in st.session_state:
     st.session_state.auth = None
 
 if not st.session_state.auth:
-    login_page()
-    st.stop()
+    # login_page()
+    # st.stop()
+    auto_login()
 
 token: str = st.session_state.auth["token"]
 username: str = st.session_state.auth["user"]["username"]

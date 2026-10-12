@@ -33,6 +33,23 @@ def _sign_in(call) -> None:
         st.session_state.chats_loaded = False
         st.rerun()
 
+def auto_login() -> None:
+    """Automatically log in the user if registration is closed and a default user exists."""
+    try:
+        data = chat_client.login("abc", "12345678")
+    except requests.HTTPError as err:
+        st.error(_error_detail(err))
+    except requests.RequestException as err:
+        st.error(f"Could not reach the backend: {err}")
+    else:
+        st.session_state.auth = {
+            "token": data["token"],
+            "user": data["user"],
+            "expires_at": data.get("expires_at"),
+        }
+        # Force a fresh chat list for the newly authenticated user.
+        st.session_state.chats_loaded = False
+        st.rerun()
 
 def login_page() -> None:
     st.title("LangChain Chat Agent")

@@ -11,7 +11,6 @@ BACKEND_PORT = os.environ.get("BACKEND_PORT", "8000")
 API_BASE = f"http://localhost:{BACKEND_PORT}"
 API_URL = f"{API_BASE}/chat/stream"
 REFRAME_URL = f"{API_BASE}/chat/reframe"
-from ui.config import API_BASE
 
 STREAM_URL = f"{API_BASE}/chat/stream"
 REFRAME_URL = f"{API_BASE}/chat/reframe"

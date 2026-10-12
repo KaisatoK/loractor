@@ -191,7 +191,6 @@ def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                     last_tool_results_json = payload
             answer = item.get("answer")
             if answer and answer != last_answer:
-                yield emit({"type": "messages", "content": answer})
                 last_answer = answer
             if "fail_reason" in item:
                 logger.debug("pipeline fail_reason: %s", item["fail_reason"])
@@ -209,6 +208,8 @@ def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
             # so a future node-level writer is surfaced without UI changes.
             if isinstance(item, dict) and item.get("type") == "tool_progress":
                 yield emit({"type": "tool_progress", "content": json.dumps(item)})
+
+    yield emit({"type": "messages", "content": last_answer or ""})
 
 
 @app.post("/chat/stream")
