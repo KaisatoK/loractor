@@ -6,6 +6,9 @@ return the answer or revise it.
 """
 
 import logging
+import os
+import sqlite3
+from pathlib import Path
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -291,5 +294,66 @@ graph.add_conditional_edges(
     {"find_evidence": "find_evidence", "answer": "answer", "end": END},
 )
 
-checkpointer = InMemorySaver()
+
+def _build_checkpointer():
+    """Checkpointer backend, selected by ``CHECKPOINT_BACKEND``.
+
+    - ``sqlite`` (default): durable, single-process/multi-thread. The saver
+      serializes access with an internal lock, so it is safe for the sync
+      endpoint's worker threads.
+    - ``memory``: the old process-local behaviour; nothing survives a restart.
+    - ``postgres``: durable and shareable across worker processes/replicas.
+      Requires ``langgraph-checkpoint-postgres`` and ``CHECKPOINT_POSTGRES_URL``.
+    """
+    backend = os.getenv("CHECKPOINT_BACKEND", "sqlite").lower()
+
+    if backend == "memory":
+        logger.info("Using in-memory checkpointer (state is not durable).")
+        return InMemorySaver()
+
+    if backend == "sqlite":
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        db_path = Path(
+            os.getenv(
+                "CHECKPOINT_SQLITE_PATH",
+                str(Path.cwd() / ".data" / "checkpoints.sqlite"),
+            )
+        )
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        saver = SqliteSaver(conn)
+        saver.setup()
+        logger.info("Using SQLite checkpointer at %s", db_path)
+        return saver
+
+    if backend == "postgres":
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+            from psycopg_pool import ConnectionPool
+        except ImportError as e:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "CHECKPOINT_BACKEND=postgres requires 'langgraph-checkpoint-postgres' "
+                "and 'psycopg_pool'. Install them, or use CHECKPOINT_BACKEND=sqlite."
+            ) from e
+
+        url = os.getenv("CHECKPOINT_POSTGRES_URL")
+        if not url:
+            raise RuntimeError(
+                "CHECKPOINT_BACKEND=postgres requires CHECKPOINT_POSTGRES_URL."
+            )
+        pool = ConnectionPool(conninfo=url, max_size=10, open=True)
+        saver = PostgresSaver(pool)
+        saver.setup()
+        logger.info("Using Postgres checkpointer.")
+        return saver
+
+    raise ValueError(
+        f"Unknown CHECKPOINT_BACKEND={backend!r}; expected memory, sqlite, or postgres."
+    )
+
+
+checkpointer = _build_checkpointer()
 chatbot = graph.compile(checkpointer=checkpointer)

@@ -8,6 +8,14 @@ from ui.rendering import MARKER_RE, render_answer
 from ui.roles import ROLE_LABELS
 
 
+def _persist(*args, **kwargs) -> None:
+    """Persist a message, surfacing (but not crashing on) backend errors."""
+    try:
+        chat_client.append_message(*args, **kwargs)
+    except Exception as err:  # noqa: BLE001
+        st.warning(f"Message could not be saved: {err}")
+
+
 @st.fragment(key="copy_to_clipboard_button")
 def copy_to_clipboard_button(content: str, role: str, idx: int):
     if st.button(
@@ -19,8 +27,11 @@ def copy_to_clipboard_button(content: str, role: str, idx: int):
         st.toast(body="Copied to clipboard!", duration=1)
 
 
-def process_message(current_chat, text, effort):
-    current_chat["history"].append({"role": "user", "content": text, "progress": None})
+def process_message(current_chat, text, effort, token: str, chat_id: str):
+    current_chat["history"].append(
+        {"role": "user", "content": text, "progress": None}
+    )
+    _persist(token, chat_id, role="user", content=text)
     with st.chat_message("user"):
         st.markdown(text)
     copy_to_clipboard_button(text, "user", len(current_chat["history"]) - 1)
@@ -38,8 +49,8 @@ def process_message(current_chat, text, effort):
             for item in current_chat["history"]
         ]
         events = chat_client.stream_chat(
-            user_id=st.session_state.user_id,
-            chat_id=st.session_state.current_chat,
+            token=token,
+            chat_id=chat_id,
             role=current_chat["role"],
             effort=effort,
             history=request_history,
@@ -82,15 +93,31 @@ def process_message(current_chat, text, effort):
             "tool_results": tool_results,
         }
     )
+    _persist(
+        token,
+        chat_id,
+        role="assistant",
+        content=full_answer,
+        tool_results=tool_results,
+        progress=progress_stages,
+    )
     copy_to_clipboard_button(full_answer, "assistant", len(current_chat["history"]) - 1)
 
 
 def main_page():
     st.title("LangChain Chat Agent")
 
-    current_chat = st.session_state.chat_histories.get(
-        st.session_state.current_chat, {}
-    )
+    token: str = st.session_state.auth["token"]
+    chat_id: str = st.session_state.current_chat
+    current_chat = st.session_state.chat_histories.get(chat_id, {})
+
+    # Fetch this chat's history from the backend the first time it is opened.
+    if current_chat.get("history") is None:
+        try:
+            current_chat["history"] = chat_client.get_messages(token, chat_id)
+        except Exception as err:  # noqa: BLE001
+            st.error(f"Could not load this chat: {err}")
+            current_chat["history"] = []
 
     for idx, item in enumerate(current_chat["history"]):
         if (item["role"] == "assistant" and "progress" in item) and item[
@@ -133,6 +160,7 @@ def main_page():
                                         f"Reframing for {ROLE_LABELS[target]}…"
                                     ):
                                         answer = chat_client.reframe(
+                                            token=token,
                                             target_role=target,
                                             effort=st.session_state.get(
                                                 "effort", "Medium"
@@ -144,6 +172,14 @@ def main_page():
                                 except Exception as e:
                                     st.error(f"Reframe failed: {e}")
                                 else:
+                                    _persist(
+                                        token,
+                                        chat_id,
+                                        role="assistant",
+                                        content=answer,
+                                        tool_results=item.get("tool_results") or [],
+                                        reframed_for=target,
+                                    )
                                     current_chat["history"].append(
                                         {
                                             "role": "assistant",
@@ -174,7 +210,7 @@ def main_page():
     )
 
     if message:
-        process_message(current_chat, message.text, effort)
+        process_message(current_chat, message.text, effort, token, chat_id)
         # Re-render from history so the new answer immediately gets its reframe
         # buttons/caption (those are only emitted by the history loop above).
         st.rerun()

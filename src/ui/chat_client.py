@@ -1,4 +1,4 @@
-"""HTTP client for the backend chat API."""
+"""HTTP client for the backend API (auth, chats, and chat streaming)."""
 
 import json
 import os
@@ -11,11 +11,113 @@ BACKEND_PORT = os.environ.get("BACKEND_PORT", "8000")
 API_BASE = f"http://localhost:{BACKEND_PORT}"
 API_URL = f"{API_BASE}/chat/stream"
 REFRAME_URL = f"{API_BASE}/chat/reframe"
+from ui.config import API_BASE
+
+STREAM_URL = f"{API_BASE}/chat/stream"
+REFRAME_URL = f"{API_BASE}/chat/reframe"
+
+
+def _auth_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+# --- Authentication -----------------------------------------------------------
+
+
+def register(username: str, password: str) -> dict:
+    response = requests.post(
+        f"{API_BASE}/auth/register",
+        json={"username": username, "password": password},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def login(username: str, password: str) -> dict:
+    response = requests.post(
+        f"{API_BASE}/auth/login",
+        json={"username": username, "password": password},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def logout(token: str) -> None:
+    requests.post(f"{API_BASE}/auth/logout", headers=_auth_headers(token), timeout=10)
+
+
+# --- Chats --------------------------------------------------------------------
+
+
+def list_chats(token: str) -> list:
+    response = requests.get(
+        f"{API_BASE}/chats", headers=_auth_headers(token), timeout=30
+    )
+    response.raise_for_status()
+    return response.json()["chats"]
+
+
+def create_chat(token: str, chat_id: str, role: str, title: str | None = None) -> dict:
+    response = requests.post(
+        f"{API_BASE}/chats",
+        json={"chat_id": chat_id, "role": role, "title": title},
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def delete_chat(token: str, chat_id: str) -> None:
+    response = requests.delete(
+        f"{API_BASE}/chats/{chat_id}", headers=_auth_headers(token), timeout=30
+    )
+    response.raise_for_status()
+
+
+def get_messages(token: str, chat_id: str) -> list:
+    response = requests.get(
+        f"{API_BASE}/chats/{chat_id}/messages",
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["messages"]
+
+
+def append_message(
+    token: str,
+    chat_id: str,
+    *,
+    role: str,
+    content: str,
+    tool_results: list | None = None,
+    progress: list | None = None,
+    reframed_for: str | None = None,
+) -> None:
+    response = requests.post(
+        f"{API_BASE}/chats/{chat_id}/messages",
+        json={
+            "role": role,
+            "content": content,
+            "tool_results": tool_results,
+            "progress": progress,
+            "reframed_for": reframed_for,
+        },
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+
+
+# --- Chat streaming -----------------------------------------------------------
 
 
 def stream_chat(
     *,
-    user_id: str,
+    token: str,
     chat_id: str,
     role: str,
     effort: str,
@@ -23,25 +125,28 @@ def stream_chat(
 ) -> Iterator[dict]:
     """Stream chat events from the backend as decoded dicts."""
     with requests.post(
-        API_URL,
+        STREAM_URL,
         json={
-            "user_id": user_id,
             "chat_id": chat_id,
             "role": role,
             "effort": effort,
             "history": history,
         },
+        headers=_auth_headers(token),
         stream=True,
+        timeout=600,
     ) as response:
         response.raise_for_status()
-        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
-            if chunk:
-                text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
-                yield json.loads(text)
+        # The backend emits newline-delimited JSON; split on lines so events are
+        # parsed correctly regardless of how TCP/HTTP chunks them.
+        for line in response.iter_lines(decode_unicode=True):
+            if line:
+                yield json.loads(line)
 
 
 def reframe(
     *,
+    token: str,
     target_role: str,
     effort: str,
     question: str,
@@ -58,6 +163,7 @@ def reframe(
             "previous_answer": previous_answer,
             "tool_results": tool_results,
         },
+        headers=_auth_headers(token),
         timeout=120,
     )
     response.raise_for_status()
