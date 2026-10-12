@@ -77,6 +77,16 @@ def scope_node(state: PipelineState) -> PipelineState:
     try:
         response = classifier.invoke(prompts.scope_request(state))
         scope = decide_scope(response, clarify_count)
+        route = response.choices.get("route")
+        logger.info(
+            "scope=%s needs_clarification=%.3f route=%s route_confidence=%s clarify_count=%d",
+            scope,
+            response.nouls["needs_clarification"].noul,
+            getattr(route, "choice", "?"),
+            f"{route.confidence:.3f}" if route is not None else "?",
+            clarify_count,
+        )
+        logger.debug("scope probabilities: %s", getattr(route, "probabilities", {}))
     except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
         logger.warning("scope classifier failed, investigating instead: %s", error)
         scope = "find_evidence"
@@ -100,6 +110,7 @@ def clarify_node(state: PipelineState) -> PipelineState:
         }
     )
     question = result["messages"][-1].text
+    logger.info("clarify: asking the user for more information")
     return {**state, "answer": question}
 
 
@@ -175,8 +186,12 @@ def answer_node(state: PipelineState) -> PipelineState:
         follow_up = structured.get("follow_up")
     else:
         follow_up = getattr(structured, "follow_up", None)
+    follow_up = follow_up or None
+    logger.info(
+        "answer drafted (%d chars, follow_up=%s)", len(answer), follow_up is not None
+    )
     logger.debug("answer: %s", answer)
-    return {**state, "answer": answer, "follow_up": follow_up or None}
+    return {**state, "answer": answer, "follow_up": follow_up}
 
 
 def confidence_node(state: PipelineState) -> PipelineState:
@@ -195,6 +210,14 @@ def confidence_node(state: PipelineState) -> PipelineState:
         }
 
     next_state = route["next_state"]
+    logger.info(
+        "confidence=%s pass=%.3f reason=%s worth_follow_up=%.3f revision_count=%d",
+        next_state,
+        route["pass_probability"],
+        route["revision_reason"],
+        route.get("worth_follow_up", 0.0),
+        revision_count,
+    )
     confidence = {
         "next_state": next_state,
         "pass_probability": route["pass_probability"],
@@ -209,6 +232,7 @@ def confidence_node(state: PipelineState) -> PipelineState:
         follow_up = (state.get("follow_up") or "").strip()
         if follow_up:
             answer = f"{answer}\n\n{follow_up}".strip()
+            logger.info("confidence: appended follow-up question")
 
     updated = {
         **state,
