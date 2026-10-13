@@ -99,7 +99,7 @@ def _apply_event(run: dict, event: dict) -> None:
             _buffer_progress(run, f"{action} — failed")
     elif etype == "subgraph_name":
         # A new subgraph = a new stage/cycle: drop the previous cycle's thinking.
-        _buffer_progress(run, f"Currently at stage: {content}", new_cycle=True)
+        _buffer_progress(run, f"Currently at stage: {content}", new_cycle=(content == "find_evidence"))
     elif etype == "subgraph_message":
         _buffer_progress(run, f"Thinking: {content}")
 
@@ -177,7 +177,7 @@ def _finalize_run(current_chat, chat_id: str, run: dict, live) -> None:
     # cancelled: the chat was deleted or the run was stopped; render nothing.
 
 
-@st.fragment(run_every="1s")
+@st.fragment(run_every="3s")
 def render_active_run(current_chat, token: str, chat_id: str, live) -> None:
     """Poll the chat's in-flight investigation and redraw its live progress.
 
