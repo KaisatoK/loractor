@@ -2,6 +2,7 @@
 
 from backend.pipeline.prompts.builders import (
     ANSWER_EFFORT_NOTES,
+    TOOL_CATALOG,
     PipelinePrompts,
     normalized_is_usable,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "FIND_EVIDENCE_SYSTEM_PROMPT",
     "GENERAL_SYSTEM_PROMPT",
     "NORMALIZE_SYSTEM_PROMPT",
+    "TOOL_CATALOG",
     "PipelinePrompts",
     "normalized_is_usable",
 ]

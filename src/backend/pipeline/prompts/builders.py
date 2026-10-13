@@ -21,6 +21,64 @@ ANSWER_EFFORT_NOTES = {
     "Brutal": "Maximum depth: everything from Extreme plus alternative explanations considered and ruled out, and explicit uncertainty bounds.",
 }
 
+# Authoritative catalog of the evidence tools the pipeline can actually call.
+# Its key set MUST equal ``backend.pipeline.tools.__all__`` (asserted by
+# tests/test_confidence_prompts.py). The scope and confidence classifiers see it
+# so they reason about what evidence is still retrievable before choosing a
+# route -- in particular whether another find_evidence round could help at all.
+TOOL_CATALOG = {
+    "get_trend_tool": (
+        "Counts one known pid/service/event_id BY MINUTE over a time window; "
+        "params: start_time, end_time, type=(kind, exact value), category (severity). "
+        "Use to see how one known entity's volume moves over time."
+    ),
+    "count_by_category_tool": (
+        "Counts log rows grouped by severity/type; "
+        "params: start_time, end_time, type (pid|service|event_id|general), category (severity). "
+        "Use to quantify volume overall or per pid/service/event_id."
+    ),
+    "search_logs_tool": (
+        "Searches message text (optionally filtered by severity); "
+        "params: query_text, category (severity), limit. "
+        "Use to find and read the actual log lines."
+    ),
+    "top_in_category_by_service_tool": (
+        "Ranks services by log volume within a window, optionally one severity; "
+        "params: start_time, end_time, category (severity), limit. "
+        "Use to locate the noisiest services."
+    ),
+    "compare_periods_tool": (
+        "Compares service/severity counts between a baseline and a recent window; "
+        "params: baseline_start, baseline_end, recent_start, recent_end, limit. "
+        "Use to detect what changed between two time ranges."
+    ),
+    "get_data_tool": (
+        "Lists the known pids/services/event_ids in the log; "
+        "params: type (pid|service|event_id). "
+        "Use to discover valid filter values before querying."
+    ),
+}
+
+
+def summarized_attempts(tool_results: object) -> list[dict]:
+    """Compact summaries of the tool calls already attempted this turn.
+
+    Derived from ``state["tool_results"]`` records
+    (``{id, tool_name, arguments, row_count, rows}``) so the confidence
+    classifier can tell which queries have already run -- and avoid routing back
+    to find_evidence for a query that would only duplicate existing results.
+    """
+    summary = []
+    for record in tool_results or []:
+        summary.append(
+            {
+                "tool_name": record.get("tool_name"),
+                "arguments": record.get("arguments"),
+                "row_count": record.get("row_count"),
+            }
+        )
+    return summary
+
 
 def normalized_is_usable(previous: object) -> bool:
     """Whether a normalized result is real (not missing or the empty fallback).
@@ -65,6 +123,7 @@ class PipelinePrompts:
             "state": {
                 "conversation": state["normalized"],
                 "database_schema": LOG_SCHEMA,
+                "tool_catalog": TOOL_CATALOG,
             },
             "questions": {
                 "needs_clarification": self.needs_clarification_question(),
@@ -122,6 +181,7 @@ class PipelinePrompts:
         )
 
     def confidence_request(self, state: PipelineState) -> ClassifierRequest:
+        revision_count = state.get("revision_count", 0)
         return {
             "state": {
                 "request": state["normalized"],
@@ -129,6 +189,10 @@ class PipelinePrompts:
                 "evidence_report": state.get("evidence_report", {}),
                 "answer": state.get("answer", ""),
                 "revision_feedback": state.get("revision_feedback", ""),
+                "tool_catalog": TOOL_CATALOG,
+                "evidence_report_history": state.get("evidence_report_history", []),
+                "attempted_tools": summarized_attempts(state.get("tool_results")),
+                "revision_count": revision_count,
             },
             "questions": {
                 "pass": self.pass_question(state["role"]),
@@ -312,20 +376,32 @@ class PipelinePrompts:
     def next_state_question(self, role: Role) -> Choice:
         return Choice(
             instructions=(
-                "Choose the next pipeline state based on evidence sufficiency and "
-                "answer quality.\n\n"
+                "Choose the next pipeline state based on evidence sufficiency, "
+                "answer quality, and the availability of a useful next action.\n\n"
                 f"{self.role_context(role)}"
             ),
             criteria={
                 "find_evidence": (
-                    "Evidence is missing, unavailable, irrelevant, contradictory, "
-                    "or no important hypothesis is supported."
+                    "A specific evidence gap remains and there is "
+                    "at least one concrete, untried, tool-executable query that could "
+                    "plausibly close that gap and materially change the answer. The "
+                    "gap must be addressable by an available catalog tool. Do not "
+                    "choose this state for a previously attempted query, speculative "
+                    "research, unavailable data, or evidence that would not affect "
+                    "the answer."
                 ),
                 "answer": (
-                    "Evidence is sufficient, but the answer must be generated or revised."
+                    "The available evidence is sufficient, but the answer "
+                    "still needs to be written or materially revised. This includes "
+                    "improving role fit, reasoning, organization, clarity, or the use "
+                    "of evidence already collected. No additional evidence retrieval "
+                    "is needed."
                 ),
                 "end": (
-                    "The answer is grounded, role-appropriate, and ready to return."
+                    "The answer is grounded, role-appropriate, and ready "
+                    "to return. Also when a remaining deficiency "
+                    "cannot be resolved with any concrete, untried query supported by "
+                    "the available tools."
                 ),
             },
         )

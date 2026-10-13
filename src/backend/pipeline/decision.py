@@ -41,17 +41,19 @@ def decide_confidence(
     """Return the confidence route plus the follow-up signal.
 
     Keys: next_state (find_evidence|answer|end), pass_probability,
-    probabilities (per next_state), revision_reason, worth_follow_up. The pass
-    probability gates "end"; the effort spec caps the revision loop.
+    probabilities (per next_state), revision_reason, worth_follow_up.
+
+    Routing depends only on the revision budget and the classifier's
+    ``next_state`` choice: ``pass`` is diagnostic/logging-only and never moves
+    the route. The effort spec caps the revision loop; once the budget is spent
+    the run always ends.
     """
     spec = get_effort_spec(effort)
     pass_probability = response.nouls["pass"].noul
     next_answer = response.choices["next_state"]
     reason = response.choices["revision_reason"]
 
-    if pass_probability >= spec.answer_confidence_threshold:
-        next_state = "end"
-    elif revision_count >= spec.max_iterations:
+    if revision_count >= spec.max_iterations:
         next_state = "end"
     else:
         next_state = next_answer.choice

@@ -33,7 +33,7 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 ## Pipeline & API notes
 
 - Graph: `normalize -> scope -> (clarify | general | direct_answer | find_evidence) -> answer -> confidence`, with `confidence` looping back to `find_evidence`/`answer`. There is no separate `direct_answer` node — that scope route maps to `answer`. Scope and confidence are TypeSafe classifiers (`decision.py`); thresholds live there (`CLARIFY_THRESHOLD`, `FOLLOW_UP_THRESHOLD`, `MAX_CLARIFY_ROUNDS`) and per-effort budgets in `effort.py`. Model instances are in `models.py` (Groq `gpt-oss-20b`/`120b`, DeepSeek, Gemini).
-- `decision.py` builds `TypeSafeClassifier()` at import, so importing `backend.pipeline.decision` (or `backend.api`) needs `TYPESAFE_API_KEY`. `effort.py`'s `answer_confidence_threshold`/`max_iterations` are actually used by `decision.py`.
+- `decision.py` builds `TypeSafeClassifier()` at import, so importing `backend.pipeline.decision` (or `backend.api`) needs `TYPESAFE_API_KEY`. `decision.py` uses `effort.py`'s `max_iterations` (the confidence revision-loop cap); the old per-effort confidence-threshold field no longer exists.
 - HTTP surface is broader than `/chat/stream`: background investigation jobs (`POST /chats/{id}/investigate`, poll `GET /chats/{id}/run/{run_id}`, plus `active-run`/`cancel`) backed by `backend/jobs.py`, plus `/chat/reframe`, auth, chat CRUD, and `/healthz`/`/readyz`/`/metrics`. `/chat/test` returns canned NDJSON for tests.
 - `/chat/stream` emits NDJSON events (`messages`, `tool_results`, `tool_progress`, `subgraph_name`, `subgraph_message`). Answers use `[[RESULT:Rn]]` markers serialized by `pipeline/answers.py` and rendered by `ui/rendering.py`; the serializer and renderer must stay in sync with the `id` fields on tool results.
 - DB query functions return `(sql.Composable, params)` and are wrapped by `query_runner`; each query sets `sdb_ai_allow_insecure_endpoint = true`.
@@ -42,5 +42,4 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 
 - README calling `scope`/`confidence` "documented stubs" is outdated — routing is fully implemented (`decision.py`, `graph.py`).
 - README lists `src/ui/config.py`; it does not exist — the backend URL is built in `src/ui/chat_client.py`.
-- `effort.py`'s docstring marks `answer_confidence_threshold`/`max_iterations` as "reserved/commented out", but `decision.py` uses both.
 - `state.py`'s comment calling `evidence_report_history` "unused today" is stale — `find_evidence` reads and appends it.
