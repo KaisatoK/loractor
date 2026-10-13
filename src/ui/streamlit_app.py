@@ -46,12 +46,23 @@ if "chat_histories" not in st.session_state:
     st.session_state.chat_histories = {}
 if "current_chat" not in st.session_state:
     st.session_state.current_chat = None
+if "active_runs" not in st.session_state:
+    # chat_id -> in-flight investigation the UI is watching (run_id + cursor).
+    st.session_state.active_runs = {}
 
 
 @st.dialog("Are you sure?")
 def delete(chat_id: str):
     st.markdown(f"Are you sure you want to delete chat {chat_id}?")
     if st.button("Yes, delete", type="primary"):
+        run = st.session_state.active_runs.pop(chat_id, None)
+        if run:
+            try:
+                chat_client.cancel_run(
+                    token=token, chat_id=chat_id, run_id=run["run_id"]
+                )
+            except Exception:  # noqa: BLE001 - deletion proceeds regardless
+                pass
         try:
             chat_client.delete_chat(token, chat_id)
         except Exception as err:  # noqa: BLE001

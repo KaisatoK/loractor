@@ -119,7 +119,11 @@ def stream_chat(
     effort: str,
     history: list[dict],
 ) -> Iterator[dict]:
-    """Stream chat events from the backend as decoded dicts."""
+    """Stream chat events from the backend as decoded dicts.
+
+    Retained for compatibility; the UI now uses ``start_investigation`` so
+    generation outlives the script run.
+    """
     with requests.post(
         STREAM_URL,
         json={
@@ -138,6 +142,73 @@ def stream_chat(
         for line in response.iter_lines(decode_unicode=True):
             if line:
                 yield json.loads(line)
+
+
+# --- Background investigations --------------------------------------------------
+
+
+def start_investigation(
+    *,
+    token: str,
+    chat_id: str,
+    role: str,
+    effort: str,
+    question: str,
+    history: list[dict],
+) -> dict:
+    """Start a backend-owned investigation; returns ``{run_id, status}``."""
+    response = requests.post(
+        f"{API_BASE}/chats/{chat_id}/investigate",
+        json={
+            "role": role,
+            "effort": effort,
+            "question": question,
+            "history": history,
+        },
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_run(
+    *,
+    token: str,
+    chat_id: str,
+    run_id: str,
+    since: int = 0,
+    wait: float = 0.0,
+) -> dict:
+    """Fetch buffered run events from ``since`` (optionally long-polling)."""
+    response = requests.get(
+        f"{API_BASE}/chats/{chat_id}/run/{run_id}",
+        params={"since": since, "wait": wait},
+        headers=_auth_headers(token),
+        timeout=(wait + 30) if wait else 30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def active_run(*, token: str, chat_id: str) -> str | None:
+    """The run id currently investigating this chat, if any."""
+    response = requests.get(
+        f"{API_BASE}/chats/{chat_id}/active-run",
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json().get("run_id")
+
+
+def cancel_run(*, token: str, chat_id: str, run_id: str) -> None:
+    """Ask the backend to stop an in-flight investigation."""
+    requests.post(
+        f"{API_BASE}/chats/{chat_id}/run/{run_id}/cancel",
+        headers=_auth_headers(token),
+        timeout=30,
+    )
 
 
 def reframe(

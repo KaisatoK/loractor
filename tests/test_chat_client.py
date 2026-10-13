@@ -135,3 +135,66 @@ def test_http_error_is_raised(monkeypatch):
     )
     with pytest.raises(requests.HTTPError):
         chat_client.list_chats("bad-token")
+
+
+def test_start_investigation_payload(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.update(url=url, payload=json, headers=headers)
+        return FakeResponse({"run_id": "r1", "status": "running"})
+
+    monkeypatch.setattr(chat_client.requests, "post", fake_post)
+    result = chat_client.start_investigation(
+        token="t",
+        chat_id="c1",
+        role="engineer",
+        effort="Medium",
+        question="q",
+        history=[{"role": "user", "content": "q"}],
+    )
+    assert result == {"run_id": "r1", "status": "running"}
+    assert captured["url"].endswith("/chats/c1/investigate")
+    assert captured["payload"]["question"] == "q"
+    assert captured["headers"] == {"Authorization": "Bearer t"}
+
+
+def test_get_run_sends_cursor_and_wait(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured.update(url=url, params=params, headers=headers)
+        return FakeResponse(
+            {
+                "status": "running",
+                "events": [],
+                "next_since": 0,
+                "result": None,
+                "error": None,
+            }
+        )
+
+    monkeypatch.setattr(chat_client.requests, "get", fake_get)
+    chat_client.get_run(token="t", chat_id="c1", run_id="r1", since=3, wait=2.0)
+    assert captured["url"].endswith("/chats/c1/run/r1")
+    assert captured["params"] == {"since": 3, "wait": 2.0}
+
+
+def test_active_run_returns_id(monkeypatch):
+    monkeypatch.setattr(
+        chat_client.requests, "get", lambda *a, **k: FakeResponse({"run_id": "r9"})
+    )
+    assert chat_client.active_run(token="t", chat_id="c1") == "r9"
+
+
+def test_cancel_run_posts(monkeypatch):
+    captured = {}
+
+    def fake_post(url, headers=None, timeout=None):
+        captured["url"] = url
+        return FakeResponse({"cancelled": True})
+
+    monkeypatch.setattr(chat_client.requests, "post", fake_post)
+    chat_client.cancel_run(token="t", chat_id="c1", run_id="r1")
+    assert captured["url"].endswith("/chats/c1/run/r1/cancel")
+

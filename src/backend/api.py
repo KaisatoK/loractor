@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.stream.transformers import CustomTransformer
 from pydantic import BaseModel, Field
 
+from backend import jobs
 from backend.appdb import auth, chats
 from backend.appdb.auth import require_user
 from backend.observability import RequestContextMiddleware, metrics
@@ -33,6 +34,11 @@ MAX_INFLIGHT_PER_USER = int(os.getenv("MAX_INFLIGHT_PER_USER", "2"))
 _global_slots = threading.BoundedSemaphore(MAX_GLOBAL_INFLIGHT)
 _user_slots: dict[str, int] = {}
 _slots_lock = threading.Lock()
+
+# Serialises "check for an active run -> persist the user turn -> launch" so a
+# double send cannot persist two user turns or leak a slot. Investigations start
+# rarely and quickly, so one lock (not one per chat) is plenty.
+_investigation_start_lock = threading.Lock()
 
 
 def _acquire_slot(user_id: str) -> None:
@@ -111,6 +117,13 @@ class ReframeRequest(TypedDict):
     question: str
     previous_answer: str
     tool_results: list
+
+
+class InvestigateRequest(TypedDict):
+    role: RoleName
+    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"]
+    question: str
+    history: list[ChatMessage]
 
 
 app = FastAPI(lifespan=lifespan)
@@ -228,6 +241,116 @@ def chat_stream(
             _release_slot(user_id)
 
     return StreamingResponse(guarded(), media_type="application/x-ndjson")
+
+
+@app.post("/chats/{chat_id}/investigate")
+def start_investigation(
+    chat_id: str, req: InvestigateRequest, user: dict = Depends(require_user)
+) -> dict:
+    """Start a background investigation and return its run id.
+
+    Generation and persistence are owned by a worker thread, independent of this
+    request and of the Streamlit script run that made it. Clients watch progress
+    via ``GET /chats/{chat_id}/run/{run_id}``; disconnecting no longer truncates
+    the work.
+    """
+    user_id = user["id"]
+
+    with _investigation_start_lock:
+        # Idempotent per chat: a double send resumes the in-flight run instead of
+        # persisting a second user message.
+        existing = jobs.registry.active_run(user_id, chat_id)
+        if existing is not None:
+            return {"run_id": existing, "status": jobs.RUNNING}
+
+        _acquire_slot(user_id)
+        try:
+            chats.append_message(user_id, chat_id, "user", req["question"])
+        except KeyError as e:
+            _release_slot(user_id)
+            raise HTTPException(status_code=404, detail="Chat not found.") from e
+        except Exception:
+            _release_slot(user_id)
+            raise
+
+        metrics.inc("chat_streams_started")
+
+        request = cast(
+            ChatRequest,
+            {
+                "chat_id": chat_id,
+                "role": req["role"],
+                "effort": req["effort"],
+                "history": req["history"],
+            },
+        )
+
+        def produce(_run: jobs.RunState) -> Iterator[str]:
+            return _stream_events(request, user_id)
+
+        run = jobs.registry.start(
+            user_id=user_id,
+            chat_id=chat_id,
+            produce=produce,
+            on_finish=lambda finished: _finish_investigation(
+                user_id, chat_id, finished
+            ),
+        )
+        return {"run_id": run.run_id, "status": run.status}
+
+
+def _finish_investigation(user_id: str, chat_id: str, run: jobs.RunState) -> None:
+    """Persist a completed answer and release capacity (runs in the worker)."""
+    metrics.inc("chat_streams_completed")
+    try:
+        if run.status == jobs.DONE:
+            chats.append_message(
+                user_id,
+                chat_id,
+                "assistant",
+                run.answer,
+                tool_results=run.tool_results,
+                progress=run.progress,
+            )
+    except KeyError:
+        # Chat deleted mid-run: nothing to persist, and that is fine.
+        pass
+    finally:
+        _release_slot(user_id)
+
+
+@app.get("/chats/{chat_id}/run/{run_id}")
+def get_run(
+    chat_id: str,
+    run_id: str,
+    since: int = 0,
+    wait: float = 0.0,
+    user: dict = Depends(require_user),
+) -> dict:
+    """Poll a run: replay buffered events from ``since`` (optionally long-poll)."""
+    run = jobs.registry.get(run_id)
+    if run is None or run.chat_id != chat_id or run.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if wait > 0:
+        jobs.registry.wait(run_id, since, timeout=wait)
+    payload = jobs.registry.snapshot(run_id, since)
+    if payload is None:  # evicted between get() and snapshot()
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return payload
+
+
+@app.get("/chats/{chat_id}/active-run")
+def get_active_run(chat_id: str, user: dict = Depends(require_user)) -> dict:
+    """The run currently investigating this chat, if any (for re-attach)."""
+    return {"run_id": jobs.registry.active_run(user["id"], chat_id)}
+
+
+@app.post("/chats/{chat_id}/run/{run_id}/cancel")
+def cancel_run(chat_id: str, run_id: str, user: dict = Depends(require_user)) -> dict:
+    run = jobs.registry.get(run_id)
+    if run is None or run.chat_id != chat_id or run.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return {"cancelled": jobs.registry.cancel(run_id)}
 
 
 @app.post("/chat/test")
@@ -358,7 +481,14 @@ def post_chat(req: CreateChat, user: dict = Depends(require_user)) -> dict:
 
 @app.delete("/chats/{chat_id}")
 def remove_chat(chat_id: str, user: dict = Depends(require_user)) -> dict:
-    deleted = chats.delete_chat(user["id"], chat_id)
+    user_id = user["id"]
+    # Cancel (and drop) any in-flight investigation before the chat disappears,
+    # so its worker stops and its persistence attempt is discarded cleanly.
+    active = jobs.registry.active_run(user_id, chat_id)
+    if active is not None:
+        jobs.registry.cancel(active)
+        jobs.registry.discard(active)
+    deleted = chats.delete_chat(user_id, chat_id)
     if deleted:
         metrics.inc("chats_deleted")
     return {"deleted": deleted}

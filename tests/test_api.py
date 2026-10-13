@@ -22,6 +22,18 @@ def test_unauthenticated_requests_are_rejected(client):
     )
     assert (
         client.post(
+            "/chats/c/investigate",
+            json={
+                "role": "engineer",
+                "effort": "Medium",
+                "question": "q",
+                "history": [{"role": "user", "content": "q"}],
+            },
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
             "/chat/reframe",
             json={
                 "target_role": "manager",

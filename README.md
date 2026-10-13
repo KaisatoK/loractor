@@ -10,11 +10,11 @@ team lead, manager). Accounts and chat history are persisted server-side.
 ```
 Streamlit UI (src/ui)
   │  Authorization: Bearer <token>
-  │  POST /auth/login            POST /chat/stream   (NDJSON event stream)
-  │  GET  /chats, /chats/{id}/messages
+  │  POST /auth/login            POST /chats/{id}/investigate  (starts a run)
+  │  GET  /chats, /chats/{id}/messages, /chats/{id}/run/{run}  (poll/re-attach)
   ▼
 FastAPI backend (src/backend/api.py)
-  │
+  │                          backend/jobs.py  (background run registry)
   ├──▶ App store (src/backend/appdb)      users · sessions · chats · messages
   │
   ▼
@@ -87,8 +87,28 @@ The pipeline is blocking (sync LangGraph nodes, sync model clients, sync
 psycopg2). The API therefore exposes **sync** endpoints (`def`, not `async def`)
 so FastAPI/Starlette run each investigation on the anyio worker pool instead of
 the event loop; users are then served in parallel rather than one at a time.
-The `/chat/stream` endpoint returns a `StreamingResponse` of newline-delimited
-JSON so the wire protocol is unchanged.
+
+## Background investigations
+
+Generation is **decoupled from the client that starts it**. `POST
+/chats/{id}/investigate` persists the user turn, launches the pipeline on a
+worker thread (`backend/jobs.py`), and returns a `run_id` immediately; the
+worker buffers every event and, on completion, persists the assistant message
+itself. The UI is only a viewer:
+
+- `GET /chats/{id}/run/{run_id}?since=N[&wait=S]` replays buffered events from a
+  cursor and reports `running | done | error | cancelled` (the `wait` parameter
+  long-polls).
+- `GET /chats/{id}/active-run` lets a fresh session re-attach to an in-flight run.
+- `POST /chats/{id}/run/{run_id}/cancel` (and `DELETE /chats/{id}`) stop a run.
+
+Because the run outlives any single HTTP request or Streamlit script run,
+switching conversations, deleting a chat, or refreshing the browser no longer
+truncates a half-rendered answer or erases its thinking — the work continues and
+the result still lands in the chat store. Runs are held in-process (single
+uvicorn worker); the retry/backoff, connection-pool, checkpointer, and admission
+controls below are unchanged. `POST /chat/stream` remains available as a direct,
+request-scoped NDJSON stream for compatibility.
 
 Supporting pieces:
 
@@ -197,6 +217,7 @@ Everything else runs without external services:
 | `test_auth.py` | scrypt hashing, users, sessions, expiry, bearer dependency |
 | `test_chats.py` | chat/message CRUD, ordering, upsert, cascade delete, isolation |
 | `test_api.py` | auth gating, chat endpoints, NDJSON streaming, admission limits, request ids, metrics |
+| `test_jobs.py` | background run registry and investigation endpoints (buffer, re-attach, cancel, persistence) |
 | `test_middleware.py` | error classification and retry/backoff |
 | `test_checkpointer.py` | checkpointer backend selection |
 | `test_config.py` / `test_connection.py` | env-driven config and the pooled connection layer |
@@ -224,6 +245,10 @@ All `/chat/*` and `/chats*` endpoints require `Authorization: Bearer <token>`.
 | `GET /auth/me` | current user → `{id, username}` |
 
 ### `POST /chat/stream`
+
+> Compatibility only. The UI now uses the background-investigation endpoints
+> below, which survive a disconnected client. `/chat/stream` still returns a
+> request-scoped `StreamingResponse` of the same NDJSON events.
 
 Request body (the user is derived from the bearer token):
 
@@ -270,6 +295,21 @@ Static event stream used to exercise the UI without running the pipeline.
 | `GET /chats/{chat_id}/messages` | `{messages: [...]}` |
 | `POST /chats/{chat_id}/messages` | append `{role, content, tool_results?, progress?, reframed_for?}` |
 
+### Background investigations
+
+| Endpoint | Result |
+| --- | --- |
+| `POST /chats/{chat_id}/investigate` | persist the user turn and start a run: `{role, effort, question, history}` → `{run_id, status}` |
+| `GET /chats/{chat_id}/run/{run_id}` | `?since=N&wait=S` → `{status, events, next_since, error, result}` |
+| `GET /chats/{chat_id}/active-run` | `{run_id}` for an in-flight run, else `{run_id: null}` |
+| `POST /chats/{chat_id}/run/{run_id}/cancel` | `{cancelled: bool}` |
+
+`status` is `running | done | error | cancelled`. On `done`, `result` carries
+`{answer, tool_results, progress}` — the same payload the backend persists as
+the assistant message. `wait` long-polls (capped at 30s). Starting an
+investigation for a chat that already has one returns the existing `run_id`.
+`DELETE /chats/{chat_id}` cancels and discards any active run.
+
 ### Operations
 
 | Endpoint | Result |
@@ -288,6 +328,7 @@ include streams started/completed/rejected, logins, chats, and messages.
 src/
 ├── backend/
 │   ├── api.py            FastAPI endpoints, streaming, and admission control
+│   ├── jobs.py           in-process background investigation registry
 │   ├── observability.py  request-correlation middleware and metrics registry
 │   ├── appdb/            users, sessions, chats, messages (SQLite)
 │   ├── db/               pooled SereneDB connection, config, and log queries
