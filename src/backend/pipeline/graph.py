@@ -90,7 +90,9 @@ def scope_node(state: PipelineState) -> PipelineState:
             clarify_count,
         )
         logger.debug("scope probabilities: %s", getattr(route, "probabilities", {}))
-    except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - a classifier failure must not break the run
         logger.warning("scope classifier failed, investigating instead: %s", error)
         scope = "find_evidence"
 
@@ -202,7 +204,9 @@ def confidence_node(state: PipelineState) -> PipelineState:
     try:
         response = classifier.invoke(prompts.confidence_request(state))
         route = decide_confidence(response, state.get("effort"), revision_count)
-    except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
+    except (
+        Exception
+    ) as error:  # noqa: BLE001 - a classifier failure must not break the run
         logger.warning("confidence classifier failed, returning answer: %s", error)
         route = {
             "next_state": "end",

@@ -20,9 +20,7 @@ MARKER_TEMPLATE = "[[RESULT:{result_id}]]"
 # Tolerant matcher for marker-like text the model may still echo inside a prose
 # block (mirrors the UI's MARKER_RE). Such text is stripped so a stray marker can
 # never reach the renderer from a prose block.
-_MARKER_RE = re.compile(
-    r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}"
-)
+_MARKER_RE = re.compile(r"[\[【［]{1,2}\s*(?:RESULT\s*:\s*)?(R\d+)\s*[\]】］]{1,2}")
 
 
 def serialize_answer(answer: Any, valid_ids: set[str]) -> str:

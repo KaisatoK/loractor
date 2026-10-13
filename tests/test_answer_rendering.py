@@ -154,9 +154,7 @@ def test_serialize_drops_unknown_and_duplicate_ids():
 
 
 def test_serialize_keeps_all_valid_tables():
-    answer = _answer(
-        [{"type": "table", "result_id": f"R{i}"} for i in range(1, 6)]
-    )
+    answer = _answer([{"type": "table", "result_id": f"R{i}"} for i in range(1, 6)])
     serialized = serialize_answer(answer, {f"R{i}" for i in range(1, 6)})
     assert serialized.count("[[RESULT:") == 5
 

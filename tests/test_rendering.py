@@ -17,13 +17,21 @@ class RecordingContainer:
 
 
 def test_marker_regex_accepts_variants():
-    for text in ["[[RESULT:R1]]", "[RESULT:R1]", "【RESULT:R1】", "［RESULT:R1］", "【R1】"]:
+    for text in [
+        "[[RESULT:R1]]",
+        "[RESULT:R1]",
+        "【RESULT:R1】",
+        "［RESULT:R1］",
+        "【R1】",
+    ]:
         assert MARKER_RE.search(text), text
 
 
 def test_marker_swapped_for_table():
     container = RecordingContainer()
-    render_answer(container, "before [[RESULT:R1]] after", [{"id": "R1", "rows": [{"a": 1}]}])
+    render_answer(
+        container, "before [[RESULT:R1]] after", [{"id": "R1", "rows": [{"a": 1}]}]
+    )
     kinds = [kind for kind, _ in container.calls]
     assert kinds == ["markdown", "dataframe", "markdown"]
     assert container.calls[1][1].equals(pd.DataFrame([{"a": 1}]))

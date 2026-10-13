@@ -153,7 +153,7 @@ ANSWER_SYSTEM_PROMPT = (
     "- A text block is one section of markdown prose. Write prose only: never "
     "include table syntax, pipe characters `|`, or result markers.\n"
     "- A table block names the id of one tool result to display as a table (for "
-    "example \"R1\"). Put a table block exactly where the table belongs in reading "
+    'example "R1"). Put a table block exactly where the table belongs in reading '
     "order, between the text blocks that introduce and follow it.\n"
     "- The tool result catalog lists the available ids. Reference only ids from "
     "that catalog, never invent an id, and show only the tables the reader needs.\n\n"

@@ -214,8 +214,13 @@ def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                     yield emit(
                         {"type": "subgraph_message", "content": str(sub_item.reasoning)}
                     )
-                elif isinstance(sub_item, dict) and sub_item.get("type") == "tool_progress":
-                    yield emit({"type": "tool_progress", "content": json.dumps(sub_item)})
+                elif (
+                    isinstance(sub_item, dict)
+                    and sub_item.get("type") == "tool_progress"
+                ):
+                    yield emit(
+                        {"type": "tool_progress", "content": json.dumps(sub_item)}
+                    )
         elif name == "custom":
             # No root-scope custom producers today, but forward the same shape
             # so a future node-level writer is surfaced without UI changes.

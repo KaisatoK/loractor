@@ -2,6 +2,7 @@ from langchain.agents import create_agent
 
 from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.middleware import make_error_middleware
+
 # from backend.pipeline.models import gemini_3_7_flash
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import EVIDENCE_REPORT_SYSTEM_PROMPT

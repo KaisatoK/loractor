@@ -197,4 +197,3 @@ def test_cancel_run_posts(monkeypatch):
     monkeypatch.setattr(chat_client.requests, "post", fake_post)
     chat_client.cancel_run(token="t", chat_id="c1", run_id="r1")
     assert captured["url"].endswith("/chats/c1/run/r1/cancel")
-

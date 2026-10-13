@@ -6,7 +6,6 @@ import threading
 import pytest
 from fastapi import HTTPException
 
-
 # --- Authentication gating ----------------------------------------------------
 
 
@@ -16,7 +15,12 @@ def test_unauthenticated_requests_are_rejected(client):
     assert (
         client.post(
             "/chat/stream",
-            json={"chat_id": "c", "role": "engineer", "effort": "Medium", "history": []},
+            json={
+                "chat_id": "c",
+                "role": "engineer",
+                "effort": "Medium",
+                "history": [],
+            },
         ).status_code
         == 401
     )
@@ -120,7 +124,9 @@ def test_chat_crud_and_user_isolation(client, registered):
     )
     assert (
         client.post(
-            "/chats/c1/messages", json={"role": "user", "content": "hi"}, headers=headers
+            "/chats/c1/messages",
+            json={"role": "user", "content": "hi"},
+            headers=headers,
         ).status_code
         == 200
     )
@@ -133,9 +139,7 @@ def test_chat_crud_and_user_isolation(client, registered):
     ).json()["token"]
     other_headers = {"Authorization": f"Bearer {other}"}
     assert client.get("/chats", headers=other_headers).json()["chats"] == []
-    assert (
-        client.delete("/chats/c1", headers=other_headers).json()["deleted"] is False
-    )
+    assert client.delete("/chats/c1", headers=other_headers).json()["deleted"] is False
     assert client.delete("/chats/c1", headers=headers).json()["deleted"] is True
 
 
@@ -164,7 +168,9 @@ def test_chat_test_streams_ndjson(client, registered):
     assert any(event["type"] == "messages" for event in events)
 
 
-def test_chat_stream_derives_user_from_token(client, api_module, registered, monkeypatch):
+def test_chat_stream_derives_user_from_token(
+    client, api_module, registered, monkeypatch
+):
     seen = {}
 
     class FakeRun:

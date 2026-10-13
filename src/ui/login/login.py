@@ -59,7 +59,9 @@ def login_page() -> None:
     with register_tab:
         with st.form("register_form"):
             new_username = st.text_input("Username", key="reg_username")
-            new_password = st.text_input("Password", type="password", key="reg_password")
+            new_password = st.text_input(
+                "Password", type="password", key="reg_password"
+            )
             confirm = st.text_input(
                 "Confirm password", type="password", key="reg_confirm"
             )

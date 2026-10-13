@@ -1,8 +1,8 @@
-import json
-
 import pyperclip
+import json
 import streamlit as st
 
+from stream_events import apply_event
 from ui import chat_client
 from ui.rendering import MARKER_RE, render_answer
 from ui.roles import ROLE_LABELS
@@ -85,12 +85,12 @@ def _apply_event(run: dict, event: dict) -> None:
     elif etype == "tool_results":
         try:
             run["tool_results"] = json.loads(content) or []
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             run["tool_results"] = []
     elif etype == "tool_progress":
         try:
             op = json.loads(content)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return
         action, status = op.get("operation", ""), op.get("status")
         if status == "completed":
@@ -99,7 +99,11 @@ def _apply_event(run: dict, event: dict) -> None:
             _buffer_progress(run, f"{action} — failed")
     elif etype == "subgraph_name":
         # A new subgraph = a new stage/cycle: drop the previous cycle's thinking.
-        _buffer_progress(run, f"Currently at stage: {content}", new_cycle=(content == "find_evidence"))
+        _buffer_progress(
+            run,
+            f"Currently at stage: {content}",
+            new_cycle=(content == "find_evidence"),
+        )
     elif etype == "subgraph_message":
         _buffer_progress(run, f"Thinking: {content}")
 
@@ -214,6 +218,38 @@ def render_active_run(current_chat, token: str, chat_id: str, live) -> None:
                 return
             st.warning(f"Lost connection to the investigation: {err}")
             return
+
+    for event in payload["events"]:
+        apply_event(run, event)
+    run["since"] = payload["next_since"]
+
+    status = payload["status"]
+    # A keyed expander, not st.status: st.status has no `key`, so its identity
+    # churns each cycle (and its __exit__ force-flips state to "complete"),
+    # which discards the user's expand/collapse toggle. Here the stable key
+    # derives a stable block id, and that id is what pins this element's
+    # identity, so the toggle survives the fragment's 1-second reruns. The label
+    # is held constant only to avoid per-cycle churn and misleading status text;
+    # for a non-stateful keyed expander it is not an input to the id. Nothing
+    # mutates the element after the block.
+    with st.expander(
+        "Processing...", expanded=False, type="compact", key=f"progress_{chat_id}"
+    ):
+        for stage in run["progress"]:
+            st.caption(stage)
+
+    with st.chat_message("assistant"):
+        # A single markdown element on every cycle (never swap the element type
+        # for a caption), so the browser updates the text in place rather than
+        # unmounting and rebuilding it.
+        text = (
+            MARKER_RE.sub("_loading table…_", run["answer"])
+            if run["answer"]
+            else "_thinking…_"
+        )
+        if status == "running":
+            text += "▌"
+        st.markdown(text)
 
         # Buffer only — nothing is drawn here; the redraw happens below.
         for event in payload["events"]:

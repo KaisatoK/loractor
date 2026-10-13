@@ -23,6 +23,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from stream_events import apply_event, new_live_state
+
 RUNNING = "running"
 DONE = "done"
 ERROR = "error"
@@ -49,12 +51,24 @@ class RunState:
     events: list[str] = field(default_factory=list)
     error: str | None = None
     result: dict[str, Any] | None = None
-    # Derived from the event stream so they can be persisted and re-rendered.
-    answer: str = ""
-    tool_results: list[Any] = field(default_factory=list)
-    progress: list[str] = field(default_factory=list)
+    # Derived from the event stream (via the shared reducer) so it can be
+    # persisted and re-rendered; answer/tool_results/progress are exposed below
+    # as read-only properties for pollers and the finish hook.
+    live: dict = field(default_factory=new_live_state)
     cancel: threading.Event = field(default_factory=threading.Event)
     condition: threading.Condition = field(default_factory=threading.Condition)
+
+    @property
+    def answer(self) -> str:
+        return self.live["answer"]
+
+    @property
+    def tool_results(self) -> list[Any]:
+        return self.live["tool_results"]
+
+    @property
+    def progress(self) -> list[str]:
+        return self.live["progress"]
 
 
 class RunRegistry:
@@ -207,38 +221,12 @@ class RunRegistry:
     def _append(self, run: RunState, line: str) -> None:
         try:
             event = json.loads(line)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return
-        self._track(run, event)
+        apply_event(run.live, event)
         with run.condition:
             run.events.append(line)
             run.condition.notify_all()
-
-    def _track(self, run: RunState, event: dict) -> None:
-        """Derive answer/tool_results/progress from an event (UI parity)."""
-        etype = event.get("type")
-        content = event.get("content", "")
-        if etype == "messages":
-            run.answer = content
-        elif etype == "tool_results":
-            try:
-                run.tool_results = json.loads(content) or []
-            except (TypeError, ValueError):
-                run.tool_results = []
-        elif etype == "tool_progress":
-            try:
-                op = json.loads(content)
-            except (TypeError, ValueError):
-                return
-            action, status = op.get("operation", ""), op.get("status")
-            if status == "completed":
-                run.progress.append(f"✓ {action}")
-            elif status not in ("started", None):
-                run.progress.append(f"{action} — failed")
-        elif etype == "subgraph_name":
-            run.progress.append(f"Currently at stage: {content}")
-        elif etype == "subgraph_message":
-            run.progress.append(f"Thinking: {content}")
 
     def _finish(self, run: RunState) -> None:
         with self._lock:

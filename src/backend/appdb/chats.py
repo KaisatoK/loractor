@@ -25,14 +25,18 @@ def _row_to_message(row) -> dict:
     return {
         "role": row["role"],
         "content": row["content"],
-        "tool_results": json.loads(row["tool_results"]) if row["tool_results"] else None,
+        "tool_results": (
+            json.loads(row["tool_results"]) if row["tool_results"] else None
+        ),
         "progress": json.loads(row["progress"]) if row["progress"] else None,
         "reframed_for": row["reframed_for"],
         "created_at": row["created_at"],
     }
 
 
-def create_chat(user_id: str, chat_id: str, role: str, title: str | None = None) -> dict:
+def create_chat(
+    user_id: str, chat_id: str, role: str, title: str | None = None
+) -> dict:
     now = _now()
     with db() as cur:
         cur.execute(

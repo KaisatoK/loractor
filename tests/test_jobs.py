@@ -11,7 +11,6 @@ import time
 
 from backend.jobs import CANCELLED, DONE, ERROR, RunRegistry
 
-
 # --- Registry -----------------------------------------------------------------
 
 
@@ -207,7 +206,9 @@ def _create_chat(client, headers, chat_id="c1", role="engineer"):
     )
 
 
-def test_investigate_persists_answer_without_the_client(client, api_module, monkeypatch):
+def test_investigate_persists_answer_without_the_client(
+    client, api_module, monkeypatch
+):
     _user, headers = _make_user("investigator")
     _create_chat(client, headers)
 
@@ -294,9 +295,9 @@ def test_active_run_reflects_inflight_investigation(client, api_module, monkeypa
         "question": "q",
         "history": [{"role": "user", "content": "q"}],
     }
-    run_id = client.post(
-        "/chats/c1/investigate", json=body, headers=headers
-    ).json()["run_id"]
+    run_id = client.post("/chats/c1/investigate", json=body, headers=headers).json()[
+        "run_id"
+    ]
 
     active = client.get("/chats/c1/active-run", headers=headers).json()
     assert active["run_id"] == run_id
@@ -323,9 +324,9 @@ def test_delete_cancels_and_discards_inflight_run(client, api_module, monkeypatc
         "question": "q",
         "history": [{"role": "user", "content": "q"}],
     }
-    run_id = client.post(
-        "/chats/c1/investigate", json=body, headers=headers
-    ).json()["run_id"]
+    run_id = client.post("/chats/c1/investigate", json=body, headers=headers).json()[
+        "run_id"
+    ]
 
     assert client.delete("/chats/c1", headers=headers).json()["deleted"] is True
     release.set()

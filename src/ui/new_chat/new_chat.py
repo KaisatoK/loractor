@@ -25,9 +25,7 @@ def new_chat():
     def start_chat(role: str):
         new_chat_id = datetime.now().strftime("%Y%m%d%H%M%S")
         try:
-            chat_client.create_chat(
-                st.session_state.auth["token"], new_chat_id, role
-            )
+            chat_client.create_chat(st.session_state.auth["token"], new_chat_id, role)
         except Exception as err:  # noqa: BLE001 - surface to the user
             st.error(f"Could not start a new chat: {err}")
             return
