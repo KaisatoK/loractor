@@ -13,11 +13,11 @@ class EffortSpec:
 
 
 EFFORT_SPECS: dict[str, EffortSpec] = {
-    "Low": EffortSpec(3, 1, 0.50, 5),
-    "Medium": EffortSpec(6, 2, 0.60, 10),
-    "High": EffortSpec(8, 3, 0.70, 15),
-    "Extreme": EffortSpec(10, 3, 0.75, 20),
-    "Brutal": EffortSpec(12, 3, 0.90, 25),
+    "Low": EffortSpec(3, 1, 0.50, 0),
+    "Medium": EffortSpec(5, 2, 0.60, 1),
+    "High": EffortSpec(8, 3, 0.70, 2),
+    "Extreme": EffortSpec(13, 3, 0.75, 3),
+    "Brutal": EffortSpec(21, 3, 0.90, 3),
 }
 
 
