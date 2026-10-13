@@ -2,3 +2,5 @@ __pycache__
 .env
 .agents
 .vscode
+.data/
+.opencode/

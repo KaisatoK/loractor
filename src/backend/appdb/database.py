@@ -1,0 +1,96 @@
+"""Application-data store (users, sessions, chats, messages).
+
+Kept separate from the SereneDB log store. SQLite is used by default so the
+backend is durable without extra infrastructure; a single connection guarded by a
+lock is comfortable for the few-dozen concurrent users this app targets.
+"""
+
+import os
+import sqlite3
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+
+_DEFAULT_PATH = Path.cwd() / ".data" / "app.sqlite"
+
+_lock = threading.RLock()
+_conn: sqlite3.Connection | None = None
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS chats (
+    id         TEXT NOT NULL,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,
+    title      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    user_id      TEXT NOT NULL,
+    chat_id      TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    role         TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    tool_results TEXT,
+    progress     TEXT,
+    reframed_for TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (user_id, chat_id, seq),
+    FOREIGN KEY (user_id, chat_id) REFERENCES chats(user_id, id) ON DELETE CASCADE
+);
+"""
+
+
+def db_path() -> Path:
+    return Path(os.getenv("APP_DB_PATH", str(_DEFAULT_PATH)))
+
+
+def _connect() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        with _lock:
+            if _conn is None:
+                path = db_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(str(path), check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=5000")
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.executescript(_SCHEMA)
+                conn.commit()
+                _conn = conn
+    return _conn
+
+
+@contextmanager
+def db():
+    """Yield a cursor inside a lock; commit on success, rollback on error."""
+    conn = _connect()
+    with _lock:
+        cur = conn.cursor()
+        try:
+            yield cur
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()

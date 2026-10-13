@@ -1,6 +1,9 @@
 """Agent middleware for model/tool error handling."""
 
 import logging
+import os
+import re
+import time
 from collections.abc import Callable
 
 from langchain.agents.middleware import (
@@ -14,7 +17,11 @@ from langgraph.types import Command
 
 logger = logging.getLogger(__name__)
 
-MAX_MODEL_RETRIES = 3
+MAX_MODEL_RETRIES = int(os.getenv("MODEL_MAX_RETRIES", "3"))
+RETRY_BASE_DELAY = float(os.getenv("MODEL_RETRY_BASE_DELAY", "1.0"))
+RETRY_MAX_DELAY = float(os.getenv("MODEL_RETRY_MAX_DELAY", "20.0"))
+# Transient provider failures worth retrying with backoff.
+RETRYABLE_KINDS = {"rate_limit", "connection"}
 
 USER_MESSAGES = {
     "rate_limit": "The model is rate-limited right now. Please try again in a few minutes.",
@@ -22,6 +29,10 @@ USER_MESSAGES = {
     "connection": "Could not reach the model. Please try again.",
     "unknown": f"The model failed to process the request after {MAX_MODEL_RETRIES} attempts. Please try again.",
 }
+
+_RETRY_AFTER_RE = re.compile(
+    r"(?:retry[- ]?after|try again in)\D{0,12}?(\d+(?:\.\d+)?)\s*s", re.IGNORECASE
+)
 
 
 def _classify(err: Exception) -> str:
@@ -35,18 +46,43 @@ def _classify(err: Exception) -> str:
     return "unknown"
 
 
+def _retry_after_seconds(err: Exception) -> float | None:
+    """Best-effort parse of a provider-suggested retry delay (e.g. 'retry after 3s')."""
+    match = _RETRY_AFTER_RE.search(str(err))
+    return float(match.group(1)) if match else None
+
+
 def make_error_middleware(fallback_factory=None):
     @wrap_model_call
     def middleware(request, handler):
-        try:
-            return handler(request)
-        except Exception as e:
-            kind = _classify(e)
-            msg = USER_MESSAGES[kind] + f" (Error: {e})"
-            return ModelResponse(
-                result=[AIMessage(content=msg)],
-                structured_response=fallback_factory(msg) if fallback_factory else None,
-            )
+        for attempt in range(MAX_MODEL_RETRIES):
+            try:
+                return handler(request)
+            except Exception as e:
+                kind = _classify(e)
+                is_last = attempt == MAX_MODEL_RETRIES - 1
+                if kind in RETRYABLE_KINDS and not is_last:
+                    delay = min(RETRY_BASE_DELAY * (2**attempt), RETRY_MAX_DELAY)
+                    suggested = _retry_after_seconds(e)
+                    if suggested is not None:
+                        delay = max(delay, suggested)
+                    logger.warning(
+                        "Model call failed (%s), retrying in %.1fs (attempt %s/%s)",
+                        kind,
+                        delay,
+                        attempt + 1,
+                        MAX_MODEL_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
+
+                msg = USER_MESSAGES[kind] + f" (Error: {e})"
+                return ModelResponse(
+                    result=[AIMessage(content=msg)],
+                    structured_response=(
+                        fallback_factory(msg) if fallback_factory else None
+                    ),
+                )
 
     return middleware
 
