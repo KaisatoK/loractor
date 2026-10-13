@@ -80,7 +80,14 @@ def _logout() -> None:
     except Exception:  # noqa: BLE001 - logging out should never fail loudly
         pass
     demo.mark_logged_out()  # demo-only: stop the gate auto-signing back in
-    for key in ("auth", "chat_histories", "current_chat", "chats_loaded", "effort"):
+    for key in (
+        "auth",
+        "chat_histories",
+        "current_chat",
+        "chats_loaded",
+        "effort",
+        "active_runs",
+    ):
         st.session_state.pop(key, None)
     st.rerun()
 

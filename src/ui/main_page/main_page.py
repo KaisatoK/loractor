@@ -27,18 +27,61 @@ def copy_to_clipboard_button(content: str, role: str, idx: int):
         st.toast(body="Copied to clipboard!", duration=1)
 
 
-def _status_label(status: str) -> str:
-    return {"done": "Done", "error": "Failed", "cancelled": "Cancelled"}.get(
-        status, status
-    )
+# Backend run statuses (mirrors backend/jobs.py).
+RUNNING = "running"
+DONE = "done"
+ERROR = "error"
+CANCELLED = "cancelled"
+_TERMINAL = {DONE, ERROR, CANCELLED}
+
+
+def _new_run(run_id: str, question: str | None) -> dict:
+    """Fresh UI-side state for watching one backend run.
+
+    ``log`` is the render buffer (display items in arrival order) and
+    ``cycle_start`` is where the currently active cycle begins. The live view
+    redraws only ``log[cycle_start:]`` so the thinking of an older revision
+    stage does not pile up behind the current one.
+    """
+    return {
+        "run_id": run_id,
+        "since": 0,
+        "status": RUNNING,
+        "log": [{"kind": "progress", "text": "Investigating…"}],
+        "cycle_start": 0,
+        "progress": [],
+        "answer": "",
+        "tool_results": [],
+        "question": question,
+        "result": None,
+        "error": None,
+    }
+
+
+def _buffer_progress(run: dict, line: str, *, new_cycle: bool = False) -> None:
+    """Record a progress line for persistence and queue it for live rendering.
+
+    ``new_cycle=True`` drops the lines of the previous cycle by moving
+    ``cycle_start`` to the new line (used when a new subgraph/stage begins).
+    """
+    run["progress"].append(line)
+    if new_cycle:
+        run["cycle_start"] = len(run["log"])
+    run["log"].append({"kind": "progress", "text": line})
 
 
 def _apply_event(run: dict, event: dict) -> None:
-    """Fold one streamed event into the in-progress run's rendered state."""
+    """Fold one streamed event into the run's buffer (renders nothing).
+
+    The live view redraws the buffered lines on its own cadence, so a poll tick
+    only ever appends to the buffer instead of driving the screen.
+    """
     etype = event.get("type")
     content = event.get("content", "")
     if etype == "messages":
         run["answer"] = content
+        if content:
+            run["log"].append({"kind": "answer", "text": content})
     elif etype == "tool_results":
         try:
             run["tool_results"] = json.loads(content) or []
@@ -51,13 +94,38 @@ def _apply_event(run: dict, event: dict) -> None:
             return
         action, status = op.get("operation", ""), op.get("status")
         if status == "completed":
-            run["progress"].append(f"✓ {action}")
+            _buffer_progress(run, f"✓ {action}")
         elif status not in ("started", None):
-            run["progress"].append(f"{action} — failed")
+            _buffer_progress(run, f"{action} — failed")
     elif etype == "subgraph_name":
-        run["progress"].append(f"Currently at stage: {content}")
+        # A new subgraph = a new stage/cycle: drop the previous cycle's thinking.
+        _buffer_progress(run, f"Currently at stage: {content}", new_cycle=True)
     elif etype == "subgraph_message":
-        run["progress"].append(f"Thinking: {content}")
+        _buffer_progress(run, f"Thinking: {content}")
+
+
+def _render_live_item(container, item: dict) -> None:
+    """Draw one buffered display item (a thinking line or the streamed answer)."""
+    if item["kind"] == "answer":
+        container.markdown(MARKER_RE.sub("_loading table…_", item["text"]))
+    else:
+        container.caption(item["text"])
+
+
+def _render_live(box, run: dict) -> None:
+    """Replace the live box with the current cycle's buffered items.
+
+    ``box`` is an ``st.empty()`` created outside the polling fragment. The
+    fragment's writes to an outside container are cleared and redrawn on every
+    tick, so drawing *only* new items would wipe them next tick; instead we
+    redraw the whole current cycle each time. Writing a fresh child container
+    into the empty box replaces the previous tick's render (no accumulation),
+    which is what keeps repeated refreshes from stacking up.
+    """
+    container = box.container()
+    with container:
+        for item in run["log"][run["cycle_start"] :]:
+            _render_live_item(container, item)
 
 
 def start_message(current_chat, text, effort, token: str, chat_id: str) -> None:
@@ -82,98 +150,86 @@ def start_message(current_chat, text, effort, token: str, chat_id: str) -> None:
         history=request_history,
     )
     current_chat["history"].append({"role": "user", "content": text, "progress": None})
-    st.session_state.active_runs[chat_id] = {
-        "run_id": run["run_id"],
-        "since": 0,
-        "answer": "",
-        "progress": [],
-        "tool_results": [],
-        "question": text,
-    }
+    st.session_state.active_runs[chat_id] = _new_run(run["run_id"], text)
 
 
-def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
+def _finalize_run(current_chat, chat_id: str, run: dict, live) -> None:
     """Retire a finished run and fold its result back into the chat history."""
     st.session_state.active_runs.pop(chat_id, None)
-    status = payload["status"]
-    if status == "done":
-        result = payload.get("result") or {}
+    status = run["status"]
+    if status == DONE:
+        result = run.get("result") or {}
         current_chat["history"].append(
             {
                 "role": "assistant",
-                "content": result.get("answer", ""),
-                "progress": result.get("progress") or [],
-                "tool_results": result.get("tool_results") or [],
+                "content": result.get("answer") or run["answer"],
+                "progress": result.get("progress") or run["progress"],
+                "tool_results": result.get("tool_results") or run["tool_results"],
             }
         )
-        # Full rerun so the completed answer renders through the history loop
-        # (real tables plus the reframe buttons), not the live placeholder.
+        # A single full rerun at the very end (never during streaming) so the
+        # finished answer renders through the history loop with its real tables
+        # and reframe buttons instead of the plain live placeholder.
         st.rerun(scope="app")
-    elif status == "error":
-        st.error(f"Investigation failed: {payload.get('error') or 'unknown error'}")
+    elif status == ERROR:
+        # Drawn into the live container so it survives the fragment's next tick.
+        live.error(f"Investigation failed: {run.get('error') or 'unknown error'}")
     # cancelled: the chat was deleted or the run was stopped; render nothing.
 
 
 @st.fragment(run_every="1s")
-def render_active_run(current_chat, token: str, chat_id: str) -> None:
-    """Watch the chat's in-flight investigation and render it live.
+def render_active_run(current_chat, token: str, chat_id: str, live) -> None:
+    """Poll the chat's in-flight investigation and redraw its live progress.
 
-    A fragment (not the whole script) polls, so a periodic refresh never reruns
-    the page; state is keyed by chat id, so navigating away and back re-attaches
-    to the same run instead of cancelling it.
+    Only this fragment refreshes on a timer. Each tick it buffers any new events
+    into session state and then redraws the current cycle into ``live`` (an
+    ``st.empty()`` created outside the fragment), whose previous content is
+    replaced rather than stacked. State is keyed by chat id, so switching
+    conversations and returning re-attaches to the same run instead of
+    cancelling it.
     """
     run = st.session_state.active_runs.get(chat_id)
     if not run:
         return
-    try:
-        payload = chat_client.get_run(
-            token=token,
-            chat_id=chat_id,
-            run_id=run["run_id"],
-            since=run["since"],
-            wait=2.0,
-        )
-    except Exception as err:  # noqa: BLE001 - the run itself keeps going
-        status_code = getattr(getattr(err, "response", None), "status_code", None)
-        if status_code == 404:
-            # The run is gone (evicted or discarded); stop tracking it and
-            # refresh history in case it was persisted before eviction.
-            st.session_state.active_runs.pop(chat_id, None)
-            try:
-                current_chat["history"] = chat_client.get_messages(token, chat_id)
-            except Exception:  # noqa: BLE001 - best effort
-                pass
-            st.rerun(scope="app")
-            return
-        st.warning(f"Lost connection to the investigation: {err}")
-        return
 
-    for event in payload["events"]:
-        _apply_event(run, event)
-    run["since"] = payload["next_since"]
-
-    status = payload["status"]
-    with st.status(
-        label="Processing..." if status == "running" else _status_label(status),
-        type="compact",
-        state="running"
-        if status == "running"
-        else ("complete" if status == "done" else "error"),
-    ):
-        for stage in run["progress"]:
-            st.caption(stage)
-
-    with st.chat_message("assistant"):
-        if run["answer"]:
-            st.markdown(
-                MARKER_RE.sub("_loading table…_", run["answer"])
-                + ("▌" if status == "running" else "")
+    if run["status"] not in _TERMINAL:
+        try:
+            payload = chat_client.get_run(
+                token=token,
+                chat_id=chat_id,
+                run_id=run["run_id"],
+                since=run["since"],
             )
-        else:
-            st.caption("_thinking…_")
+        except Exception as err:  # noqa: BLE001 - the run itself keeps going
+            status_code = getattr(getattr(err, "response", None), "status_code", None)
+            if status_code == 404:
+                # The run is gone (evicted or discarded); stop tracking it and
+                # refresh history in case it was persisted before eviction.
+                st.session_state.active_runs.pop(chat_id, None)
+                try:
+                    current_chat["history"] = chat_client.get_messages(token, chat_id)
+                except Exception:  # noqa: BLE001 - best effort
+                    pass
+                st.rerun(scope="app")
+                return
+            st.warning(f"Lost connection to the investigation: {err}")
+            return
 
-    if status != "running":
-        _finalize_run(current_chat, chat_id, payload)
+        # Buffer only — nothing is drawn here; the redraw happens below.
+        for event in payload["events"]:
+            _apply_event(run, event)
+        run["since"] = payload["next_since"]
+        run["status"] = payload["status"]
+        run["error"] = payload.get("error")
+        if payload.get("result") is not None:
+            run["result"] = payload["result"]
+
+    # Redraw the current cycle into the live box so every buffered line stays
+    # visible (the fragment's outside-container region is cleared each tick).
+    _render_live(live, run)
+
+    if run["status"] in _TERMINAL:
+        _finalize_run(current_chat, chat_id, run, live)
 
 
 def main_page():
@@ -199,14 +255,7 @@ def main_page():
             except Exception:  # noqa: BLE001 - re-attachment is best-effort
                 run_id = None
             if run_id:
-                st.session_state.active_runs[chat_id] = {
-                    "run_id": run_id,
-                    "since": 0,
-                    "answer": "",
-                    "progress": [],
-                    "tool_results": [],
-                    "question": None,
-                }
+                st.session_state.active_runs[chat_id] = _new_run(run_id, None)
 
     for idx, item in enumerate(current_chat["history"]):
         if (item["role"] == "assistant" and "progress" in item) and item[
@@ -284,9 +333,13 @@ def main_page():
                 st.markdown(item["content"])
         copy_to_clipboard_button(item["content"], item["role"], idx)
 
-    # Live view of an in-flight investigation for this chat (if any).
-    if chat_id in st.session_state.active_runs:
-        render_active_run(current_chat, token, chat_id)
+    # Live view of an in-flight investigation for this chat (if any). The box is
+    # an st.empty() created outside the polling fragment; the fragment redraws
+    # the current cycle into it each tick, replacing (not stacking) content.
+    run = st.session_state.active_runs.get(chat_id)
+    if run:
+        live = st.empty()
+        render_active_run(current_chat, token, chat_id, live)
 
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 

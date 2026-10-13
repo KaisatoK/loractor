@@ -14,4 +14,4 @@ deepseek = ChatDeepSeek(
     model="deepseek-flash",
 )
 
-gemini_3_7_flash = ChatGoogleGenerativeAI(model="gemini-3.7-flash")
+# gemini_3_7_flash = ChatGoogleGenerativeAI(model="gemini-3.7-flash")
