@@ -1,14 +1,44 @@
-from pathlib import Path
+import io
+import subprocess
 
+from pathlib import Path
 from psycopg2 import sql
 
 from backend.db.config import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
+    LOG_CSV_PATH,
     MODEL_BASE_URL,
     TABLE_NAME,
 )
 from backend.db.connection import db_cursor
+
+# The base column set shared by the source CSV (``export_embedded_csv``) and the
+# embedded CSV read by ``read_csv``. Names match the file's header; types map
+# onto the log table below. The embedded CSV carries one extra trailing
+# ``embedding`` column, appended in ``_csv_columns_clause``.
+_CSV_COLUMNS = (
+    ("LineId", "BIGINT"),
+    ("Logrecord", "VARCHAR"),
+    ("Date", "DATE"),
+    ("Time", "TIME"),
+    ("Pid", "BIGINT"),
+    ("Level", "VARCHAR"),
+    ("Service", "VARCHAR"),
+    ("ADDR", "VARCHAR"),
+    ("Content", "VARCHAR"),
+    ("EventId", "VARCHAR"),
+    ("EventTemplate", "VARCHAR"),
+)
+
+
+def _csv_columns_clause() -> str:
+    # read_csv must be told the embedded CSV's schema: passing ``columns``
+    # disables the sniffer, which would otherwise read the ``embedding`` list as
+    # VARCHAR. The ``embedding`` column only exists in the embedded CSV.
+    columns = [*_CSV_COLUMNS, ("embedding", f"FLOAT[{EMBEDDING_DIMENSION}]")]
+    body = ", ".join(f"'{name}': '{type_}'" for name, type_ in columns)
+    return "{" + body + "}"
 
 
 def create_ai_secret():
@@ -33,13 +63,126 @@ def create_ai_secret():
         print("AI secret 'local_ai' created successfully.")
 
 
-def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
+def export_embedded_csv(file_path: str) -> None:
+    """Embed a local log CSV into its ``..._embedded.csv`` sibling.
+
+    Streams ``file_path`` (relative to this module's directory) to SereneDB,
+    computes one ``ai_embed`` per row, and writes the result — the original
+    columns plus an ``embedding`` column — to the same name with ``_embedded``
+    inserted before ``.csv``.
+    """
     base_dir = Path(__file__).resolve().parent
-    absolute_file_path = base_dir / relative_file_path
+    src_path = base_dir / file_path
+    out_path = src_path.with_name(f"{src_path.stem}_embedded.csv")
+
+    col_defs = sql.SQL(", ").join(
+        sql.SQL("{} {}").format(sql.Identifier(name), sql.SQL(type_))
+        for name, type_ in _CSV_COLUMNS
+    )
+    col_names = sql.SQL(", ").join(sql.Identifier(name) for name, _ in _CSV_COLUMNS)
 
     with db_cursor() as cur:
         cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
+        cur.execute("DROP TABLE IF EXISTS embed_src")
 
+        create_src_query = sql.SQL("CREATE TEMP TABLE embed_src ({col_defs})").format(
+            col_defs=col_defs
+        )
+        cur.execute(create_src_query)
+
+        copy_in_query = sql.SQL(
+            "COPY embed_src ({col_names}) FROM STDIN WITH CSV HEADER DELIMITER ','"
+        ).format(col_names=col_names)
+        with src_path.open("r", encoding="utf-8", newline="") as fh:
+            cur.copy_expert(copy_in_query, fh)
+
+        copy_out_query = sql.SQL(
+            "COPY ("
+            "  SELECT *, ai_embed(Content, {embedding_model}, 'local_ai')"
+            "::FLOAT[{embedding_dimension}] AS embedding"
+            "   FROM embed_src ORDER BY LineId"
+            ") TO STDOUT WITH (FORMAT csv, HEADER)"
+        ).format(
+            embedding_model=sql.Literal(EMBEDDING_MODEL),
+            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
+        )
+        out = io.StringIO()
+        cur.copy_expert(copy_out_query, out)
+
+        cur.execute("DROP TABLE embed_src")
+
+    out_path.write_text(out.getvalue(), encoding="utf-8")
+    print(f"Wrote {out_path}.")
+
+
+def copy_csv_to_container(file_path: str) -> None:
+    """Copy a local CSV into the SereneDB container's ``/data`` directory.
+
+    ``read_csv`` runs inside the server, so the file must live in the container;
+    this is the docker-copy step from ``setup.sh``, done in-process.
+    """
+    base_dir = Path(__file__).resolve().parent
+    src_path = base_dir / file_path
+    container = "serenedb"
+    remote_dir = "/data"
+
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            container,
+            "sh",
+            "-c",
+            f"mkdir -p {remote_dir}",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            container,
+            "sh",
+            "-c",
+            f"rm -f {remote_dir}/*.csv",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["docker", "cp", str(src_path), f"{container}:{remote_dir}/"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            container,
+            "sh",
+            "-c",
+            f"chmod 644 {remote_dir}/*.csv",
+        ],
+        check=True,
+    )
+    print(f"Copied {src_path.name} into container '{container}' ({remote_dir}).")
+
+
+def import_from_csv(table_name: str = TABLE_NAME):
+    """Build the log table from the embedded CSV that lives inside SereneDB.
+
+    The CSV at ``LOG_CSV_PATH`` already carries the ``embedding`` column, so
+    there is no file COPY and no ``ai_embed`` step: rows are read straight from
+    ``read_csv`` and the table, full-text dictionary and inverted index are
+    (re)built from the result. The reader runs server-side, so ``LOG_CSV_PATH``
+    must be visible to the SereneDB container.
+    """
+
+    with db_cursor() as cur:
         drop_query = sql.SQL("DROP TABLE IF EXISTS {table_name} CASCADE").format(
             table_name=sql.Identifier(table_name)
         )
@@ -69,45 +212,46 @@ def import_from_csv(relative_file_path: str, table_name: str = TABLE_NAME):
         cur.execute(create_table_query)
         print(f"Table '{table_name}' created successfully.")
 
-        copy_query = sql.SQL("""
-            COPY {table_name} (
-                line_id, log_record, log_date, log_time, pid, 
-                category, service, addr, content, event_id, event_template
+        insert_query = sql.SQL("""
+            INSERT INTO {table_name} (
+                line_id, log_record, log_date, log_time, log_timestamp,
+                pid, category, service, addr, content, event_id,
+                event_template, embedding
             )
-            FROM STDIN
-            WITH CSV HEADER DELIMITER ','
-        """).format(table_name=sql.Identifier(table_name))
-        with open(absolute_file_path, "r", encoding="utf-8") as f:
-            cur.copy_expert(copy_query, f)
-        print("CSV data copied successfully.")
-
-        update_timestamp_query = sql.SQL("""
-            UPDATE {table_name} 
-            SET log_timestamp = (log_date + log_time)::timestamp
-        """).format(table_name=sql.Identifier(table_name))
-        cur.execute(update_timestamp_query)
-        print("Populated log_timestamp column.")
-
-        update_embedding_query = sql.SQL("""
-            UPDATE {table_name} 
-            SET embedding = ai_embed(content, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}]
+            SELECT
+                LineId, Logrecord, Date, Time, (Date + Time)::TIMESTAMP,
+                Pid, Level, Service, ADDR, Content, EventId,
+                EventTemplate, embedding
+            FROM read_csv({csv_path}, header = true, columns = {columns})
         """).format(
             table_name=sql.Identifier(table_name),
-            embedding_model=sql.Literal(EMBEDDING_MODEL),
-            embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
+            csv_path=sql.Literal(LOG_CSV_PATH),
+            columns=sql.SQL(_csv_columns_clause()),
         )
-        cur.execute(update_embedding_query)
-        print("Generated embedding vectors.")
+        cur.execute(insert_query)
+        print("Loaded rows from the embedded CSV (with embeddings).")
 
         cur.execute("""
             CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS english AS 
             split_text(case := 'lower') WITH (frequency, position, offset)
         """)
 
+        # Service names are dotted/underscored identifiers (e.g.
+        # ``nova.osapi_compute.wsgi.server``); ``split_text`` keeps those as one
+        # token, so a dedicated analyzer splits them into component words.
+        cur.execute("""
+            CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS dotted AS 
+            split_by_non_alpha() | normalize_tokens('en_US.UTF-8', case := 'lower') 
+            WITH (frequency, position)
+        """)
+
         create_index_query = sql.SQL("""
             CREATE INDEX {index_name} ON {table_name} USING inverted (
                 line_id, 
                 content english, 
+                service dotted, 
+                event_template english, 
+                event_id english, 
                 embedding ivf (metric = 'cosine')
             )
         """).format(
@@ -127,5 +271,11 @@ if __name__ == "__main__":
     ### CREATE AI SECRET REQUIRED TO RUN SERENEDB, ONLY NEED TO BE RAN ONCE
     create_ai_secret()
 
-    ### IMPORT FROM CSV
-    import_from_csv("../data/OpenStack_2k.log_structured.csv")
+    ### EMBED THE LOCAL CSV
+    # export_embedded_csv("../data/OpenStack_2k.log_structured.csv")
+
+    ### COPY THE EMBEDDED CSV INTO THE SERENEDB CONTAINER
+    copy_csv_to_container("../data/OpenStack_2k.log_structured_embedded.csv")
+
+    ### IMPORT FROM THE EMBEDDED CSV THAT LIVES IN THE SERENEDB CONTAINER
+    import_from_csv()

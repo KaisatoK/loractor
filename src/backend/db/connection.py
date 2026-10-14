@@ -9,19 +9,15 @@ import functools
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from typing import ParamSpec
-
 import psycopg2
 
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
-from collections.abc import Callable
-from contextlib import contextmanager
-from typing import Generator, ParamSpec
-from backend.db.config import SERENEDB_PORT
 from psycopg2.pool import PoolError, ThreadedConnectionPool
+
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import ParamSpec
 
 from backend.db.config import (
     SERENEDB_DB,
