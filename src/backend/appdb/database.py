@@ -14,7 +14,7 @@ from pathlib import Path
 _DEFAULT_PATH = Path.cwd() / ".data" / "app.sqlite"
 
 _lock = threading.RLock()
-_conn: sqlite3.Connection | None = None
+connection: sqlite3.Connection | None = None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -63,10 +63,10 @@ def db_path() -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
+    global connection
+    if connection is None:
         with _lock:
-            if _conn is None:
+            if connection is None:
                 path = db_path()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -76,8 +76,8 @@ def _connect() -> sqlite3.Connection:
                 conn.execute("PRAGMA foreign_keys=ON")
                 conn.executescript(_SCHEMA)
                 conn.commit()
-                _conn = conn
-    return _conn
+                connection = conn
+    return connection
 
 
 @contextmanager

@@ -6,17 +6,22 @@ import threading
 import pytest
 from fastapi import HTTPException
 
-
 # --- Authentication gating ----------------------------------------------------
 
 
 def test_unauthenticated_requests_are_rejected(client):
     assert client.get("/chats").status_code == 401
     assert client.get("/auth/me").status_code == 401
+    assert client.get("/auto-complete", params={"query": "nova"}).status_code == 401
     assert (
         client.post(
             "/chat/stream",
-            json={"chat_id": "c", "role": "engineer", "effort": "Medium", "history": []},
+            json={
+                "chat_id": "c",
+                "role": "engineer",
+                "effort": "Medium",
+                "history": [],
+            },
         ).status_code
         == 401
     )
@@ -45,6 +50,24 @@ def test_unauthenticated_requests_are_rejected(client):
         ).status_code
         == 401
     )
+
+
+def test_auto_complete_returns_suggestions_for_authenticated_user(
+    client, api_module, registered, monkeypatch
+):
+    # Stub the DB lookup: this exercises the route, not the query layer.
+    monkeypatch.setattr(
+        api_module,
+        "auto_complete",
+        lambda query: [{"suggestion": f"match:{query}", "count": 2}],
+    )
+    response = client.get(
+        "/auto-complete", params={"query": "@nova"}, headers=registered["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "suggestions": [{"suggestion": "match:@nova", "count": 2}]
+    }
 
 
 def test_auth_flow_register_login_logout(client):
@@ -120,7 +143,9 @@ def test_chat_crud_and_user_isolation(client, registered):
     )
     assert (
         client.post(
-            "/chats/c1/messages", json={"role": "user", "content": "hi"}, headers=headers
+            "/chats/c1/messages",
+            json={"role": "user", "content": "hi"},
+            headers=headers,
         ).status_code
         == 200
     )
@@ -133,9 +158,7 @@ def test_chat_crud_and_user_isolation(client, registered):
     ).json()["token"]
     other_headers = {"Authorization": f"Bearer {other}"}
     assert client.get("/chats", headers=other_headers).json()["chats"] == []
-    assert (
-        client.delete("/chats/c1", headers=other_headers).json()["deleted"] is False
-    )
+    assert client.delete("/chats/c1", headers=other_headers).json()["deleted"] is False
     assert client.delete("/chats/c1", headers=headers).json()["deleted"] is True
 
 
@@ -164,7 +187,9 @@ def test_chat_test_streams_ndjson(client, registered):
     assert any(event["type"] == "messages" for event in events)
 
 
-def test_chat_stream_derives_user_from_token(client, api_module, registered, monkeypatch):
+def test_chat_stream_derives_user_from_token(
+    client, api_module, registered, monkeypatch
+):
     seen = {}
 
     class FakeRun:
@@ -200,36 +225,36 @@ def test_chat_stream_derives_user_from_token(client, api_module, registered, mon
 
 def test_per_user_inflight_limit(api_module, registered):
     user_id = registered["user"]["id"]
-    api_module._acquire_slot(user_id)
-    api_module._acquire_slot(user_id)
+    api_module.acquire_slot(user_id)
+    api_module.acquire_slot(user_id)
     try:
         with pytest.raises(HTTPException) as excinfo:
-            api_module._acquire_slot(user_id)
+            api_module.acquire_slot(user_id)
         assert excinfo.value.status_code == 429
     finally:
-        api_module._release_slot(user_id)
-        api_module._release_slot(user_id)
+        api_module.release_slot(user_id)
+        api_module.release_slot(user_id)
 
 
 def test_global_inflight_limit(api_module, monkeypatch):
-    monkeypatch.setattr(api_module, "_global_slots", threading.BoundedSemaphore(1))
-    with api_module._slots_lock:
-        api_module._user_slots.clear()
+    monkeypatch.setattr(api_module, "global_slots", threading.BoundedSemaphore(1))
+    with api_module.slots_lock:
+        api_module.user_slots.clear()
 
-    api_module._acquire_slot("user-a")
+    api_module.acquire_slot("user-a")
     try:
         with pytest.raises(HTTPException) as excinfo:
-            api_module._acquire_slot("user-b")
+            api_module.acquire_slot("user-b")
         assert excinfo.value.status_code == 503
     finally:
-        api_module._release_slot("user-a")
+        api_module.release_slot("user-a")
 
 
 def test_release_is_idempotent_after_acquire(api_module):
-    api_module._acquire_slot("u")
-    api_module._release_slot("u")
-    with api_module._slots_lock:
-        assert "u" not in api_module._user_slots
+    api_module.acquire_slot("u")
+    api_module.release_slot("u")
+    with api_module.slots_lock:
+        assert "u" not in api_module.user_slots
 
 
 # --- Operations ---------------------------------------------------------------

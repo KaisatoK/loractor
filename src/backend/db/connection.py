@@ -82,11 +82,9 @@ def get_conn():
 @contextmanager
 def db_cursor() -> Iterator[RealDictCursor]:
     pool = _get_pool()
-
-    # Wait (bounded) for a free connection instead of failing immediately when
-    # every pooled connection is momentarily in use.
     deadline = time.monotonic() + SERENEDB_POOL_ACQUIRE_TIMEOUT
     conn = None
+
     while conn is None:
         try:
             conn = pool.getconn()
@@ -99,9 +97,11 @@ def db_cursor() -> Iterator[RealDictCursor]:
                     SERENEDB_POOL_MAX,
                 )
                 raise
+
             time.sleep(0.05)
 
     cur = None
+
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         yield cur
@@ -112,6 +112,7 @@ def db_cursor() -> Iterator[RealDictCursor]:
     finally:
         if cur is not None:
             cur.close()
+
         pool.putconn(conn)
 
 
@@ -123,7 +124,6 @@ def query_runner(
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> list[dict]:
         logger.debug("Running %s args=%s kwargs=%s", func.__name__, args, kwargs)
-
         query, params = func(*args, **kwargs)
 
         with db_cursor() as cur:

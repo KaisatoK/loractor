@@ -21,15 +21,15 @@ def app_db(tmp_path, monkeypatch):
     import backend.appdb.database as database
 
     monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "app.sqlite"))
-    previous = database._conn
-    database._conn = None
+    previous = database.connection
+    database.connection = None
     yield
-    if database._conn is not None:
+    if database.connection is not None:
         try:
-            database._conn.close()
+            database.connection.close()
         except Exception:  # noqa: BLE001
             pass
-    database._conn = previous
+    database.connection = previous
 
 
 @pytest.fixture()
@@ -37,11 +37,11 @@ def api_module(app_db):
     """Import the API with a clean admission-control state."""
     import backend.api as api
 
-    with api._slots_lock:
-        api._user_slots.clear()
+    with api.slots_lock:
+        api.user_slots.clear()
     yield api
-    with api._slots_lock:
-        api._user_slots.clear()
+    with api.slots_lock:
+        api.user_slots.clear()
 
 
 @pytest.fixture()

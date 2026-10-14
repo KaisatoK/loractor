@@ -1,5 +1,6 @@
 """Database access layer: connection, configuration, and log queries."""
 
+from backend.db.auto_complete import auto_complete
 from backend.db.config import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
@@ -34,6 +35,7 @@ __all__ = [
     "MODEL_BASE_URL",
     "SERENEDB_PORT",
     "TABLE_NAME",
+    "auto_complete",
     "compare_periods",
     "count_by_category",
     "count_event_id_by_category",

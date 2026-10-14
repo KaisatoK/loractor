@@ -83,6 +83,22 @@ def get_messages(token: str, chat_id: str) -> list:
     return response.json()["messages"]
 
 
+def auto_complete(token: str, query: str) -> list[dict]:
+    """Type-ahead suggestions from the log index's field values.
+
+    A leading selector in ``query`` scopes it to one column: ``@`` for service,
+    ``#`` for event_id and ``$`` for event_template.
+    """
+    response = requests.get(
+        f"{API_BASE}/auto-complete",
+        params={"query": query},
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["suggestions"]
+
+
 def append_message(
     token: str,
     chat_id: str,

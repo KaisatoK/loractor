@@ -2,11 +2,11 @@
 
 Under langgraph's v3 streaming protocol a root-scope LLM call surfaces on the
 ``messages`` channel as a single ``ChatModelStream`` object, not a list of
-messages. ``api._stream_events`` used to do ``item[-1].text`` there, which raises
+messages. ``api.stream_events`` used to do ``item[-1].text`` there, which raises
 ``TypeError: 'ChatModelStream' object is not subscriptable`` and tears the NDJSON
 response before the terminal ``messages`` event.
 
-This drives the *real* ``_stream_events`` generator with a stubbed run that yields
+This drives the *real* ``stream_events`` generator with a stubbed run that yields
 a genuine ``ChatModelStream`` on ``messages`` followed by a ``values`` event, and
 asserts the answer still reaches the client. It needs no model and no database.
 """
@@ -63,7 +63,7 @@ def test_root_messages_branch_survives_chat_model_stream(monkeypatch, api_module
         ),
     )
 
-    events = list(api_module._stream_events(_request(), "user-1"))
+    events = list(api_module.stream_events(_request(), "user-1"))
 
     # The generator did not raise, and the terminal answer event was emitted.
     final = json.loads(events[-1])
@@ -83,6 +83,6 @@ def test_root_messages_branch_still_logs_list_shaped_items(monkeypatch, api_modu
     )
 
     with caplog.at_level("DEBUG", logger="backend.api"):
-        list(api_module._stream_events(_request(), "user-1"))
+        list(api_module.stream_events(_request(), "user-1"))
 
     assert "stream message: partial" in caplog.text

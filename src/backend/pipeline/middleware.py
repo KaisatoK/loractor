@@ -35,7 +35,7 @@ _RETRY_AFTER_RE = re.compile(
 )
 
 
-def _classify(err: Exception) -> str:
+def classify(err: Exception) -> str:
     s = str(err).lower()
     if "rate limit" in s:
         return "rate_limit"
@@ -46,7 +46,7 @@ def _classify(err: Exception) -> str:
     return "unknown"
 
 
-def _retry_after_seconds(err: Exception) -> float | None:
+def retry_after_seconds(err: Exception) -> float | None:
     """Best-effort parse of a provider-suggested retry delay (e.g. 'retry after 3s')."""
     match = _RETRY_AFTER_RE.search(str(err))
     return float(match.group(1)) if match else None
@@ -59,11 +59,11 @@ def make_error_middleware(fallback_factory=None):
             try:
                 return handler(request)
             except Exception as e:
-                kind = _classify(e)
+                kind = classify(e)
                 is_last = attempt == MAX_MODEL_RETRIES - 1
                 if kind in RETRYABLE_KINDS and not is_last:
                     delay = min(RETRY_BASE_DELAY * (2**attempt), RETRY_MAX_DELAY)
-                    suggested = _retry_after_seconds(e)
+                    suggested = retry_after_seconds(e)
                     if suggested is not None:
                         delay = max(delay, suggested)
                     logger.warning(

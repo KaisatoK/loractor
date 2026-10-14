@@ -1,0 +1,89 @@
+:root {
+  --ac-bg: #ffffff;
+  --ac-fg: #262730;
+  --ac-border: rgba(49, 51, 63, 0.2);
+  --ac-primary: #4bff4b;
+  --ac-muted: rgba(49, 51, 63, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  font-family: "Source Sans Pro", "Segoe UI", sans-serif;
+  font-size: 16px;
+  color: var(--ac-fg);
+}
+
+#box {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--ac-border);
+  border-radius: 8px;
+  background: var(--ac-bg);
+}
+
+#box:focus-within {
+  border-color: var(--ac-primary);
+}
+
+#q {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ac-fg);
+  font: inherit;
+  padding: 8px 6px;
+}
+
+#list {
+  display: none;
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid var(--ac-border);
+  border-radius: 8px;
+  background: var(--ac-bg);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+#list.open {
+  display: block;
+}
+
+#list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+#list li:hover {
+  background: color-mix(in srgb, var(--ac-primary) 18%, transparent);
+}
+
+#list li .term {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#list li .hits {
+  flex: none;
+  color: var(--ac-muted);
+  font-size: 0.78em;
+}

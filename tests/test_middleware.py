@@ -5,17 +5,17 @@ from langchain.agents.middleware import ModelResponse
 
 
 def test_classify_error_kinds():
-    assert middleware._classify(Exception("Rate limit exceeded")) == "rate_limit"
-    assert middleware._classify(Exception("request too large")) == "too_large"
-    assert middleware._classify(Exception("connection reset by peer")) == "connection"
-    assert middleware._classify(Exception("the request timed out")) == "connection"
-    assert middleware._classify(Exception("mysterious failure")) == "unknown"
+    assert middleware.classify(Exception("Rate limit exceeded")) == "rate_limit"
+    assert middleware.classify(Exception("request too large")) == "too_large"
+    assert middleware.classify(Exception("connection reset by peer")) == "connection"
+    assert middleware.classify(Exception("the request timed out")) == "connection"
+    assert middleware.classify(Exception("mysterious failure")) == "unknown"
 
 
 def test_retry_after_parsing():
-    assert middleware._retry_after_seconds(Exception("Please try again in 2.5s")) == 2.5
-    assert middleware._retry_after_seconds(Exception("retry after 3 seconds")) == 3.0
-    assert middleware._retry_after_seconds(Exception("no hint here")) is None
+    assert middleware.retry_after_seconds(Exception("Please try again in 2.5s")) == 2.5
+    assert middleware.retry_after_seconds(Exception("retry after 3 seconds")) == 3.0
+    assert middleware.retry_after_seconds(Exception("no hint here")) is None
 
 
 def test_transient_failure_is_retried_then_succeeds(monkeypatch):

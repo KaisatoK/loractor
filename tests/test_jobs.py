@@ -218,7 +218,7 @@ def test_investigate_persists_answer_without_the_client(client, api_module, monk
         )
         yield _event(type="messages", content="Findings [[RESULT:R1]]")
 
-    monkeypatch.setattr(api_module, "_stream_events", fake_stream)
+    monkeypatch.setattr(api_module, "stream_events", fake_stream)
 
     response = client.post(
         "/chats/c1/investigate",
@@ -258,7 +258,7 @@ def test_investigate_is_idempotent_while_running(client, api_module, monkeypatch
         release.wait(3)
         yield _event(type="messages", content="done")
 
-    monkeypatch.setattr(api_module, "_stream_events", slow_stream)
+    monkeypatch.setattr(api_module, "stream_events", slow_stream)
     body = {
         "role": "engineer",
         "effort": "Medium",
@@ -287,7 +287,7 @@ def test_active_run_reflects_inflight_investigation(client, api_module, monkeypa
         release.wait(3)
         yield _event(type="messages", content="done")
 
-    monkeypatch.setattr(api_module, "_stream_events", slow_stream)
+    monkeypatch.setattr(api_module, "stream_events", slow_stream)
     body = {
         "role": "engineer",
         "effort": "Medium",
@@ -316,7 +316,7 @@ def test_delete_cancels_and_discards_inflight_run(client, api_module, monkeypatc
         release.wait(3)
         yield _event(type="messages", content="done")
 
-    monkeypatch.setattr(api_module, "_stream_events", slow_stream)
+    monkeypatch.setattr(api_module, "stream_events", slow_stream)
     body = {
         "role": "engineer",
         "effort": "Medium",
@@ -347,7 +347,7 @@ def test_run_endpoints_require_auth_and_ownership(client, api_module, monkeypatc
         release.wait(3)
         yield _event(type="messages", content="done")
 
-    monkeypatch.setattr(api_module, "_stream_events", slow_stream)
+    monkeypatch.setattr(api_module, "stream_events", slow_stream)
     body = {
         "role": "engineer",
         "effort": "Medium",

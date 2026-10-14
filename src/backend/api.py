@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import threading
+
 from collections.abc import AsyncIterable, Iterator
 from contextlib import asynccontextmanager
 from typing import Literal, TypedDict, cast
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 from backend import jobs
 from backend.appdb import auth, chats
 from backend.appdb.auth import require_user
+from backend.db.auto_complete import auto_complete
 from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import answer_agent
 from backend.pipeline.answers import serialize_answer
@@ -31,9 +33,9 @@ MAX_THREADS = int(os.getenv("MAX_THREADS", "100"))
 MAX_GLOBAL_INFLIGHT = int(os.getenv("MAX_GLOBAL_INFLIGHT", "32"))
 MAX_INFLIGHT_PER_USER = int(os.getenv("MAX_INFLIGHT_PER_USER", "2"))
 
-_global_slots = threading.BoundedSemaphore(MAX_GLOBAL_INFLIGHT)
-_user_slots: dict[str, int] = {}
-_slots_lock = threading.Lock()
+global_slots = threading.BoundedSemaphore(MAX_GLOBAL_INFLIGHT)
+user_slots: dict[str, int] = {}
+slots_lock = threading.Lock()
 
 # Serialises "check for an active run -> persist the user turn -> launch" so a
 # double send cannot persist two user turns or leak a slot. Investigations start
@@ -41,10 +43,10 @@ _slots_lock = threading.Lock()
 _investigation_start_lock = threading.Lock()
 
 
-def _acquire_slot(user_id: str) -> None:
+def acquire_slot(user_id: str) -> None:
     """Reserve capacity for one investigation, or reject with a clear status."""
-    with _slots_lock:
-        if _user_slots.get(user_id, 0) >= MAX_INFLIGHT_PER_USER:
+    with slots_lock:
+        if user_slots.get(user_id, 0) >= MAX_INFLIGHT_PER_USER:
             metrics.inc("chat_streams_rejected_per_user")
             raise HTTPException(
                 status_code=429,
@@ -54,24 +56,24 @@ def _acquire_slot(user_id: str) -> None:
                 ),
                 headers={"Retry-After": "5"},
             )
-        if not _global_slots.acquire(blocking=False):
+        if not global_slots.acquire(blocking=False):
             metrics.inc("chat_streams_rejected_global")
             raise HTTPException(
                 status_code=503,
                 detail="The server is at capacity. Please retry shortly.",
                 headers={"Retry-After": "5"},
             )
-        _user_slots[user_id] = _user_slots.get(user_id, 0) + 1
+        user_slots[user_id] = user_slots.get(user_id, 0) + 1
 
 
-def _release_slot(user_id: str) -> None:
-    with _slots_lock:
-        remaining = _user_slots.get(user_id, 0) - 1
+def release_slot(user_id: str) -> None:
+    with slots_lock:
+        remaining = user_slots.get(user_id, 0) - 1
         if remaining > 0:
-            _user_slots[user_id] = remaining
+            user_slots[user_id] = remaining
         else:
-            _user_slots.pop(user_id, None)
-    _global_slots.release()
+            user_slots.pop(user_id, None)
+    global_slots.release()
 
 
 @asynccontextmanager
@@ -146,7 +148,7 @@ def _thread_id(user_id: str, chat_id: str) -> str:
     return f"{user_id}:{chat_id}"
 
 
-def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
+def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
     """Run the pipeline and yield newline-delimited JSON events.
 
     This is a *synchronous* generator by design: FastAPI/Starlette iterate it on
@@ -223,8 +225,13 @@ def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                     yield emit(
                         {"type": "subgraph_message", "content": str(sub_item.reasoning)}
                     )
-                elif isinstance(sub_item, dict) and sub_item.get("type") == "tool_progress":
-                    yield emit({"type": "tool_progress", "content": json.dumps(sub_item)})
+                elif (
+                    isinstance(sub_item, dict)
+                    and sub_item.get("type") == "tool_progress"
+                ):
+                    yield emit(
+                        {"type": "tool_progress", "content": json.dumps(sub_item)}
+                    )
         elif name == "custom":
             # No root-scope custom producers today, but forward the same shape
             # so a future node-level writer is surfaced without UI changes.
@@ -239,15 +246,15 @@ def chat_stream(
     req: ChatRequest, user: dict = Depends(require_user)
 ) -> StreamingResponse:
     user_id = user["id"]
-    _acquire_slot(user_id)
+    acquire_slot(user_id)
     metrics.inc("chat_streams_started")
 
     def guarded() -> Iterator[str]:
         try:
-            yield from _stream_events(req, user_id)
+            yield from stream_events(req, user_id)
         finally:
             metrics.inc("chat_streams_completed")
-            _release_slot(user_id)
+            release_slot(user_id)
 
     return StreamingResponse(guarded(), media_type="application/x-ndjson")
 
@@ -272,14 +279,14 @@ def start_investigation(
         if existing is not None:
             return {"run_id": existing, "status": jobs.RUNNING}
 
-        _acquire_slot(user_id)
+        acquire_slot(user_id)
         try:
             chats.append_message(user_id, chat_id, "user", req["question"])
         except KeyError as e:
-            _release_slot(user_id)
+            release_slot(user_id)
             raise HTTPException(status_code=404, detail="Chat not found.") from e
         except Exception:
-            _release_slot(user_id)
+            release_slot(user_id)
             raise
 
         metrics.inc("chat_streams_started")
@@ -295,7 +302,7 @@ def start_investigation(
         )
 
         def produce(_run: jobs.RunState) -> Iterator[str]:
-            return _stream_events(request, user_id)
+            return stream_events(request, user_id)
 
         run = jobs.registry.start(
             user_id=user_id,
@@ -325,7 +332,7 @@ def _finish_investigation(user_id: str, chat_id: str, run: jobs.RunState) -> Non
         # Chat deleted mid-run: nothing to persist, and that is fine.
         pass
     finally:
-        _release_slot(user_id)
+        release_slot(user_id)
 
 
 @app.get("/chats/{chat_id}/run/{run_id}")
@@ -371,6 +378,17 @@ async def chat_test(
     yield {"type": "subgraphs", "content": "retrieval"}
     yield {"type": "subgraphs", "content": "search"}
     yield {"type": "messages", "content": "can I help you?"}
+
+
+@app.get("/auto-complete", dependencies=[Depends(require_user)])
+def get_auto_complete(query: str) -> dict:
+    """Type-ahead suggestions from the log index's field values.
+
+    ``query`` is required and searched across all three columns. A leading
+    selector scopes it to one column: ``@`` for ``service``, ``#`` for
+    ``event_id`` and ``$`` for ``event_template``.
+    """
+    return {"suggestions": auto_complete(query)}
 
 
 @app.post("/chat/reframe")
@@ -569,9 +587,9 @@ def readyz() -> dict:
 @app.get("/metrics")
 def get_metrics() -> dict:
     """In-process counters plus live admission-control gauges."""
-    with _slots_lock:
-        active_users = len(_user_slots)
-        inflight = sum(_user_slots.values())
+    with slots_lock:
+        active_users = len(user_slots)
+        inflight = sum(user_slots.values())
     snapshot = metrics.snapshot()
     snapshot["gauges"] = {
         "inflight_investigations": inflight,

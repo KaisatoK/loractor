@@ -4,6 +4,7 @@ import pyperclip
 import streamlit as st
 
 from ui import chat_client
+from ui.chat_box import chat_box
 from ui.rendering import MARKER_RE, render_answer
 from ui.roles import ROLE_LABELS
 
@@ -58,38 +59,6 @@ def _apply_event(run: dict, event: dict) -> None:
         run["progress"].append(f"Currently at stage: {content}")
     elif etype == "subgraph_message":
         run["progress"].append(f"Thinking: {content}")
-
-
-def start_message(current_chat, text, effort, token: str, chat_id: str) -> None:
-    """Hand the user turn off to the backend as a background investigation.
-
-    The backend owns the investigation from here on and persists both messages;
-    the UI only watches the run, so switching conversations or deleting the chat
-    no longer truncates the answer or erases the thinking. Local history is only
-    updated once the backend has accepted the run, so a failed start leaves the
-    chat unchanged.
-    """
-    request_history = [
-        {"role": item["role"], "content": item["content"]}
-        for item in current_chat["history"]
-    ] + [{"role": "user", "content": text}]
-    run = chat_client.start_investigation(
-        token=token,
-        chat_id=chat_id,
-        role=current_chat["role"],
-        effort=effort,
-        question=text,
-        history=request_history,
-    )
-    current_chat["history"].append({"role": "user", "content": text, "progress": None})
-    st.session_state.active_runs[chat_id] = {
-        "run_id": run["run_id"],
-        "since": 0,
-        "answer": "",
-        "progress": [],
-        "tool_results": [],
-        "question": text,
-    }
 
 
 def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
@@ -316,19 +285,5 @@ def main_page():
         key="effort",
     )
 
-    message = col2.chat_input(
-        placeholder="Type your message here...", accept_file="multiple"
-    )
-
-    if message:
-        if chat_id in st.session_state.active_runs:
-            st.warning("An investigation is already running for this chat.")
-        else:
-            try:
-                start_message(current_chat, message.text, effort, token, chat_id)
-            except Exception as err:  # noqa: BLE001 - surface, don't crash
-                st.error(f"Could not start the investigation: {err}")
-            else:
-                # Re-render so the live run (and, when done, its reframe buttons
-                # via the history loop) is picked up immediately.
-                st.rerun()
+    with col2:
+        chat_box(token, current_chat, chat_id, effort)

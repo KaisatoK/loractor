@@ -306,7 +306,7 @@ graph.add_conditional_edges(
 )
 
 
-def _build_checkpointer():
+def build_checkpointer():
     """Checkpointer backend, selected by ``CHECKPOINT_BACKEND``.
 
     - ``sqlite`` (default): durable, single-process/multi-thread. The saver
@@ -366,5 +366,5 @@ def _build_checkpointer():
     )
 
 
-checkpointer = _build_checkpointer()
+checkpointer = build_checkpointer()
 chatbot = graph.compile(checkpointer=checkpointer)

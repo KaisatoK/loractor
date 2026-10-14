@@ -123,6 +123,30 @@ Supporting pieces:
 > Chat histories are now stored server-side per authenticated user, so they
 > survive refresh and restart. See **Authentication** below.
 
+## Type-ahead auto-complete
+
+The chat box suggests indexed log-field values as you type. The *current word*
+(the run of non-space characters the caret sits in) is looked up through
+`GET /auto-complete`; the dropdown opens only while the box is focused, and
+picking a suggestion replaces the draft words it spans (a multi-word
+`event_template` such as `Removable base files: <*>` replaces every word it lines
+up with, so nothing is duplicated).
+
+A leading **selector** scopes the lookup to one column. One character is assigned
+per column, chosen so that it occurs in *no* indexed value and can therefore
+never collide with real text:
+
+| Selector | Column |
+| --- | --- |
+| `@` | `service` |
+| `#` | `event_id` |
+| `$` | `event_template` |
+
+So `@nova` suggests services, `#E25` suggests event ids, and `$Removable`
+suggests event templates; without a selector the word is matched across all three
+columns. A bare selector lists that column's most popular values. The selector is
+stripped before matching and is consumed when a suggestion is picked.
+
 ## Authentication
 
 Accounts, sessions, and chats are owned by the backend (`backend/appdb`), and the
@@ -283,6 +307,13 @@ Returns `{"answer": "..."}`.
 
 Static event stream used to exercise the UI without running the pipeline.
 
+### `GET /auto-complete`
+
+Type-ahead suggestions from the indexed log-field values. `query` is required;
+a leading selector scopes it to one column (`@` service, `#` event_id, `$`
+event_template), and a bare selector lists that column's most popular values.
+Returns `{"suggestions": [{"suggestion", "count"}, ...]}`.
+
 ### Chats
 
 | Endpoint | Result |
@@ -350,6 +381,7 @@ src/
     ├── roles.py          role labels and cards
     ├── login/            sign-in / registration page
     ├── main_page/        active chat page
+    ├── chat_box/         type-ahead chat input (custom component, no build)
     └── new_chat/         role-selection page
 skills/
 └── log-investigation/SKILL.md  hypothesis workflow for the evidence stage

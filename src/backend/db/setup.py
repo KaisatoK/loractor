@@ -93,6 +93,7 @@ def export_embedded_csv(file_path: str) -> None:
         copy_in_query = sql.SQL(
             "COPY embed_src ({col_names}) FROM STDIN WITH CSV HEADER DELIMITER ','"
         ).format(col_names=col_names)
+
         with src_path.open("r", encoding="utf-8", newline="") as fh:
             cur.copy_expert(copy_in_query, fh)
 
@@ -237,21 +238,27 @@ def import_from_csv(table_name: str = TABLE_NAME):
         """)
 
         # Service names are dotted/underscored identifiers (e.g.
-        # ``nova.osapi_compute.wsgi.server``); ``split_text`` keeps those as one
-        # token, so a dedicated analyzer splits them into component words.
+        # ``nova.osapi_compute.wsgi.server``); ``split_by_non_alpha`` splits them
+        # into their component words for the auto-complete's word-level mistyping
+        # fallback, which matches a near-miss against those words.
         cur.execute("""
             CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS dotted AS 
             split_by_non_alpha() | normalize_tokens('en_US.UTF-8', case := 'lower') 
             WITH (frequency, position)
         """)
 
+        # ``service``, ``event_id`` and ``event_template`` are indexed verbatim
+        # (no dictionary): one term per value, case intact, so the auto-complete
+        # recipe's ``ts_dict_agg`` walks the dictionary and returns the field's
+        # real values rather than lowercased word tokens. ``content`` keeps its
+        # dictionary for full-text search.
         create_index_query = sql.SQL("""
             CREATE INDEX {index_name} ON {table_name} USING inverted (
                 line_id, 
                 content english, 
-                service dotted, 
-                event_template english, 
-                event_id english, 
+                service, 
+                event_template, 
+                event_id, 
                 embedding ivf (metric = 'cosine')
             )
         """).format(
@@ -259,6 +266,20 @@ def import_from_csv(table_name: str = TABLE_NAME):
             table_name=sql.Identifier(table_name),
         )
         cur.execute(create_index_query)
+
+        # The auto-complete's mistyping fallback needs the same columns split into
+        # words, so a near-miss on one word still matches the row.
+        create_token_index_query = sql.SQL("""
+            CREATE INDEX {index_name} ON {table_name} USING inverted (
+                service dotted, 
+                event_id english, 
+                event_template english
+            )
+        """).format(
+            index_name=sql.Identifier(f"{table_name}_token_idx"),
+            table_name=sql.Identifier(table_name),
+        )
+        cur.execute(create_token_index_query)
 
         refresh_query = sql.SQL("VACUUM (REFRESH_TABLE) {table_name}").format(
             table_name=sql.Identifier(table_name)

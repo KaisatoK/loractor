@@ -128,7 +128,7 @@ def _build_nested_graph():
 
 
 def _drive_committed_projection(compiled):
-    """Reproduce ``api._stream_events``' committed projection shape.
+    """Reproduce ``api.stream_events``' committed projection shape.
 
     Returns ``(root_custom, drilled_custom)``: the ``tool_progress`` payloads the
     root ``custom`` branch saw, and those the ``subgraphs`` → ``.custom`` drill

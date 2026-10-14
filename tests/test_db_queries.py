@@ -10,6 +10,7 @@ import socket
 import pytest
 
 from backend.db import (
+    auto_complete,
     compare_periods,
     count_by_category,
     count_event_id_by_category,
@@ -24,7 +25,9 @@ from backend.db import (
     search_logs,
     top_in_category_by_service,
 )
-from backend.db.config import SERENEDB_PORT
+from backend.db.config import SERENEDB_PORT, TABLE_NAME
+from backend.db.connection import db_cursor
+from psycopg2 import sql
 
 # The sample dataset (OpenStack_2k.log_structured.csv) spans this window.
 START = "2017-05-16 00:00:00"
@@ -204,3 +207,62 @@ def test_compare_periods():
         "percentage_change",
     }
     assert all(expected <= row.keys() for row in rows)
+
+
+# --- auto-complete -----------------------------------------------------------
+
+# A selector scoping the lookup to one column, with a query that matches it.
+SELECTOR_CASES = [
+    ("@", "service", "nova"),
+    ("#", "event_id", "E25"),
+    ("$", "event_template", "Removable"),
+]
+
+
+def _column_values(column: str) -> set[str]:
+    """Every distinct value of ``column`` in the log table."""
+    with db_cursor() as cur:
+        cur.execute(
+            sql.SQL("SELECT DISTINCT {col} FROM {table}").format(
+                col=sql.Identifier(column), table=sql.Identifier(TABLE_NAME)
+            )
+        )
+        return {row[column] for row in cur.fetchall()}
+
+
+@pytest.mark.parametrize("selector,column,query", SELECTOR_CASES)
+def test_auto_complete_selector_scopes_to_its_column(selector, column, query):
+    rows = auto_complete(f"{selector}{query}")
+    assert rows
+    # Every suggestion comes from the scoped column and nowhere else.
+    assert {row["suggestion"] for row in rows} <= _column_values(column)
+
+
+@pytest.mark.parametrize("selector,column,_query", SELECTOR_CASES)
+def test_auto_complete_bare_selector_lists_its_column(selector, column, _query):
+    rows = auto_complete(selector)
+    assert rows
+    assert {row["suggestion"] for row in rows} <= _column_values(column)
+
+
+def test_auto_complete_selector_only_applies_at_the_start():
+    # ``E25`` is an event_id, so a leading ``@`` scopes to service and finds
+    # nothing, while a trailing selector is treated as part of the query.
+    assert auto_complete("@E25") == []
+    assert any(row["suggestion"] == "E25" for row in auto_complete("E25@"))
+
+
+@pytest.mark.parametrize("selector", [case[0] for case in SELECTOR_CASES])
+def test_auto_complete_selectors_are_absent_from_the_data(selector):
+    # A selector is only safe to strip because no indexed value contains it.
+    with db_cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                "SELECT 1 FROM {table} "
+                "WHERE position(%s in service) > 0 "
+                "OR position(%s in event_id) > 0 "
+                "OR position(%s in event_template) > 0 LIMIT 1"
+            ).format(table=sql.Identifier(TABLE_NAME)),
+            (selector, selector, selector),
+        )
+        assert cur.fetchone() is None, f"{selector!r} occurs in the indexed values"
