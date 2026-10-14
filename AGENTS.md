@@ -21,14 +21,25 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 - `LOG_LEVEL=DEBUG bash ./backend.sh` prints tool calls, SQL, and query params.
 - `.env` (gitignored) is loaded on import by `src/backend/__init__.py` and `src/ui/__init__.py`; it holds `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `TYPESAFE_API_KEY`, ports, and auth flags (`AUTH_REGISTRATION_OPEN`, `AUTH_DEMO_*`). `TYPESAFE_API_KEY` is required at import.
 - No lint/format/typecheck/CI is configured (none of ruff/black/mypy/pyright installed). Do not invent those commands.
+- `requirements.txt` is **generated**, not hand-edited — it is `uv export` output (the header names the command). Change dependencies in `pyproject.toml` and re-export.
+- Line endings: `.gitattributes` sets `* text=auto` and `*.sh eol=lf`. Keep new/edited files LF; untracked files are not normalized by git, so a stray CRLF write persists.
+- When scripting against the app, set `CHECKPOINT_BACKEND=memory` (and point `APP_DB_PATH` outside the repo if relevant) so you do not create or mutate `.data/`.
 
 ## Testing
 
-- `uv run pytest` (testpaths = `tests`; ~17 modules, nearly all offline).
+- `uv run pytest` (testpaths = `tests`; 19 modules, nearly all offline).
 - Single test: `uv run pytest tests/test_decision_nodes.py::test_scope_routes_general_when_no_clarification_needed`.
 - `tests/conftest.py` sets dummy model keys + `CHECKPOINT_BACKEND=memory` before backend import. `test_decision_nodes.py` additionally sets `TYPESAFE_API_KEY` before importing `decision.py`, because that module builds a live `TypeSafeClassifier` at import time.
 - Integration: `tests/test_db_queries.py` runs against a live, seeded SereneDB and fails loudly (never skips) if it is unreachable or empty.
 - `test_answer_rendering.py` is pure/offline and asserts the serializer and UI renderer stay in sync.
+
+## Known failures
+
+Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 134 passed`.
+
+- All three failures are in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`. That test file and that module are byte-identical to HEAD and do not depend on the pipeline, so they are pre-existing, not regressions.
+- `POST /chat/stream` used to tear on every route that reaches `find_evidence` (now fixed; see the end of this bullet): the root `messages` branch at `src/backend/api.py:192` did `item[-1].text`, but langgraph v3 yields a `ChatModelStream` per root-scope LLM call, so it raised `TypeError: 'ChatModelStream' object is not subscriptable` — status 200 (headers already flushed), partial NDJSON including the `tool_progress` ticks, then the stream dies before the final `messages` event so the answer never arrives, and background `/chats/{id}/investigate` runs end `status=error` with that TypeError as `run.error`. The line is present at HEAD but only became reachable once the evidence report moved off-agent to a direct root-scope `deepseek.with_structured_output(...)` call (`agents/evidence_report.py`, invoked from `find_evidence_node`); at HEAD it ran inside a `create_agent` subgraph, so no root-scope `messages` event existed, and routes whose LLM work stays in subgraphs (for example `clarify`) complete normally — route-dependent, not a dependency regression (`langgraph` is `1.2.12` at HEAD and in the working tree). The fix has landed: the root `messages` branch (`api.py:191-201`) no longer indexes blindly — it logs `item[-1].text` only for a non-empty list/tuple (via `getattr(..., "text", None)`) and otherwise logs the item type, so a `ChatModelStream` cannot raise. That branch is debug-only (`logger.debug`, no `yield`), and the answer is still sourced from the `values` channel into `last_answer` and emitted at `api.py:234`. For pipeline-level end-to-end checks, drive `chatbot.stream_events(...)` and read the `values`/`subgraphs`/`custom` channels instead of the `messages` branch.
+- The DB tools' AI endpoint is called by SereneDB inside its own container, so the host being unable to reach `host.docker.internal:11434` does not block DB queries or `tests/test_db_queries.py`.
 
 ## Pipeline & API notes
 
@@ -37,9 +48,10 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 - HTTP surface is broader than `/chat/stream`: background investigation jobs (`POST /chats/{id}/investigate`, poll `GET /chats/{id}/run/{run_id}`, plus `active-run`/`cancel`) backed by `backend/jobs.py`, plus `/chat/reframe`, auth, chat CRUD, and `/healthz`/`/readyz`/`/metrics`. `/chat/test` returns canned NDJSON for tests.
 - `/chat/stream` emits NDJSON events (`messages`, `tool_results`, `tool_progress`, `subgraph_name`, `subgraph_message`). Answers use `[[RESULT:Rn]]` markers serialized by `pipeline/answers.py` and rendered by `ui/rendering.py`; the serializer and renderer must stay in sync with the `id` fields on tool results.
 - DB query functions return `(sql.Composable, params)` and are wrapped by `query_runner`; each query sets `sdb_ai_allow_insecure_endpoint = true`.
-
-## Stale docs to distrust
-
-- README calling `scope`/`confidence` "documented stubs" is outdated — routing is fully implemented (`decision.py`, `graph.py`).
-- README lists `src/ui/config.py`; it does not exist — the backend URL is built in `src/ui/chat_client.py`.
-- `state.py`'s comment calling `evidence_report_history` "unused today" is stale — `find_evidence` reads and appends it.
+- `find_evidence` is a **single deep agent** (`create_deep_agent`, deepagents) that calls the six DB tools itself — there is no subagent and no `task` tool (the deepseek harness profile in `agents/find_evidence.py` disables the auto-added general-purpose subagent). It keeps `read_file` (how the skill text is disclosed) and `write_todos`; `_EXCLUDED_TOOLS` strips `write_file`, `edit_file`, `delete`, `execute`, `glob`, `grep`, `ls` from the model request.
+- `skills/` at the repo root is **mandatory** — `agents/find_evidence.py` raises at import if it is missing — and it is the `FilesystemBackend` root, so `read_file` cannot reach anything else in the repo. This is NOT `.agents/skills/` (an unrelated local skills dir); the pipeline loads the repo-root `skills/`.
+- The evidence report is built **off-agent** by `agents/evidence_report.py::generate_evidence_report`, which calls `deepseek.with_structured_output(EvidenceReport, method="json_mode")`. DeepSeek accepts only json mode: `create_agent(response_format=...)` resolves to `ProviderStrategy`, which binds a `json_schema` this provider rejects. So the JSON contract must ride in the prompt text (`JSON_OUTPUT_SPEC`) — json mode transmits no schema and pydantic `Field` descriptions never reach the model — and every closed vocabulary must be enumerated there (e.g. `tool_used[].status` is exactly `success` or `failure`; without that the model writes `"failed"` and validation fails).
+- The report path is **guard-free**: no `try`/`except`, no empty-report fallback, no citation filtering, no re-validation. A provider failure or contract violation propagates out of `find_evidence_node`; `api.py::chat_stream` is `try`/`finally` with no `except`, so it tears the NDJSON stream, while background investigations record `status=error`.
+- Tool results: `tools/results.py::collect_tool_results` reads the agent's own messages and assigns `id` (`R{n}`) and `row_count` inline, so those records ARE the display contract `{id, tool_name, arguments, row_count, rows}` consumed by `answers.py` (`valid_ids`), `api.py` and `ui/rendering.py`. `rows` is capped at 50 for display only; the tools themselves return full row sets into the agent's context.
+- Budgets: `effort.py` sets ONE all-tools `ToolCallLimitMiddleware(run_limit)` per effort — Low 4, Medium 8, High 10, Extreme 16, Brutal 20 — and to-do writes count against it. `max_iterations` remains the confidence revision-loop cap.
+- Tool progress reaches the UI only from depth ≤ 1. The DB tools emit `tool_progress` payloads on the graph's custom stream from inside the tool (`tools/executor.py`), and failures are re-raised as a generic `RuntimeError` so `handle_tool_errors` can convert them into a ToolMessage. The API's projection captures the root `custom` scope plus ONE level of direct-child `custom` only, so an event emitted from a deeper namespace never reaches the UI. Keep tool calls on the main agent for this reason.

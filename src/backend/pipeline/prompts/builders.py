@@ -59,6 +59,17 @@ TOOL_CATALOG = {
     ),
 }
 
+# Mission of the pipeline, given to the scope classifier as context so it can
+# judge whether a request is underspecified *relative to what this service does*.
+PIPELINE_MISSION = (
+    "This service answers a user's question about their logs. It investigates a "
+    "specific failure for an engineer, finds recurring problems and patterns for a "
+    "team lead, and prioritizes issues by impact for a manager. It turns each request "
+    "into evidence gathered from the connected log database (counts, searches, trends, "
+    "and period comparisons), and then into a grounded answer with a recommendation. "
+    "It cannot reach any system outside that log database."
+)
+
 
 def summarized_attempts(tool_results: object) -> list[dict]:
     """Compact summaries of the tool calls already attempted this turn.
@@ -99,10 +110,12 @@ class PipelinePrompts:
 
     shared_grounding = (
         "Use only observed tool results. Separate evidence from interpretation. "
-        "Do not invent facts, causes, impact, or missing details. Treat supported "
-        "hypotheses as findings, contradicted hypotheses as excluded, and unresolved "
-        "hypotheses as limitations. Include relevant time ranges, filters, calculations, "
-        "evidence references, and confidence."
+        "Do not invent facts, causes, impact, or missing details. When the report "
+        "contains hypotheses, treat supported hypotheses as findings, contradicted "
+        "hypotheses as excluded, and unresolved hypotheses as limitations; when it "
+        "does not, ground the answer directly in the report's summary and evidence "
+        "instead. Include relevant time ranges, filters, calculations, evidence "
+        "references, and confidence."
     )
 
     REFRAME_INSTRUCTION = (
@@ -124,6 +137,7 @@ class PipelinePrompts:
                 "conversation": state["normalized"],
                 "database_schema": LOG_SCHEMA,
                 "tool_catalog": TOOL_CATALOG,
+                "mission": PIPELINE_MISSION,
             },
             "questions": {
                 "needs_clarification": self.needs_clarification_question(),
@@ -273,7 +287,7 @@ class PipelinePrompts:
             "</role context>\n"
             "<effort guidance>\n"
             f"Effort level: {state.get('effort', 'Medium')}.\n"
-            f"Tool-call budget: at most {spec.max_tool_calls} tool calls (hard limit).\n"
+            f"Tool-call budget: at most {spec.max_tool_calls} tool calls in this investigation (hard limit; to-do updates count).\n"
             f"Hypothesis budget: define at most {spec.max_hypotheses} hypotheses (never more than 3).\n"
             "</effort guidance>\n"
             "<request>\n"
@@ -362,7 +376,7 @@ class PipelinePrompts:
             criteria=NoulCriteria(
                 true={
                     "role_fit": "The answer supports the role objective at the appropriate level of detail.",
-                    "grounding": "Material claims and hypothesis statuses are supported by tool results.",
+                    "grounding": "Material claims, evidence statuses, and any hypotheses are supported by tool results.",
                     "completeness": "The answer resolves the question or clearly states its limitations.",
                 },
                 false={
@@ -414,7 +428,7 @@ class PipelinePrompts:
             ),
             criteria={
                 "missing_evidence": "More evidence is required.",
-                "irrelevant_evidence": "The evidence does not address the important hypotheses.",
+                "irrelevant_evidence": "The evidence does not address the request.",
                 "unsupported_answer": "The evidence is adequate, but the answer misuses or omits it.",
                 "role_mismatch": "The answer does not support the user's role objective.",
                 "none": "The result is grounded and ready to return.",

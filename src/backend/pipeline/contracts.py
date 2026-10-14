@@ -48,6 +48,7 @@ class ToolStatus(BaseModel):
 
 
 class Evidence(BaseModel):
+    id: str = Field(description="The id of the evidence item (for example 'E1').")
     name: str = Field(description="The name of the evidence item.")
     description: str = Field(
         description="A description of why this evidence is needed and what it evaluates."
@@ -57,6 +58,14 @@ class Evidence(BaseModel):
     )
     availability: Literal["available", "unavailable"] = Field(
         description=("Whether the required evidence was successfully obtained.")
+    )
+    result_ids: list[str] = Field(
+        description=(
+            "The captured tool-result ids (for example 'R1') from the "
+            "captured-results catalog that back this evidence item. Cite only "
+            "ids that appear in that catalog. May be empty when the item "
+            "collected nothing, for example an unavailable item."
+        )
     )
 
 
@@ -72,26 +81,41 @@ class Hypothesis(BaseModel):
             "Why the hypothesis is plausible and relevant to the reported problem."
         )
     )
-    required_evidence: list[Evidence] = Field(
-        description=(
-            "The evidence required to evaluate the hypothesis, including the "
-            "findings and collection attempts."
-        ),
-    )
     status: Literal["supported", "unsupported", "inconclusive"] = Field(
         description=(
             "The conclusion based only on collected evidence. Use 'inconclusive' "
             "when evidence is missing, insufficient, ambiguous, or conflicting."
         )
     )
+    evidence_ids: list[str] = Field(
+        description=(
+            "The ids of the evidence items used to evaluate the hypothesis. Each "
+            "id must refer to an entry in the report's evidence list."
+        )
+    )
 
 
 class EvidenceReport(BaseModel):
+    summary: str = Field(
+        description=(
+            "A concise summary of the investigation grounded only in the collected "
+            "evidence. No fabricated or inferred results."
+        )
+    )
+    evidence: list[Evidence] = Field(
+        description=(
+            "Every collected evidence item, including its collection attempts. "
+            "Always provided, even for a direct data question."
+        )
+    )
     hypotheses: list[Hypothesis] = Field(
+        default_factory=list,
         max_length=3,
         description=(
             "The investigated hypotheses and the evidence-based conclusion for each. "
-            "Must be non-duplicative, plausible, and testable. Maximum of 3 hypotheses."
+            "Must be non-duplicative, plausible, and testable. Maximum of 3 hypotheses. "
+            "Available only when the request required investigation; empty for a direct "
+            "data question."
         ),
     )
 

@@ -5,6 +5,7 @@ description = "Role-aware log-investigation chatbot (Streamlit UI + FastAPI/Lang
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "deepagents>=0.7.23",
     "fastapi==0.142.2",
     "langchain==1.4.3",
     "langchain-deepseek==1.1.1",

@@ -34,7 +34,6 @@ class PipelineState(TypedDict):
     #   find_evidence = retrieve new log evidence.
     scope: Literal["clarify", "general", "direct_answer", "find_evidence"]
     confidence: PipelineRoute
-    # Reserved: per-turn evidence history for revision loops, unused today.
     evidence_report_history: list[EvidenceReport]
     normalized: NormalizedOutput
     evidence_report: EvidenceReport

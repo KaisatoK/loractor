@@ -1,17 +1,26 @@
 """Collect successful SQL tool results from an agent transcript for display."""
 
 import json
+from typing import Any
 
 MAX_RESULT_ROWS = 50
 
 
-def collect_tool_results(messages) -> list[dict]:
-    """Extract successful SQL tool results from an agent message list, ready for UI display."""
-    calls = {}
+def collect_tool_results(messages) -> list[dict[str, Any]]:
+    """Extract successful SQL tool results from a single agent's own messages.
+
+    Builds a ``{tool_call_id: (name, args)}`` map from the agent's
+    ``tool_calls`` so each successful tool result can be paired with the call
+    that produced it. Each record is assigned its canonical ``R{n}`` id and
+    ``row_count`` inline, in the order the results appear, so the id the report
+    cites and the id rendered are guaranteed identical. ``row_count`` is the true
+    number of returned rows; ``rows`` itself is capped at ``MAX_RESULT_ROWS``.
+    """
+    calls: dict[Any, tuple[Any, Any]] = {}
     for m in messages:
         for tc in getattr(m, "tool_calls", None) or []:
             calls[tc["id"]] = (tc["name"], tc.get("args", {}))
-    records = []
+    records: list[dict[str, Any]] = []
     for m in messages:
         if getattr(m, "type", "") != "tool":
             continue

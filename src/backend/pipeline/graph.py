@@ -5,6 +5,7 @@ The scope and confidence routers are TypeSafe classifiers (see ``decision.py``):
 return the answer or revise it.
 """
 
+import json
 import logging
 import os
 import sqlite3
@@ -17,11 +18,11 @@ from langgraph.graph import END, StateGraph
 from backend.pipeline.agents import (
     answer_agent,
     clarify_agent,
-    evidence_report_agent,
     general_agent,
     get_find_evidence_agent,
     normalize_agent,
 )
+from backend.pipeline.agents.evidence_report import generate_evidence_report
 from backend.pipeline.answers import serialize_answer
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
@@ -42,9 +43,7 @@ prompts = PipelinePrompts()
 # revision so those agents know what to change.
 REVISION_FEEDBACK = {
     "missing_evidence": "More evidence is required.",
-    "irrelevant_evidence": (
-        "The collected evidence does not address the important hypotheses."
-    ),
+    "irrelevant_evidence": "The collected evidence does not address the request.",
     "unsupported_answer": (
         "The evidence is adequate, but the answer misuses or omits it."
     ),
@@ -130,6 +129,21 @@ def general_node(state: PipelineState) -> PipelineState:
     return {**state, "answer": answer}
 
 
+def _last_agent_summary(messages) -> str:
+    """The investigator's final summary: the last non-empty assistant text.
+
+    Walk the transcript backwards and return the last ``AIMessage`` text (empty
+    string when there is none).
+    """
+    for message in reversed(messages):
+        if getattr(message, "type", "") != "ai":
+            continue
+        text = getattr(message, "text", "") or ""
+        if isinstance(text, str) and text.strip():
+            return text
+    return ""
+
+
 def find_evidence_node(state: PipelineState) -> PipelineState:
     result = get_find_evidence_agent(state.get("effort")).invoke(
         {
@@ -139,34 +153,31 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
         }
     )
 
-    investigation = "\n".join(
-        f"{message.type}: {message.content}" for message in result["messages"]
-    )
+    # Raw rows stay on the agent's own transcript — the database tools now run
+    # on the main agent, so the records are collected from its messages. Each
+    # record carries its canonical inline `R{n}` id and `row_count`, and the same
+    # records feed both the report's catalog and the answer tables, so the ids
+    # the report cites and the ids rendered are guaranteed identical. The
+    # {id, tool_name, arguments, row_count, rows} display contract is consumed by
+    # `serialize_answer`/`ui/rendering.py`.
+    records = collect_tool_results(result["messages"])
 
-    report_result = evidence_report_agent.invoke(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        f"{prompts.find_evidence(state)}\n"
-                        "<investigation transcript>\n"
-                        f"{investigation}\n"
-                        "</investigation transcript>"
-                    ),
-                }
-            ]
-        }
-    )
-
-    evidence_report = report_result["structured_response"].model_dump()
-    tool_results = collect_tool_results(result["messages"])
+    # The tool-less JSON-mode formatter (``generate_evidence_report``) builds the
+    # report from the agent's summary plus the captured results. A provider or
+    # validation failure propagates rather than being swallowed.
+    role = state["role"]
+    evidence_report = generate_evidence_report(
+        request=json.dumps(state["normalized"], default=str),
+        role=f"{role['name']}: {role['objective']}",
+        investigation=_last_agent_summary(result["messages"]),
+        results=records,
+    ).model_dump()
     history = [*(state.get("evidence_report_history") or []), evidence_report]
 
     return {
         **state,
         "evidence_report": evidence_report,
-        "tool_results": tool_results,
+        "tool_results": records,
         "answer": "",
         "evidence_report_history": history,
     }
@@ -301,7 +312,7 @@ def _build_checkpointer():
     - ``sqlite`` (default): durable, single-process/multi-thread. The saver
       serializes access with an internal lock, so it is safe for the sync
       endpoint's worker threads.
-    - ``memory``: the old process-local behaviour; nothing survives a restart.
+    - ``memory``: a run-local, in-memory saver; nothing survives a restart.
     - ``postgres``: durable and shareable across worker processes/replicas.
       Requires ``langgraph-checkpoint-postgres`` and ``CHECKPOINT_POSTGRES_URL``.
     """

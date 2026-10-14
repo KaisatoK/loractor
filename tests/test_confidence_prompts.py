@@ -1,9 +1,11 @@
 """Offline tests for the scope/confidence classifier prompt payloads.
 
-Two guarantees:
+Three guarantees:
 
 * the tool catalog shown to the classifiers stays in sync with the evidence
   tools the pipeline can actually call (``backend.pipeline.tools.__all__``);
+* the scope request carries the shared pipeline mission the scope classifier
+  uses to judge underspecification;
 * the confidence request carries the attempt history and revision count the
   confidence classifier uses.
 
@@ -15,7 +17,11 @@ import os
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 from backend.pipeline import tools
-from backend.pipeline.prompts.builders import TOOL_CATALOG, PipelinePrompts
+from backend.pipeline.prompts.builders import (
+    PIPELINE_MISSION,
+    TOOL_CATALOG,
+    PipelinePrompts,
+)
 
 
 def _state():
@@ -58,6 +64,11 @@ def test_tool_catalog_matches_available_tools():
 def test_scope_request_includes_tool_catalog():
     request = PipelinePrompts().scope_request(_state())
     assert request["state"]["tool_catalog"] == TOOL_CATALOG
+
+
+def test_scope_request_includes_mission():
+    request = PipelinePrompts().scope_request(_state())
+    assert request["state"]["mission"] == PIPELINE_MISSION
 
 
 def test_confidence_request_includes_catalog_history_and_budgets():

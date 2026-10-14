@@ -8,7 +8,7 @@ CLARIFY_THRESHOLD = 0.64
 
 # Only append the answer agent's drafted follow-up question when the model is at
 # least this sure it would materially improve the next turn.
-FOLLOW_UP_THRESHOLD = 0.7
+FOLLOW_UP_THRESHOLD = 0.75
 
 # Consecutive clarification turns before the pipeline stops asking and instead
 # investigates best-effort so the user still gets an answer.

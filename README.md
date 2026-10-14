@@ -19,20 +19,19 @@ FastAPI backend (src/backend/api.py)
   │
   ▼
 LangGraph pipeline (src/backend/pipeline/graph.py)
-  normalize → scope → (general | find_evidence → answer → confidence)
+  normalize → scope → (clarify | general | direct_answer | find_evidence)
+            → answer → confidence   ↺  back to find_evidence / answer
   │
   ▼
 SereneDB log queries (src/backend/db)   ← pooled connections
 ```
 
-The LLM stages use different providers: Groq (`gpt-oss-20b` for normalization and
-the general agent, `gpt-oss-120b` for the final answer), DeepSeek (evidence
-agent), and Gemini (`evidence_report` formatter).
-
-> `scope` and `confidence` are currently documented stubs: every request is
-> treated as `unresolved` and runs the evidence path, and the answer is always
-> accepted. The routing code and prompt builders are retained for re-enabling
-> TypeSafe classification later.
+The **evidence stage** (`find_evidence`) is a deep agent: it plans the
+investigation and calls the database tools itself, then submits a free-text
+summary of its findings. The report of `summary` plus `evidence` (and optional
+`hypotheses`) is built off-agent from that summary and the captured results,
+which are renumbered `R1..Rn` for the answer tables. A bundled
+`log-investigation` skill decides when hypotheses apply.
 
 ## Prerequisites
 
@@ -50,7 +49,6 @@ Create `.env` in the repo root with the API keys for the providers in use:
 ```
 GROQ_API_KEY=...
 DEEPSEEK_API_KEY=...
-GOOGLE_API_KEY=...
 
 # Optional ports (defaults: 8000 backend, 8501 UI)
 BACKEND_PORT=8000
@@ -342,15 +340,17 @@ src/
 │       ├── middleware.py model/tool error handling and retry/backoff
 │       ├── models.py     chat model instances
 │       ├── prompts/      prompt builders + static system prompts
-│       ├── agents/       one module per LLM agent
+│       ├── agents/       one module per LLM agent, incl. the `find_evidence`
+│       │                 deep agent and its off-agent report builder
 │       └── tools/        database tools, executor, result collection
 └── ui/
     ├── streamlit_app.py  entry point, auth gate, and sidebar
-    ├── config.py         backend base URL
-    ├── chat_client.py    backend HTTP client (auth, chats, streaming)
+    ├── chat_client.py    backend HTTP client (auth, chats, streaming) + base URL
     ├── rendering.py      answer/marker rendering
     ├── roles.py          role labels and cards
     ├── login/            sign-in / registration page
     ├── main_page/        active chat page
     └── new_chat/         role-selection page
+skills/
+└── log-investigation/SKILL.md  hypothesis workflow for the evidence stage
 ```

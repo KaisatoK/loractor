@@ -6,17 +6,23 @@ EffortLevel = Literal["Low", "Medium", "High", "Extreme", "Brutal"]
 
 @dataclass(frozen=True)
 class EffortSpec:
-    max_tool_calls: int  # active: find_evidence ToolCallLimitMiddleware run_limit
-    max_hypotheses: int  # active: per-turn prompt budget (schema hard cap stays 3)
-    max_iterations: int  # active: confidence revision-loop routing cap (max rollbacks)
+    max_tool_calls: int
+    """The single agent's ``ToolCallLimitMiddleware`` ``run_limit`` — a hard cap
+    on ALL tool calls in one investigation run, including to-do writes."""
 
+    max_hypotheses: int
+    """Per-turn prompt budget (schema hard cap stays 3)."""
+
+    max_iterations: int
+    """Confidence revision-loop cap consumed by ``decision.decide_confidence``
+    (the maximum number of rollbacks)."""
 
 EFFORT_SPECS: dict[str, EffortSpec] = {
-    "Low": EffortSpec(3, 1, 0),
-    "Medium": EffortSpec(5, 2, 1),
-    "High": EffortSpec(8, 3, 2),
-    "Extreme": EffortSpec(13, 3, 3),
-    "Brutal": EffortSpec(21, 3, 3),
+    "Low": EffortSpec(4, 1, 0),
+    "Medium": EffortSpec(8, 2, 1),
+    "High": EffortSpec(10, 3, 2),
+    "Extreme": EffortSpec(16, 3, 3),
+    "Brutal": EffortSpec(20, 3, 3),
 }
 
 

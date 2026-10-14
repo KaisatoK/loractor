@@ -189,7 +189,16 @@ def _stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
     last_tool_results_json = None
     for name, item in run.interleave("messages", "values", "subgraphs", "custom"):
         if name == "messages":
-            logger.debug("stream message: %s", item[-1].text)
+            # Under langgraph's v3 protocol a root-scope LLM call surfaces here
+            # as a single ``ChatModelStream`` object, not a list of messages, so
+            # blind indexing (``item[-1]``) would raise
+            # ``TypeError: 'ChatModelStream' object is not subscriptable`` and
+            # tear the stream. Subgraph-scoped calls never reach this branch.
+            # Debug-only (no ``yield``): the answer comes from ``values`` below.
+            if isinstance(item, (list, tuple)) and item:
+                logger.debug("stream message: %s", getattr(item[-1], "text", None))
+            else:
+                logger.debug("stream message item: %s", type(item).__name__)
         elif name == "values":
             # Change detection (not a once-per-request flag): a follow-up turn
             # re-emits the *previous* turn's persisted payloads in its first
