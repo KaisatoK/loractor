@@ -114,7 +114,7 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
     # cancelled: the chat was deleted or the run was stopped; render nothing.
 
 
-@st.fragment(run_every="1s")
+@st.fragment(run_every="4s")
 def render_active_run(current_chat, token: str, chat_id: str) -> None:
     """Watch the chat's in-flight investigation and render it live.
 
@@ -153,15 +153,25 @@ def render_active_run(current_chat, token: str, chat_id: str) -> None:
     run["since"] = payload["next_since"]
 
     status = payload["status"]
-    with st.status(
-        label="Processing..." if status == "running" else _status_label(status),
-        type="compact",
-        state="running"
-        if status == "running"
-        else ("complete" if status == "done" else "error"),
-    ):
-        for stage in run["progress"]:
-            st.caption(stage)
+    with st.container():
+        stage_idx = [i for i, stage in enumerate(run["progress"]) if "Currently at stage" in stage]
+        stage_idx.append(len(run["progress"]))
+        for i in range(len(stage_idx) - 2):
+            with st.status(
+                label=run["progress"][stage_idx[i]],
+                type="compact",
+                state="complete"
+            ):
+                for stage in run["progress"][stage_idx[i] + 1 : stage_idx[i + 1]]:
+                    st.caption(stage)
+        with st.expander(
+            label=run["progress"][stage_idx[-2]],
+            expanded=True,
+            type="compact",
+            width="stretch",
+        ):
+            for stage in run["progress"][stage_idx[-2] + 1 : stage_idx[-1]]:
+                st.caption(stage)
 
     with st.chat_message("assistant"):
         if run["answer"]:
@@ -212,9 +222,16 @@ def main_page():
         if (item["role"] == "assistant" and "progress" in item) and item[
             "progress"
         ] is not None:
-            with st.status(label="Done", type="compact", state="complete"):
-                for stage in item["progress"]:
-                    st.caption(stage)
+            stage_idx = [i for i, stage in enumerate(item["progress"]) if "Currently at stage" in stage]
+            stage_idx.append(len(item["progress"]))
+            for i in range(len(stage_idx) - 1):
+                with st.status(
+                    label=item["progress"][stage_idx[i]],
+                    type="compact",
+                    state="complete"
+                ):
+                    for stage in item["progress"][stage_idx[i] + 1 : stage_idx[i + 1]]:
+                        st.caption(stage)
         with st.chat_message(item["role"]):
             if item["role"] == "assistant":
                 if item.get("reframed_for"):
@@ -230,10 +247,10 @@ def main_page():
                     targets = [t for t in ROLE_LABELS if t != own_role]
                     # Left-aligned, tightly packed buttons (not full-width columns).
                     with st.container(horizontal=True, horizontal_alignment="left"):
-                        for target in targets:
+                        for i, target in enumerate(targets):
                             if st.button(
                                 ROLE_LABELS[target],
-                                key=f"reframe_{target}_{idx}",
+                                key=f"reframe_{target}_{idx}_{i}",
                                 width="content",
                             ):
                                 question = next(
@@ -286,7 +303,8 @@ def main_page():
 
     # Live view of an in-flight investigation for this chat (if any).
     if chat_id in st.session_state.active_runs:
-        render_active_run(current_chat, token, chat_id)
+        with st.container():
+            render_active_run(current_chat, token, chat_id)
 
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 
