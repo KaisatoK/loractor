@@ -114,8 +114,8 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
     # cancelled: the chat was deleted or the run was stopped; render nothing.
 
 
-@st.fragment(run_every="4s")
-def render_active_run(current_chat, token: str, chat_id: str) -> None:
+@st.fragment(run_every="1s")
+def render_active_run(container, current_chat, token: str, chat_id: str) -> None:
     """Watch the chat's in-flight investigation and render it live.
 
     A fragment (not the whole script) polls, so a periodic refresh never reruns
@@ -131,7 +131,7 @@ def render_active_run(current_chat, token: str, chat_id: str) -> None:
             chat_id=chat_id,
             run_id=run["run_id"],
             since=run["since"],
-            wait=2.0,
+            wait=0.5,
         )
     except Exception as err:  # noqa: BLE001 - the run itself keeps going
         status_code = getattr(getattr(err, "response", None), "status_code", None)
@@ -153,7 +153,7 @@ def render_active_run(current_chat, token: str, chat_id: str) -> None:
     run["since"] = payload["next_since"]
 
     status = payload["status"]
-    with st.container():
+    with container:
         stage_idx = [i for i, stage in enumerate(run["progress"]) if "Currently at stage" in stage]
         stage_idx.append(len(run["progress"]))
         for i in range(len(stage_idx) - 2):
@@ -303,8 +303,8 @@ def main_page():
 
     # Live view of an in-flight investigation for this chat (if any).
     if chat_id in st.session_state.active_runs:
-        with st.container():
-            render_active_run(current_chat, token, chat_id)
+        container = st.container()
+        render_active_run(container, current_chat, token, chat_id)
 
     col1, col2 = st.bottom.columns(spec=[0.1, 0.9], vertical_alignment="bottom")
 
