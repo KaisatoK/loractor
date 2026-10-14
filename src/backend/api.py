@@ -222,9 +222,17 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
             yield emit({"type": "subgraph_name", "content": str(item.graph_name)})
             for sub_name, sub_item in item.interleave("messages", "custom"):
                 if sub_name == "messages":
-                    yield emit(
-                        {"type": "subgraph_message", "content": str(sub_item.reasoning)}
-                    )
+                    thought = ""
+                    for delta in sub_item.reasoning:
+                        thought += delta
+                        yield emit(
+                            {
+                                "type": "thinking_delta",
+                                "id": sub_item.message_id or "",
+                                "content": delta,
+                            }
+                        )
+                    yield emit({"type": "subgraph_message", "content": thought})
                 elif (
                     isinstance(sub_item, dict)
                     and sub_item.get("type") == "tool_progress"

@@ -57,8 +57,18 @@ def _apply_event(run: dict, event: dict) -> None:
             run["progress"].append(f"{action} — failed")
     elif etype == "subgraph_name":
         run["progress"].append(f"Currently at stage: {content}")
+    elif etype == "thinking_delta":
+        key = event.get("id") or ""
+        if run.get("thinking_key") != key:
+            run["progress"].append("Thinking: ")
+            run["thinking_key"] = key
+            run["thinking_at"] = len(run["progress"]) - 1
+        run["progress"][run["thinking_at"]] += content
     elif etype == "subgraph_message":
-        run["progress"].append(f"Thinking: {content}")
+        # Consolidated copy of the thought; the backend already keeps it in the
+        # run's persisted progress. Arriving here closes the open live thought so
+        # the next LLM call starts a new line.
+        run["thinking_key"] = None
 
 
 def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
@@ -83,7 +93,7 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
     # cancelled: the chat was deleted or the run was stopped; render nothing.
 
 
-@st.fragment(run_every="1s")
+@st.fragment(run_every="0.5s")
 def render_active_run(container, current_chat, token: str, chat_id: str) -> None:
     """Watch the chat's in-flight investigation and render it live.
 
@@ -100,7 +110,6 @@ def render_active_run(container, current_chat, token: str, chat_id: str) -> None
             chat_id=chat_id,
             run_id=run["run_id"],
             since=run["since"],
-            wait=0.5,
         )
     except Exception as err:  # noqa: BLE001 - the run itself keeps going
         status_code = getattr(getattr(err, "response", None), "status_code", None)
