@@ -46,6 +46,36 @@ body {
   padding: 8px 6px;
 }
 
+#send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ac-muted);
+  cursor: pointer;
+}
+
+#send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ac-primary) 22%, transparent);
+  color: var(--ac-fg);
+}
+
+#send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#send svg {
+  display: block;
+}
+
 #list {
   display: none;
   list-style: none;

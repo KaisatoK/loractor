@@ -29,12 +29,8 @@ _SELECTORS = {
     "@": "service",
     "#": "event_id",
     "$": "event_template",
-    # ``pid`` is an INT and only text columns get a term dictionary, so the
-    # selector points at its indexed text mirror (see ``setup.import_from_csv``).
     "!": "pid_text",
 }
-
-# A selector is required, so a query without one has no column to match against.
 _NO_MATCHES = sql.SQL(
     "SELECT NULL::text AS suggestion, NULL::bigint AS count WHERE false"
 )
@@ -47,8 +43,10 @@ def _resolve_selector(query: str) -> tuple[str, str | None]:
     for the column when the query does not start with a selector.
     """
     column = _SELECTORS.get(query[:1])
+
     if column is None:
         return query, None
+
     return query[1:], column
 
 
@@ -81,6 +79,7 @@ def auto_complete(
     with no leading selector matches nothing.
     """
     query, column = _resolve_selector(query)
+
     if column is None:
         return _NO_MATCHES, []
 
@@ -110,9 +109,7 @@ def auto_complete(
             FROM {token_index}
             WHERE {column} @@ ts_any([{terms}])
             GROUP BY {column}
-        """).format(
-            column=sql.Identifier(column), token_index=token_index, terms=terms
-        )
+        """).format(column=sql.Identifier(column), token_index=token_index, terms=terms)
 
     exact = exact_branch()
     fuzzy = fuzzy_branch()

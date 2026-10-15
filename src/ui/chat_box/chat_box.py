@@ -33,7 +33,6 @@ _component = components.declare_component("chat_box", path=str(_DIR))
 
 _KEY = "chat_box"
 _SUBMIT_SEQ_KEY = "chat_box_submit_seq"
-# The column selectors the backend accepts (see ``backend.db.auto_complete``).
 _SELECTORS = "@#$!"
 
 
@@ -47,6 +46,7 @@ def _suggestions(token: str, word: str) -> list[dict]:
     nothing, so the endpoint is not called.
     """
     word = word.strip()
+
     if not word or word[0] not in _SELECTORS:
         return []
     try:
@@ -82,10 +82,17 @@ def _render_component(
     characters the caret sits in -- which the frontend reports alongside the
     text. ``suggest=False`` skips the auto-complete lookup -- used while an
     investigation is already running.
+
+    The frontend's submit counter is seeded from the backend's watermark
+    (``submit_seq_base``): the box remounts when a new chat is started (it is
+    unmounted on the role picker), so without the seed it would restart at zero
+    and the backend would drop the new chat's first submits as replays.
     """
     state = st.session_state.get(_KEY) or {}
+
     if not isinstance(state, dict):
         state = {}
+
     text = state.get("text", "")
     word = state.get("word", "")
 
@@ -93,6 +100,7 @@ def _render_component(
         text=text,
         suggestions=_suggestions(token, word) if suggest else [],
         placeholder=placeholder,
+        submit_seq_base=st.session_state.get(_SUBMIT_SEQ_KEY, 0),
         key=_KEY,
         default={"text": "", "submitted": "", "word": "", "submitSeq": 0},
     )
@@ -140,9 +148,12 @@ def chat_box(token: str, current_chat: dict, chat_id: str, effort: str) -> None:
     """
     running = chat_id in st.session_state.active_runs
     submitted = _take_submission()
+
     if running and submitted is not None:
         st.warning("An investigation is already running for this chat.")
+
     _render_component(token=token, suggest=not running)
+
     if running or submitted is None:
         return
     try:

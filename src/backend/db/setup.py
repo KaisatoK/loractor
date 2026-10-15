@@ -1,4 +1,5 @@
 import io
+import os
 import subprocess
 
 from pathlib import Path
@@ -111,10 +112,10 @@ def export_embedded_csv(file_path: str) -> None:
         copy_out_query = sql.SQL(
             "COPY ("
             "  SELECT *,"
-            "    (Date + Time)::TIMESTAMP AS \"LogTimestamp\","
-            "    CAST(Pid AS VARCHAR) AS \"PidText\","
+            '    (Date + Time)::TIMESTAMP AS "LogTimestamp",'
+            '    CAST(Pid AS VARCHAR) AS "PidText",'
             "    ai_embed(Content, {embedding_model}, 'local_ai')"
-            "::FLOAT[{embedding_dimension}] AS \"Embedding\""
+            '::FLOAT[{embedding_dimension}] AS "Embedding"'
             "   FROM embed_src ORDER BY LineId"
             ") TO STDOUT WITH (FORMAT csv, HEADER)"
         ).format(
@@ -138,7 +139,7 @@ def copy_csv_to_container(file_path: str) -> None:
     """
     base_dir = Path(__file__).resolve().parent
     src_path = base_dir / file_path
-    container = "serenedb"
+    container = os.getenv("SERENEDB_CONTAINER", "serenedb")
     remote_dir = "/data"
 
     subprocess.run(

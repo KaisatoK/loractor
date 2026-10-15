@@ -3,6 +3,7 @@ const RENDER = "streamlit:render";
 const state = { text: "", submitted: "", word: "", submitSeq: 0 };
 const input = document.getElementById("q");
 const list = document.getElementById("list");
+const sendBtn = document.getElementById("send");
 let suggestions = [];
 let focused = false;
 let ready = false;
@@ -80,6 +81,31 @@ function setValue() {
 
 function setHeight() {
   post("streamlit:setFrameHeight", { height: document.body.scrollHeight });
+}
+
+// The send button is only actionable when there is something to send.
+function syncSend() {
+  sendBtn.disabled = !input.value.trim();
+}
+
+// Hand the draft to Streamlit: clear the box, bump the submit counter and post
+// the new state. Shared by Enter and the send button.
+function submit() {
+  const text = input.value.trim();
+
+  if (!text) {
+    return;
+  }
+
+  state.submitted = text;
+  state.text = "";
+  state.word = "";
+  state.submitSeq += 1;
+  input.value = "";
+  suggestions = [];
+  renderList();
+  syncSend();
+  setValue();
 }
 
 function renderList() {
@@ -200,6 +226,7 @@ input.addEventListener("input", () => {
   state.text = input.value;
   state.word = currentWord().word;
   state.submitted = "";
+  syncSend();
   clearTimeout(debounce);
   debounce = setTimeout(setValue, 180);
 });
@@ -207,25 +234,22 @@ input.addEventListener("input", () => {
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
-
-    const text = input.value.trim();
-
-    if (!text) {
-      return;
-    }
-
-    state.submitted = text;
-    state.text = "";
-    state.word = "";
-    state.submitSeq += 1;
-    input.value = "";
-    suggestions = [];
-    renderList();
-    setValue();
+    submit();
   } else if (event.key === "Escape") {
     suggestions = [];
     renderList();
   }
+});
+
+// Keep focus in the input when the button is pressed, so the box does not blur
+// (the click still fires).
+sendBtn.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+
+sendBtn.addEventListener("click", () => {
+  submit();
+  input.focus();
 });
 
 function applyTheme(theme) {
@@ -263,6 +287,13 @@ window.addEventListener("message", (event) => {
 
   input.placeholder = args.placeholder || "";
 
+  // Resume counting above the backend's submit watermark: a remounted box (a new
+  // chat unmounts it on the role picker) would otherwise restart at zero, and the
+  // backend would drop its first submits as replays of the previous chat's.
+  if (typeof args.submit_seq_base === "number") {
+    state.submitSeq = Math.max(state.submitSeq, args.submit_seq_base);
+  }
+
   if (
     typeof args.text === "string" &&
     args.text !== input.value &&
@@ -273,6 +304,7 @@ window.addEventListener("message", (event) => {
 
   suggestions = Array.isArray(args.suggestions) ? args.suggestions : [];
   renderList();
+  syncSend();
 });
 
 function announce() {
