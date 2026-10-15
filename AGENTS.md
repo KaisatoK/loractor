@@ -14,12 +14,12 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 
 - Python 3.14+ and [uv](https://docs.astral.sh/uv/); always run Python through `uv run`, never bare `python`.
 - `uv sync` installs deps and the project (editable). `backend` and `ui` are top-level importable from `src/`; run all commands from the repo root (`graph.py` puts its default SQLite checkpointer at `Path.cwd()/.data/checkpoints.sqlite`).
-- The shell scripts are NOT executable — run `bash ./backend.sh` / `bash ./frontend.sh`, never `./backend.sh`.
+- The shell scripts are NOT executable — run `bash ./backend.sh` / `bash ./frontend.sh` / `bash ./routes.sh`, never `./<name>.sh`.
 - `bash ./backend.sh` provisions a demo login user (`uv run python -m backend.appdb.demo`) before starting uvicorn `backend.api:app --reload`. `bash ./frontend.sh` runs `streamlit run src/ui/streamlit_app.py`. Ports come from `.env` (`BACKEND_PORT`/`FRONTEND_PORT`; scripts default 8000/8501 when unset).
 - Seed the DB (drops/recreates the `log` table, re-embeds, rebuilds the index): `uv run python -m backend.db.setup`. Needs SereneDB on `localhost:7890` (`postgres`/`postgres`, db `postgres`) and Ollama at `host.docker.internal:11434` serving `nomic-embed-text:v1.5`. Re-running discards existing rows.
 - Provision a user: `uv run python -m backend.appdb.manage <username> <password>`. `setup.sh` is legacy (`cd src/backend/db && uv run setup.py`) — prefer the module command.
 - `LOG_LEVEL=DEBUG bash ./backend.sh` prints tool calls, SQL, and query params.
-- `.env` (gitignored) is loaded on import by `src/backend/__init__.py` and `src/ui/__init__.py`; it holds `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `TYPESAFE_API_KEY`, ports, and auth flags (`AUTH_REGISTRATION_OPEN`, `AUTH_DEMO_*`). `TYPESAFE_API_KEY` is required at import.
+- `.env` (gitignored) is loaded on import by `src/backend/__init__.py` and `src/ui/__init__.py`; it holds `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, `TYPESAFE_API_KEY`, ports, and auth flags (`AUTH_REGISTRATION_OPEN`, `AUTH_DEMO_*`). `TYPESAFE_API_KEY` is required at import — as are the three model keys, because `models.py` builds its chat clients at import time.
 - No lint/format/typecheck/CI is configured (none of ruff/black/mypy/pyright installed). Do not invent those commands.
 - `requirements.txt` is **generated**, not hand-edited — it is `uv export` output (the header names the command). Change dependencies in `pyproject.toml` and re-export.
 - Line endings: `.gitattributes` sets `* text=auto` and `*.sh eol=lf`. Keep new/edited files LF; untracked files are not normalized by git, so a stray CRLF write persists.
@@ -27,15 +27,34 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 
 ## Testing
 
-- `uv run pytest` (testpaths = `tests`; 19 modules, nearly all offline).
+- `uv run pytest` (testpaths = `tests`; 20 modules, nearly all offline).
 - Single test: `uv run pytest tests/test_decision_nodes.py::test_scope_routes_general_when_no_clarification_needed`.
-- `tests/conftest.py` sets dummy model keys + `CHECKPOINT_BACKEND=memory` before backend import. `test_decision_nodes.py` additionally sets `TYPESAFE_API_KEY` before importing `decision.py`, because that module builds a live `TypeSafeClassifier` at import time.
+- `tests/conftest.py` sets dummy `GROQ_API_KEY` / `DEEPSEEK_API_KEY` / `GOOGLE_API_KEY` + `CHECKPOINT_BACKEND=memory` before backend import. `test_decision_nodes.py` additionally sets `TYPESAFE_API_KEY` before importing `decision.py`, because that module builds a live `TypeSafeClassifier` at import time.
 - Integration: `tests/test_db_queries.py` runs against a live, seeded SereneDB and fails loudly (never skips) if it is unreachable or empty.
+- Live route tests (`tests/test_live_scope_routes.py`): skipped offline; run alone with `bash ./routes.sh` (sets `RUN_LIVE_ROUTES=1`) — real normalize + scope-classifier calls, ~2 per asserted turn. Must not run inside the full suite (conftest installs dummy keys before the backend's import-time clients; the module reloads `.env` with `override=True` only when gated). Gated runs write the HTML report `.data/scope_routes_report.html` (gitignored; override `RUN_LIVE_ROUTES_REPORT`; its path is printed once per run), and the per-turn numbers appear in an assertion failure. Routes are stochastic — a flipped row shows as `✗` with raw numbers; re-run before treating it as a regression.
 - `test_answer_rendering.py` is pure/offline and asserts the serializer and UI renderer stay in sync.
+
+### Live route cases are coupled to normalize/scope
+
+`tests/test_live_scope_routes.py` replays scripted conversations against the REAL
+normalizer and scope classifier, so its expectations are coupled to the prompt and
+decision surface. If you change any of:
+
+- `prompts/system.py` (`NORMALIZE_SYSTEM_PROMPT`)
+- `agents/normalize.py`
+- `prompts/builders.py` (`scope_request` and its three questions)
+- `decision.py` (`decide_scope`, `CLARIFY_THRESHOLD`, `MAX_CLARIFY_ROUNDS`,
+  `PROCEED_THRESHOLD`)
+
+then revisit `CONVERSATIONS` in that file: update only the cases whose expectations the
+change actually affects, run `bash ./routes.sh`, and treat any flipped row as a product
+signal before touching it - re-run once to rule out stochasticity, then decide whether
+the *input* is wrong (fix the input) or the *product* is wrong (leave it red). Never
+re-baseline an expectation to match observed output, and never rewrite the whole list.
 
 ## Known failures
 
-Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 134 passed`.
+Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 144 passed, 4 skipped` (the 4 skips are the gated live-route cases).
 
 - All three failures are in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`. That test file and that module are byte-identical to HEAD and do not depend on the pipeline, so they are pre-existing, not regressions.
 - `POST /chat/stream` used to tear on every route that reaches `find_evidence` (now fixed; see the end of this bullet): the root `messages` branch at `src/backend/api.py:192` did `item[-1].text`, but langgraph v3 yields a `ChatModelStream` per root-scope LLM call, so it raised `TypeError: 'ChatModelStream' object is not subscriptable` — status 200 (headers already flushed), partial NDJSON including the `tool_progress` ticks, then the stream dies before the final `messages` event so the answer never arrives, and background `/chats/{id}/investigate` runs end `status=error` with that TypeError as `run.error`. The line is present at HEAD but only became reachable once the evidence report moved off-agent to a direct root-scope `deepseek.with_structured_output(...)` call (`agents/evidence_report.py`, invoked from `find_evidence_node`); at HEAD it ran inside a `create_agent` subgraph, so no root-scope `messages` event existed, and routes whose LLM work stays in subgraphs (for example `clarify`) complete normally — route-dependent, not a dependency regression (`langgraph` is `1.2.12` at HEAD and in the working tree). The fix has landed: the root `messages` branch (`api.py:191-201`) no longer indexes blindly — it logs `item[-1].text` only for a non-empty list/tuple (via `getattr(..., "text", None)`) and otherwise logs the item type, so a `ChatModelStream` cannot raise. That branch is debug-only (`logger.debug`, no `yield`), and the answer is still sourced from the `values` channel into `last_answer` and emitted at `api.py:234`. For pipeline-level end-to-end checks, drive `chatbot.stream_events(...)` and read the `values`/`subgraphs`/`custom` channels instead of the `messages` branch.

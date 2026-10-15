@@ -10,6 +10,10 @@ CLARIFY_THRESHOLD = 0.64
 # least this sure it would materially improve the next turn.
 FOLLOW_UP_THRESHOLD = 0.75
 
+# The authorization head is a yes/no ("has the user told us to proceed anyway?"),
+# not a calibrated ambiguity gate, so it only needs to clear even odds.
+PROCEED_THRESHOLD = 0.5
+
 # Consecutive clarification turns before the pipeline stops asking and instead
 # investigates best-effort so the user still gets an answer.
 MAX_CLARIFY_ROUNDS = 2
@@ -21,18 +25,28 @@ classifier = TypeSafeClassifier()
 _SCOPE_ROUTES = ("clarify", "general", "direct_answer", "find_evidence")
 
 
+def _route(response: ClassifierResponse) -> str:
+    """The route choice, falling back to direct_answer for an unknown label."""
+    route = response.choices["route"].choice
+    return route if route in _SCOPE_ROUTES else "direct_answer"
+
+
 def decide_scope(response: ClassifierResponse, clarify_count: int) -> str:
     """Return one of clarify/general/direct_answer/find_evidence.
 
-    Two-stage decision: first decide whether more information is needed at all,
-    and only otherwise pick the action. When the clarification budget is spent,
-    investigate best-effort instead of asking again.
+    Two-stage decision: gate on ambiguity, then pick the action. When the request
+    is ambiguous the classifier may still yield to the route if the user has
+    authorized proceeding without the missing detail; authorization is checked
+    before the retry cap so it decides even once the cap is spent. Otherwise the
+    request is clarified until the budget runs out, after which the pipeline
+    forces a best-effort investigation.
     """
     needs = response.nouls["needs_clarification"].noul
     if needs >= CLARIFY_THRESHOLD:
+        if response.nouls["proceed_without_clarification"].noul >= PROCEED_THRESHOLD:
+            return _route(response)
         return "clarify" if clarify_count < MAX_CLARIFY_ROUNDS else "find_evidence"
-    route = response.choices["route"].choice
-    return route if route in _SCOPE_ROUTES else "direct_answer"
+    return _route(response)
 
 
 def decide_confidence(

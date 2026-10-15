@@ -26,7 +26,10 @@ LangGraph pipeline (src/backend/pipeline/graph.py)
 SereneDB log queries (src/backend/db)   ← pooled connections
 ```
 
-The **evidence stage** (`find_evidence`) is a deep agent: it plans the
+The `scope` stage asks a clarifying question only when the request is too
+underspecified to act on **and** the user has not explicitly authorised
+proceeding (for example "just do it"); an explicit go-ahead investigates
+best-effort instead. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
 investigation and calls the database tools itself, then submits a free-text
 summary of its findings. The report of `summary` plus `evidence` (and optional
 `hypotheses`) is built off-agent from that summary and the captured results,
@@ -49,14 +52,18 @@ Create `.env` in the repo root with the API keys for the providers in use:
 ```
 GROQ_API_KEY=...
 DEEPSEEK_API_KEY=...
+GOOGLE_API_KEY=...
+TYPESAFE_API_KEY=...
 
 # Optional ports (defaults: 8000 backend, 8501 UI)
 BACKEND_PORT=8000
 FRONTEND_PORT=8501
 ```
 
-Keys and ports are loaded automatically on import via `python-dotenv`. The UI
-reads `BACKEND_PORT` to reach the backend, so both scripts stay in sync.
+Keys and ports are loaded automatically on import via `python-dotenv`; all four
+provider keys are read at import, so they must be present for the backend to
+start. The UI reads `BACKEND_PORT` to reach the backend, so both scripts stay in
+sync.
 
 ### Concurrency tuning (optional)
 
@@ -190,8 +197,9 @@ the demo and see the real sign-in page.
 
 When the demo is active, the auth gate auto-signs in as the demo account before
 the chat UI renders; the sidebar then lists that account's chats and loads each
-chat's history on demand. `./backend.sh` provisions the demo account on start;
-`./frontend.sh` alone does not, so the UI will not boot until the account exists.
+chat's history on demand. `bash ./backend.sh` provisions the demo account on
+start; `bash ./frontend.sh` alone does not, so the UI will not boot until the
+account exists.
 
 To remove the demo:
 
@@ -229,13 +237,13 @@ builds the inverted index. It is safe to re-run, but it discards existing rows.
 ## Running
 
 ```bash
-./backend.sh     # uvicorn backend.api:app --port $BACKEND_PORT --reload
-./frontend.sh    # streamlit run src/ui/streamlit_app.py --server.port $FRONTEND_PORT
+bash ./backend.sh     # uvicorn backend.api:app --port $BACKEND_PORT --reload
+bash ./frontend.sh    # streamlit run src/ui/streamlit_app.py --server.port $FRONTEND_PORT
 ```
 
 Both commands run from the repository root. Set `BACKEND_PORT`/`FRONTEND_PORT`
 in `.env` (or the environment) to run on non-default ports; `8000`/`8501` are
-used when unset.
+used when unset. The scripts are not executable — invoke them with `bash`.
 
 ## Testing
 
@@ -248,7 +256,7 @@ The suite in `tests/test_db_queries.py` runs the database query layer against a
 seeded (see Setup); if SereneDB is unreachable or empty the tests **fail
 loudly** rather than skip.
 
-Everything else runs without external services:
+Everything else runs without external services (the gated live route tests below are skipped unless enabled):
 
 | File | Covers |
 | --- | --- |
@@ -258,15 +266,36 @@ Everything else runs without external services:
 | `test_jobs.py` | background run registry and investigation endpoints (buffer, re-attach, cancel, persistence) |
 | `test_middleware.py` | error classification and retry/backoff |
 | `test_checkpointer.py` | checkpointer backend selection |
-| `test_config.py` / `test_connection.py` | env-driven config and the pooled connection layer |
+| `test_config.py` | env-driven config and the pooled connection layer |
 | `test_observability.py` | metrics registry and request-correlation middleware |
-| `test_chat_client.py` / `test_rendering.py` / `test_manage.py` | UI client, marker rendering, provisioning CLI |
+| `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
+| `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_find_evidence.py` | scope & confidence decisions, classifier prompt payloads, evidence-node wiring |
+| `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
+
+> The offline suite has three known, pre-existing failures in
+> `tests/test_rendering.py` (inline-marker rendering edge cases); everything else
+> passes. The gated live route tests below are skipped unless enabled.
+
+### Live route tests
+
+`bash ./routes.sh` replays each scripted conversation in
+`tests/test_live_scope_routes.py` against the real normalizer and scope
+classifier and asserts the route each turn takes (`clarify`, `general`,
+`direct_answer`, `find_evidence`). It is gated by `RUN_LIVE_ROUTES=1` (the script
+sets it) and must be run alone — never inside the full suite, because
+`tests/conftest.py` installs dummy provider keys before the backend's
+import-time clients are built. Each gated run writes
+`.data/scope_routes_report.html` (gitignored; override with
+`RUN_LIVE_ROUTES_REPORT`) and prints its path once; the per-turn numbers appear in
+the assertion failure. Offline, only a case-data sanity check runs. Costs two
+live API calls per asserted turn, and the classifier is stochastic — re-run
+before treating a flipped route as a regression.
 
 To see tool calls and their parameters (and, at `DEBUG`, the SQL and query
 params) in the backend terminal:
 
 ```bash
-LOG_LEVEL=DEBUG ./backend.sh
+LOG_LEVEL=DEBUG bash ./backend.sh
 ```
 
 ## HTTP API
@@ -373,6 +402,10 @@ include streams started/completed/rejected, logins, chats, and messages.
 ## Project layout
 
 ```
+backend.sh    uvicorn backend.api:app (demo account provisioned on start)
+frontend.sh   streamlit run src/ui/streamlit_app.py
+routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
+setup.sh      legacy DB seeding script (prefer: uv run python -m backend.db.setup)
 src/
 ├── backend/
 │   ├── api.py            FastAPI endpoints, streaming, and admission control

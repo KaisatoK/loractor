@@ -2,9 +2,10 @@
 
 ``PipelinePrompts`` renders the per-stage prompts from ``PipelineState``. The
 TypeSafe classifier question builders (``needs_clarification_question``,
-``route_question``, ``pass_question``, ``next_state_question``,
-``revision_reason_question``, ``worth_follow_up_question``) back the scope and
-confidence routers wired up in ``graph.py``.
+``proceed_without_clarification_question``, ``route_question``, ``pass_question``,
+``next_state_question``, ``revision_reason_question``,
+``worth_follow_up_question``) back the scope and confidence routers wired up in
+``graph.py``.
 """
 
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
@@ -140,12 +141,17 @@ class PipelinePrompts:
         return {
             "state": {
                 "conversation": state["normalized"],
+                "latest_message": state["latest_message"],
+                "latest_answer": state["latest_answer"],
                 "database_schema": LOG_SCHEMA,
                 "tool_catalog": TOOL_CATALOG,
                 "mission": PIPELINE_MISSION,
             },
             "questions": {
                 "needs_clarification": self.needs_clarification_question(),
+                "proceed_without_clarification": (
+                    self.proceed_without_clarification_question()
+                ),
                 "route": self.route_question(),
             },
         }
@@ -166,6 +172,33 @@ class PipelinePrompts:
                 false=(
                     "The request is specific enough to answer or investigate now "
                     "without asking the user for more information."
+                ),
+            ),
+        )
+
+    def proceed_without_clarification_question(self) -> Noul:
+        return Noul(
+            instructions=(
+                "Decide whether the user has authorized proceeding without the "
+                "detail the previous assistant message asked for. Judge the latest "
+                "user message in relation to that previous assistant message. "
+                "This is about authorization, not about how well-specified the "
+                "request is: a vague request can still be authorized. Restating "
+                "the task in other words is not authorization to choose missing "
+                "parameters."
+            ),
+            criteria=NoulCriteria(
+                true=(
+                    "The user explicitly declined to supply the requested detail, "
+                    "or instructed the assistant to proceed without it, for example "
+                    "'just do it', 'pick one', 'use whichever', 'use your "
+                    "judgement', 'I don't care, proceed', or 'no more questions'."
+                ),
+                false=(
+                    "The user supplied the requested detail, restated the task "
+                    "without declining to provide it, did not address the question, "
+                    "or expressed plain task intent such as 'I want you to do it', "
+                    "which is not authorization to choose missing parameters."
                 ),
             ),
         )

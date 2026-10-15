@@ -14,6 +14,7 @@ from langchain_typesafe import ChoiceAnswer, ClassifierResponse, NoulAnswer
 from backend.pipeline.decision import (
     CLARIFY_THRESHOLD,
     MAX_CLARIFY_ROUNDS,
+    PROCEED_THRESHOLD,
     decide_confidence,
     decide_scope,
 )
@@ -36,10 +37,11 @@ def _choice(label, confidence=0.8):
     )
 
 
-def _scope_response(needs, route_label):
+def _scope_response(needs, route_label, proceed=0.0):
     return _response(
         {
             "needs_clarification": _noul(needs),
+            "proceed_without_clarification": _noul(proceed),
             "route": _choice(route_label),
         }
     )
@@ -87,6 +89,41 @@ def test_scope_routes_find_evidence():
 def test_scope_unknown_route_falls_back_to_direct_answer():
     response = _scope_response(0.0, "mystery")
     assert decide_scope(response, clarify_count=0) == "direct_answer"
+
+
+def test_scope_proceeds_to_route_when_authorized():
+    response = _scope_response(0.86, "find_evidence", proceed=0.9)
+    assert decide_scope(response, clarify_count=0) == "find_evidence"
+
+
+def test_scope_authorization_bypasses_spent_clarify_cap():
+    # Authorization is checked before the cap, so the route decides at the cap.
+    response = _scope_response(0.86, "direct_answer", proceed=0.9)
+    assert (
+        decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "direct_answer"
+    )
+
+
+def test_scope_not_authorized_still_clarifies_when_budget_remains():
+    response = _scope_response(0.86, "find_evidence", proceed=0.1)
+    assert decide_scope(response, clarify_count=0) == "clarify"
+
+
+def test_scope_authorized_route_general_is_honored():
+    response = _scope_response(0.86, "general", proceed=0.9)
+    assert decide_scope(response, clarify_count=0) == "general"
+
+
+def test_scope_proceed_at_threshold_fires():
+    response = _scope_response(0.86, "find_evidence", proceed=PROCEED_THRESHOLD)
+    assert decide_scope(response, clarify_count=0) == "find_evidence"
+
+
+def test_scope_proceed_below_threshold_clarifies():
+    response = _scope_response(
+        0.86, "find_evidence", proceed=PROCEED_THRESHOLD - 0.01
+    )
+    assert decide_scope(response, clarify_count=0) == "clarify"
 
 
 # --- decide_confidence ----------------------------------------------------
@@ -147,3 +184,44 @@ def test_confidence_probabilities_have_expected_keys():
         "revision_reason",
         "worth_follow_up",
     }
+
+
+# --- scope_node authorization non-persistence -----------------------------
+
+
+def test_scope_node_persists_no_authorization_signal(monkeypatch):
+    """The authorization verdict must not survive the turn.
+
+    ``decide_scope`` reads ``proceed_without_clarification`` from the current
+    classifier response only; ``scope_node`` must not write it (or any derived
+    flag) into state, or a later turn would inherit the previous turn's
+    authorization. The non-latch guarantee otherwise rests on a live judgement
+    call, which is why it is pinned structurally here instead.
+    """
+    from backend.pipeline import graph
+
+    response = _scope_response(0.9, "find_evidence", proceed=0.95)
+
+    class _StubClassifier:
+        def invoke(self, request):
+            return response
+
+    monkeypatch.setattr(graph, "classifier", _StubClassifier())
+
+    # No clarify_count: the node's ``state.get("clarify_count", 0)`` default is
+    # the turn's starting count, so the node adds it (and scope) itself.
+    state = {
+        "normalized": {
+            "normalized_question": "What recurring problem do we have",
+            "intent": "understand recurring problems",
+            "context": {},
+            "ambiguities": ["which service", "which time window"],
+        },
+        "latest_message": "Just do it",
+        "latest_answer": "Which services or time window should I look at?",
+    }
+
+    out = graph.scope_node(state)
+
+    assert out["scope"] == "find_evidence"
+    assert set(out) - set(state) == {"scope", "clarify_count"}

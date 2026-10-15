@@ -28,6 +28,8 @@ def _state():
     """A representative mid-revision state (one round already attempted)."""
     return {
         "normalized": "Why did checkout errors spike this morning?",
+        "latest_message": "Why did checkout errors spike this morning?",
+        "latest_answer": "Checkout errors rose 3x after 09:00.",
         "role": {
             "name": "engineer",
             "objective": "Find the root cause of a specific error.",
@@ -69,6 +71,23 @@ def test_scope_request_includes_tool_catalog():
 def test_scope_request_includes_mission():
     request = PipelinePrompts().scope_request(_state())
     assert request["state"]["mission"] == PIPELINE_MISSION
+
+
+def test_scope_request_carries_latest_message_and_answer():
+    request = PipelinePrompts().scope_request(_state())
+    assert request["state"]["latest_message"] == "Why did checkout errors spike this morning?"
+    assert request["state"]["latest_answer"] == "Checkout errors rose 3x after 09:00."
+
+
+def test_scope_request_asks_proceed_without_clarification():
+    request = PipelinePrompts().scope_request(_state())
+    assert "proceed_without_clarification" in request["questions"]
+
+
+def test_scope_request_does_not_carry_clarify_count():
+    # Authorization must stay independent of the retry count.
+    request = PipelinePrompts().scope_request(_state())
+    assert "clarify_count" not in request["state"]
 
 
 def test_confidence_request_includes_catalog_history_and_budgets():
