@@ -12,6 +12,12 @@ A leading selector is required and scopes the lookup to one column: ``@`` for
 that column's most popular values; a query with no leading selector matches
 nothing.
 
+Suggestions are ranked case-insensitively by default -- a value is never preferred
+merely for matching the typed case. A ``!`` placed immediately after the selector
+switches to a case-sensitive ranking, where values whose case matches the typed
+text rank first (see :func:`_order_keys`). The modifier is stripped before
+matching, so ``@!nova`` searches the same values as ``@nova``.
+
 ``$`` searches ``content``. Because ``content`` is word-indexed it is handled
 separately: suggestions are whole lines rather than the single words the shared
 ``ts_dict_agg`` recipe would return, and each carries its ``line_id`` in place of a
@@ -56,6 +62,19 @@ def _resolve_selector(query: str) -> tuple[str, str | None]:
     return query[1:], column
 
 
+def _resolve_modifier(query: str) -> tuple[str, bool]:
+    """Split a leading ``!`` case-sensitivity modifier off ``query``.
+
+    Returns the query without the modifier and whether it was present. It sits
+    right after the selector, so it only applies once the selector has been
+    stripped (``@!nova`` -> query ``nova``, flag set). Without it the ranking is
+    case-insensitive.
+    """
+    if query.startswith("!"):
+        return query[1:], True
+    return query, False
+
+
 def _words(query: str) -> list[str]:
     """Split ``query`` on non-alphanumerics for the per-word fuzzy fallback.
 
@@ -66,8 +85,30 @@ def _words(query: str) -> list[str]:
     return words or [query]
 
 
+def _order_keys(
+    case_sensitive: bool, prefix: str, contains: str
+) -> tuple[sql.Composable, list[str]]:
+    """The ranking keys that order suggestions, with their params.
+
+    Values that start with the typed text always rank first, then popularity. By
+    default that is the whole story; with ``case_sensitive`` set (the ``!``
+    modifier) values whose case matches the typed text rank above
+    case-insensitive-only matches.
+    """
+    if case_sensitive:
+        return (
+            sql.SQL("(suggestion ILIKE %s) DESC, (suggestion LIKE %s) DESC"),
+            [prefix, contains],
+        )
+    return sql.SQL("(suggestion ILIKE %s) DESC"), [prefix]
+
+
 def _content_matches(
-    index_name: sql.Identifier, contains: str, prefix: str, query: str
+    index_name: sql.Identifier,
+    contains: str,
+    prefix: str,
+    query: str,
+    case_sensitive: bool = False,
 ) -> tuple[sql.Composable, list[str | int]]:
     """Whole-line ``content`` matches, mirroring ``search_logs``' lexical half.
 
@@ -77,7 +118,10 @@ def _content_matches(
     ``ts_levenshtein`` match when nothing contains it. Each suggestion carries the
     line's ``line_id`` -- a repeated message keeps its earliest one -- so the UI
     can insert a ``Line ID: n`` reference instead of the whole message.
+    ``case_sensitive`` adds the case-matching ranking key (see
+    :func:`_order_keys`).
     """
+    order_keys, order_params = _order_keys(case_sensitive, prefix, contains)
     query_sql = sql.SQL("""
         WITH exact_matches AS (
             SELECT content AS suggestion, MIN(line_id) AS line_id
@@ -98,12 +142,13 @@ def _content_matches(
             SELECT suggestion, line_id FROM fuzzy_matches
             WHERE NOT EXISTS (SELECT 1 FROM exact_matches)
         ) matches
-        ORDER BY (suggestion ILIKE %s) DESC,
-                 (suggestion LIKE %s) DESC,
+        ORDER BY {order_keys},
                  line_id
         LIMIT {limit}
-    """).format(index_name=index_name, limit=sql.Literal(_LIMIT))
-    return query_sql, [contains, query, prefix, contains]
+    """).format(
+        index_name=index_name, order_keys=order_keys, limit=sql.Literal(_LIMIT)
+    )
+    return query_sql, [contains, query] + order_params
 
 
 @query_runner
@@ -123,11 +168,17 @@ def auto_complete(
     text mirror ``pid_text``); ``$`` searches ``content``. The selector is stripped
     before matching. A bare selector (empty query) lists that column's most popular
     values, while a query with no leading selector matches nothing.
+
+    Rankings are case-insensitive by default; a ``!`` immediately after the
+    selector makes them case-sensitive, ranking values whose case matches the typed
+    text first (``@!nova`` vs ``@nova``).
     """
     query, column = _resolve_selector(query)
 
     if column is None:
         return _NO_MATCHES, []
+
+    query, case_sensitive = _resolve_modifier(query)
 
     index_name = sql.Identifier(f"{table_name}_idx")
     token_index = sql.Identifier(f"{table_name}_token_idx")
@@ -135,10 +186,16 @@ def auto_complete(
     prefix = f"{query}%"
     words = _words(query)
 
-    logger.debug("Auto-completing %r (words %s) in %s", query, words, column)
+    logger.debug(
+        "Auto-completing %r (words %s) in %s (case_sensitive=%s)",
+        query,
+        words,
+        column,
+        case_sensitive,
+    )
 
     if column == "content":
-        return _content_matches(index_name, contains, prefix, query)
+        return _content_matches(index_name, contains, prefix, query, case_sensitive)
 
     def exact_branch() -> sql.Composable:
         return sql.SQL("""
@@ -165,15 +222,15 @@ def auto_complete(
 
     # ``ILIKE`` keeps the dictionary match case-insensitive; the ranking keys then
     # put values that start with the typed text ahead of values that merely
-    # contain it, values whose case matches ahead of case-insensitive-only
-    # matches, and only then fall back to popularity.
+    # contain it, and -- only in case-sensitive mode -- values whose case matches
+    # ahead of case-insensitive-only matches, before popularity.
+    order_keys, order_params = _order_keys(case_sensitive, prefix, contains)
     order_by = sql.SQL("""
-        ORDER BY (suggestion ILIKE %s) DESC,
-                 (suggestion LIKE %s) DESC,
+        ORDER BY {order_keys},
                  count DESC,
                  suggestion
         LIMIT {limit}
-    """).format(limit=sql.Literal(_LIMIT))
+    """).format(order_keys=order_keys, limit=sql.Literal(_LIMIT))
 
     # The fuzzy rows are consulted only when the exact match came up empty, so a
     # normal keystroke never sees an edit-distance suggestion.
@@ -193,6 +250,6 @@ def auto_complete(
     """).format(exact=exact, fuzzy=fuzzy, combined=combined, order_by=order_by)
 
     # One ``%s`` for the exact ILIKE match, one per word for the fuzzy ts_any
-    # branch, then the ORDER BY's prefix ILIKE and case-sensitive LIKE.
-    params = [contains] + words + [prefix, contains]
+    # branch, then the ORDER BY's ranking keys.
+    params = [contains] + words + order_params
     return query_sql, params

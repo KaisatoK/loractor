@@ -158,6 +158,11 @@ suggests nothing. The selector is stripped before matching and is shown as a pre
 on each dropdown entry (a display-only reminder of the column in scope); it is
 consumed when a suggestion is picked, so the bare value is inserted.
 
+Matching is always case-insensitive, and by default ranking is too — a value is
+never preferred just for matching the case you typed. Typing `!` immediately after
+the selector (`@!nova`) switches to a case-sensitive ranking, putting values whose
+case matches what you typed first.
+
 ## Authentication
 
 Accounts, sessions, and chats are owned by the backend (`backend/appdb`), and the

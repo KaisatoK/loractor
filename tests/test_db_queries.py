@@ -305,6 +305,68 @@ def test_get_log_by_line_id_unknown_id_is_empty():
     assert get_log_by_line_id(10_000_000) == []
 
 
+def test_auto_complete_bang_modifier_returns_the_same_values():
+    # A ``!`` right after the selector changes ranking only, never matching.
+    for base in ["@nova", "#E2", "^Removable", "!2574", "$server"]:
+        modifier = base[:1] + "!" + base[1:]
+        assert {r["suggestion"] for r in auto_complete(modifier)} == {
+            r["suggestion"] for r in auto_complete(base)
+        }
+
+
+def test_auto_complete_bang_modifier_enables_case_priority():
+    # A controlled table where one value matches the typed case and one does not:
+    # ranking is case-insensitive by default (so the raw value ordering decides,
+    # uppercase first), while ``!`` puts the case-matching value first.
+    probe = "ac_case_probe"
+    main_index = f"{probe}_idx"
+    token_index = f"{probe}_token_idx"
+
+    def statement(query):
+        with db_cursor() as cur:
+            cur.execute(query)
+
+    try:
+        statement(
+            sql.SQL("DROP TABLE IF EXISTS {t} CASCADE").format(
+                t=sql.Identifier(probe)
+            )
+        )
+        statement(
+            sql.SQL("CREATE TABLE {t} (line_id INT PRIMARY KEY, service TEXT)").format(
+                t=sql.Identifier(probe)
+            )
+        )
+        statement(
+            sql.SQL(
+                "INSERT INTO {t} (line_id, service) VALUES (1, 'nova'), (2, 'NOVA')"
+            ).format(t=sql.Identifier(probe))
+        )
+        statement(
+            sql.SQL(
+                "CREATE INDEX {i} ON {t} USING inverted (line_id, service)"
+            ).format(i=sql.Identifier(main_index), t=sql.Identifier(probe))
+        )
+        statement(
+            sql.SQL(
+                "CREATE INDEX {i} ON {t} USING inverted (service dotted)"
+            ).format(i=sql.Identifier(token_index), t=sql.Identifier(probe))
+        )
+        statement(sql.SQL("VACUUM (REFRESH_TABLE) {t}").format(t=sql.Identifier(probe)))
+
+        normal = [r["suggestion"] for r in auto_complete("@nova", probe)]
+        sensitive = [r["suggestion"] for r in auto_complete("@!nova", probe)]
+    finally:
+        statement(
+            sql.SQL("DROP TABLE IF EXISTS {t} CASCADE").format(
+                t=sql.Identifier(probe)
+            )
+        )
+
+    assert normal == ["NOVA", "nova"]
+    assert sensitive == ["nova", "NOVA"]
+
+
 @pytest.mark.parametrize("selector", [case[0] for case in SELECTOR_CASES])
 def test_auto_complete_selectors_are_absent_from_the_data(selector):
     # A selector is only safe to strip because no indexed value contains it.
