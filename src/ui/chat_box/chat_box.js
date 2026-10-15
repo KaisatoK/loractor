@@ -11,7 +11,7 @@ let debounce = null;
 let active = -1; // suggestion the arrow keys have selected (Enter accepts it)
 
 const SPACE = /\s/;
-const SELECTORS = "@#$!";
+const SELECTORS = "@#$!^";
 
 // The selector that scoped the lookup behind the suggestions on screen, if the
 // queried word started with one. It is shown in the dropdown as a prefix but is
@@ -110,6 +110,23 @@ function submit() {
   setValue();
 }
 
+// A ``$`` content suggestion is a whole log line: it is shown with its line id
+// and inserts a "Line ID: n" reference rather than the message. Every other
+// suggestion is a field value carrying a result count.
+function isLineRef(s) {
+  return s != null && s.line_id != null;
+}
+
+// The right-hand meta text for a suggestion.
+function metaLabel(s) {
+  return isLineRef(s) ? `Line ID: ${s.line_id}` : `Count: ${s.count}`;
+}
+
+// The text a suggestion inserts into the box when it is accepted.
+function insertText(s) {
+  return isLineRef(s) ? `Line ID: ${s.line_id}` : String(s.suggestion);
+}
+
 // Paint the arrow-key selection so Enter knows which suggestion it would accept.
 function highlight() {
   Array.from(list.children).forEach((li, i) => {
@@ -164,7 +181,7 @@ function renderList() {
     term.appendChild(document.createTextNode(String(s.suggestion)));
     const hits = document.createElement("span");
     hits.className = "hits";
-    hits.textContent = s.count;
+    hits.textContent = metaLabel(s);
     li.append(term, hits);
 
     li.addEventListener("mousedown", (event) => {
@@ -193,7 +210,7 @@ function pick(index) {
   }
 
   const value = input.value;
-  const picked = String(chosen.suggestion);
+  const picked = insertText(chosen);
   const { start, end } = currentWord();
   const draft = words(value);
   const suggested = words(picked);
@@ -256,7 +273,7 @@ function pick(index) {
 
 input.addEventListener("focus", () => {
   focused = true;
-  active = -1;
+  active = suggestions.length > 0 ? 0 : -1;
   renderList();
 });
 
@@ -359,7 +376,7 @@ window.addEventListener("message", (event) => {
   }
 
   suggestions = Array.isArray(args.suggestions) ? args.suggestions : [];
-  active = -1;
+  active = suggestions.length > 0 ? 0 : -1;
   renderList();
   syncSend();
 });

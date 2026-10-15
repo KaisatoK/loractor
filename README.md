@@ -140,17 +140,23 @@ never collide with real text:
 | --- | --- |
 | `@` | `service` |
 | `#` | `event_id` |
-| `$` | `event_template` |
+| `^` | `event_template` |
 | `!` | `pid` |
+| `$` | `content` |
 
-So `@nova` suggests services, `#E25` suggests event ids, `$Removable` suggests
-event templates, and `!257` suggests pids. (`pid` is an integer column, so it is
-suggested through its indexed text mirror `pid_text`; the other columns are
-already text.) A bare selector lists that column's most popular values. A
-selector is **required**: a word without one is not looked up and suggests
-nothing. The selector is stripped before matching and is shown as a
-prefix on each dropdown entry (a display-only reminder of the column in scope);
-it is consumed when a suggestion is picked, so the bare value is inserted.
+So `@nova` suggests services, `#E25` suggests event ids, `^Removable` suggests
+event templates, `!257` suggests pids, and `$timeout` suggests log lines whose
+content contains `timeout`. (`pid` is an integer column, so it is suggested
+through its indexed text mirror `pid_text`; `content` is word-indexed, so it is
+matched as whole lines rather than single words.)
+
+Each dropdown entry shows its **count** as `Count: n`. A `$` content entry instead
+shows `Line ID: n`, and picking it inserts that `Line ID: n` reference into the
+box rather than pasting the whole message. A bare selector lists that column's most
+popular values. A selector is **required**: a word without one is not looked up and
+suggests nothing. The selector is stripped before matching and is shown as a prefix
+on each dropdown entry (a display-only reminder of the column in scope); it is
+consumed when a suggestion is picked, so the bare value is inserted.
 
 ## Authentication
 
@@ -316,9 +322,11 @@ Static event stream used to exercise the UI without running the pipeline.
 
 Type-ahead suggestions from the indexed log-field values. `query` is required and
 must start with a selector scoping it to one column (`@` service, `#` event_id,
-`$` event_template, `!` pid); a bare selector lists that column's most popular
-values, while a query with no leading selector returns no suggestions.
-Returns `{"suggestions": [{"suggestion", "count"}, ...]}`.
+`^` event_template, `!` pid, `$` content); a bare selector lists that column's
+most popular values, while a query with no leading selector returns no
+suggestions.
+Returns `{"suggestions": [{"suggestion", "count"}, ...]}`; a `$` content
+suggestion carries `line_id` in place of `count`.
 
 ### Chats
 

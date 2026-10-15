@@ -211,13 +211,15 @@ def test_compare_periods():
 
 # --- auto-complete -----------------------------------------------------------
 
-# A selector scoping the lookup to one (text-indexed) column, with a query that
-# matches it. ``pid`` is suggested through its text mirror ``pid_text``.
+# A selector scoping the lookup to one column, with a query that matches it.
+# ``pid`` is suggested through its text mirror ``pid_text``; ``content`` matches
+# whole lines rather than single words.
 SELECTOR_CASES = [
     ("@", "service", "nova"),
     ("#", "event_id", "E25"),
-    ("$", "event_template", "Removable"),
+    ("^", "event_template", "Removable"),
     ("!", "pid_text", "25"),
+    ("$", "content", "server"),
 ]
 
 
@@ -247,6 +249,25 @@ def test_auto_complete_bare_selector_lists_its_column(selector, column, _query):
     assert {row["suggestion"] for row in rows} <= _column_values(column)
 
 
+def test_auto_complete_content_suggests_line_ids():
+    # ``$`` content suggestions carry a ``line_id`` (shown and inserted as a
+    # "Line ID: n" reference) instead of a result count.
+    rows = auto_complete("$server")
+    assert rows
+    assert all(row.get("line_id") is not None for row in rows)
+
+    with db_cursor() as cur:
+        for row in rows:
+            assert "count" not in row
+            cur.execute(
+                sql.SQL("SELECT content FROM {table} WHERE line_id = %s").format(
+                    table=sql.Identifier(TABLE_NAME)
+                ),
+                (row["line_id"],),
+            )
+            assert cur.fetchone()["content"] == row["suggestion"]
+
+
 def test_auto_complete_requires_a_leading_selector():
     # A selector only counts at the start: ``E25`` is an event_id, so a leading
     # ``@`` scopes to service and finds nothing, and a bare/trailing selector
@@ -266,8 +287,9 @@ def test_auto_complete_selectors_are_absent_from_the_data(selector):
                 "WHERE position(%s in service) > 0 "
                 "OR position(%s in event_id) > 0 "
                 "OR position(%s in event_template) > 0 "
-                "OR position(%s in pid_text) > 0 LIMIT 1"
+                "OR position(%s in pid_text) > 0 "
+                "OR position(%s in content) > 0 LIMIT 1"
             ).format(table=sql.Identifier(TABLE_NAME)),
-            (selector, selector, selector, selector),
+            (selector, selector, selector, selector, selector),
         )
         assert cur.fetchone() is None, f"{selector!r} occurs in the indexed values"

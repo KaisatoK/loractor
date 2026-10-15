@@ -10,11 +10,13 @@ replaces the words it spans -- a suggestion for a multi-word field value such as
 so the shared words are not duplicated.
 
 A leading selector in the current word scopes the lookup to one indexed column:
-``@`` for ``service``, ``#`` for ``event_id``, ``$`` for ``event_template`` and
-``!`` for ``pid``. A selector is required -- a word without one is not looked up
-and suggests nothing (see :func:`_suggestions`). The selector is stripped before
-matching and echoed as a prefix on each suggestion in the dropdown (a display-only
-reminder of the column); picking a suggestion inserts the bare value without it.
+``@`` for ``service``, ``#`` for ``event_id``, ``^`` for ``event_template``, ``!``
+for ``pid`` and ``$`` for ``content``. A selector is required -- a word without one
+is not looked up and suggests nothing (see :func:`_suggestions`). The selector is
+stripped before matching and echoed as a prefix on each suggestion in the dropdown
+(a display-only reminder of the column); picking a suggestion inserts the bare
+value without it. A ``$`` suggestion is a whole log line, so it inserts a
+``Line ID: n`` reference instead of the message.
 
 :func:`chat_box` is the whole widget: as a Streamlit fragment it renders the
 component and, on submit, starts the backend investigation via
@@ -33,17 +35,17 @@ _component = components.declare_component("chat_box", path=str(_DIR))
 
 _KEY = "chat_box"
 _SUBMIT_SEQ_KEY = "chat_box_submit_seq"
-_SELECTORS = "@#$!"
+_SELECTORS = "@#$!^"
 
 
 def _suggestions(token: str, word: str) -> list[dict]:
     """Best-effort suggestions -- a lookup failure must never break the chat.
 
     Auto-complete is opt-in through a selector: the word must start with ``@``,
-    ``#``, ``$`` or ``!`` to scope the lookup to ``service``, ``event_id``,
-    ``event_template`` or ``pid`` on the backend (a bare selector lists that
-    column's most popular values). A word with no leading selector suggests
-    nothing, so the endpoint is not called.
+    ``#``, ``^``, ``!`` or ``$`` to scope the lookup to ``service``, ``event_id``,
+    ``event_template``, ``pid`` or ``content`` on the backend (a bare selector
+    lists that column's most popular values). A word with no leading selector
+    suggests nothing, so the endpoint is not called.
     """
     word = word.strip()
 

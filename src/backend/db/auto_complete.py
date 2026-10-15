@@ -7,10 +7,15 @@ tokenized index. Results rank values that start with the query first, then case
 matches, then popularity.
 
 A leading selector is required and scopes the lookup to one column: ``@`` for
-``service``, ``#`` for ``event_id``, ``$`` for ``event_template`` and ``!`` for
+``service``, ``#`` for ``event_id``, ``^`` for ``event_template`` and ``!`` for
 ``pid`` (its text mirror ``pid_text``; see ``_SELECTORS``). A bare selector lists
 that column's most popular values; a query with no leading selector matches
 nothing.
+
+``$`` searches ``content``. Because ``content`` is word-indexed it is handled
+separately: suggestions are whole lines rather than the single words the shared
+``ts_dict_agg`` recipe would return, and each carries its ``line_id`` in place of a
+count (see :func:`_content_matches`).
 """
 
 import logging
@@ -28,8 +33,9 @@ _WORD_SEPARATOR = re.compile(r"[^A-Za-z0-9]+")
 _SELECTORS = {
     "@": "service",
     "#": "event_id",
-    "$": "event_template",
+    "^": "event_template",
     "!": "pid_text",
+    "$": "content",
 }
 _NO_MATCHES = sql.SQL(
     "SELECT NULL::text AS suggestion, NULL::bigint AS count WHERE false"
@@ -60,6 +66,46 @@ def _words(query: str) -> list[str]:
     return words or [query]
 
 
+def _content_matches(
+    index_name: sql.Identifier, contains: str, prefix: str, query: str
+) -> tuple[sql.Composable, list[str | int]]:
+    """Whole-line ``content`` matches, mirroring ``search_logs``' lexical half.
+
+    ``content`` is word-indexed, so the shared ``ts_dict_agg`` recipe would walk
+    its dictionary and suggest single words. Whole lines are selected instead:
+    the substring the user typed, falling back to ``search_logs``' lexical
+    ``ts_levenshtein`` match when nothing contains it. Each suggestion carries the
+    line's ``line_id`` -- a repeated message keeps its earliest one -- so the UI
+    can insert a ``Line ID: n`` reference instead of the whole message.
+    """
+    query_sql = sql.SQL("""
+        WITH exact_matches AS (
+            SELECT content AS suggestion, MIN(line_id) AS line_id
+            FROM {index_name}
+            WHERE content ILIKE %s
+            GROUP BY content
+        ),
+        fuzzy_matches AS (
+            SELECT content AS suggestion, MIN(line_id) AS line_id
+            FROM {index_name}
+            WHERE content @@ ts_levenshtein(%s, 1)
+            GROUP BY content
+        )
+        SELECT suggestion, line_id
+        FROM (
+            SELECT suggestion, line_id FROM exact_matches
+            UNION ALL
+            SELECT suggestion, line_id FROM fuzzy_matches
+            WHERE NOT EXISTS (SELECT 1 FROM exact_matches)
+        ) matches
+        ORDER BY (suggestion ILIKE %s) DESC,
+                 (suggestion LIKE %s) DESC,
+                 line_id
+        LIMIT {limit}
+    """).format(index_name=index_name, limit=sql.Literal(_LIMIT))
+    return query_sql, [contains, query, prefix, contains]
+
+
 @query_runner
 def auto_complete(
     query: str,
@@ -73,10 +119,10 @@ def auto_complete(
     small edit distance of a word of ``query``, so a typo still suggests something.
 
     A leading selector is required: ``@`` scopes the lookup to ``service``, ``#``
-    to ``event_id``, ``$`` to ``event_template`` and ``!`` to ``pid`` (via its
-    text mirror ``pid_text``). The selector is stripped before matching. A bare
-    selector (empty query) lists that column's most popular values, while a query
-    with no leading selector matches nothing.
+    to ``event_id``, ``^`` to ``event_template`` and ``!`` to ``pid`` (via its
+    text mirror ``pid_text``); ``$`` searches ``content``. The selector is stripped
+    before matching. A bare selector (empty query) lists that column's most popular
+    values, while a query with no leading selector matches nothing.
     """
     query, column = _resolve_selector(query)
 
@@ -90,6 +136,9 @@ def auto_complete(
     words = _words(query)
 
     logger.debug("Auto-completing %r (words %s) in %s", query, words, column)
+
+    if column == "content":
+        return _content_matches(index_name, contains, prefix, query)
 
     def exact_branch() -> sql.Composable:
         return sql.SQL("""
