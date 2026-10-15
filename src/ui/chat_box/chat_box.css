@@ -82,6 +82,11 @@ body {
   text-overflow: ellipsis;
 }
 
+#list li .term .selector {
+  color: var(--ac-muted);
+  font-weight: 600;
+}
+
 #list li .hits {
   flex: none;
   color: var(--ac-muted);

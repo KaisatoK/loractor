@@ -392,9 +392,9 @@ async def chat_test(
 def get_auto_complete(query: str) -> dict:
     """Type-ahead suggestions from the log index's field values.
 
-    ``query`` is required and searched across all three columns. A leading
-    selector scopes it to one column: ``@`` for ``service``, ``#`` for
-    ``event_id`` and ``$`` for ``event_template``.
+    ``query`` is required and must start with a selector scoping it to one column:
+    ``@`` for ``service``, ``#`` for ``event_id`` and ``$`` for ``event_template``.
+    A query with no leading selector returns no suggestions.
     """
     return {"suggestions": auto_complete(query)}
 

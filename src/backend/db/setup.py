@@ -13,10 +13,8 @@ from backend.db.config import (
 )
 from backend.db.connection import db_cursor
 
-# The base column set shared by the source CSV (``export_embedded_csv``) and the
-# embedded CSV read by ``read_csv``. Names match the file's header; types map
-# onto the log table below. The embedded CSV carries one extra trailing
-# ``embedding`` column, appended in ``_csv_columns_clause``.
+# The base column set shared by the source CSV and the embedded CSV. Names match
+# the file's header; types map onto the log table below.
 _CSV_COLUMNS = (
     ("LineId", "BIGINT"),
     ("Logrecord", "VARCHAR"),
@@ -31,12 +29,22 @@ _CSV_COLUMNS = (
     ("EventTemplate", "VARCHAR"),
 )
 
+# Columns ``export_embedded_csv`` appends on top of ``_CSV_COLUMNS``: the derived
+# ``LogTimestamp``/``PidText`` (so the import copies them straight across) and the
+# row's ``Embedding`` vector.
+_EMBEDDED_COLUMNS = (
+    ("LogTimestamp", "TIMESTAMP"),
+    ("PidText", "VARCHAR"),
+    ("Embedding", f"FLOAT[{EMBEDDING_DIMENSION}]"),
+)
+
 
 def _csv_columns_clause() -> str:
     # read_csv must be told the embedded CSV's schema: passing ``columns``
-    # disables the sniffer, which would otherwise read the ``embedding`` list as
-    # VARCHAR. The ``embedding`` column only exists in the embedded CSV.
-    columns = [*_CSV_COLUMNS, ("embedding", f"FLOAT[{EMBEDDING_DIMENSION}]")]
+    # disables the sniffer, which would otherwise read the ``Embedding`` list as
+    # VARCHAR. The ``LogTimestamp``/``PidText``/``Embedding`` columns only exist in
+    # the embedded CSV.
+    columns = [*_CSV_COLUMNS, *_EMBEDDED_COLUMNS]
     body = ", ".join(f"'{name}': '{type_}'" for name, type_ in columns)
     return "{" + body + "}"
 
@@ -67,9 +75,9 @@ def export_embedded_csv(file_path: str) -> None:
     """Embed a local log CSV into its ``..._embedded.csv`` sibling.
 
     Streams ``file_path`` (relative to this module's directory) to SereneDB,
-    computes one ``ai_embed`` per row, and writes the result — the original
-    columns plus an ``embedding`` column — to the same name with ``_embedded``
-    inserted before ``.csv``.
+    computes the derived ``LogTimestamp`` and ``PidText`` columns plus one
+    ``ai_embed`` per row, and writes the result — the original columns plus those
+    derived ones — to the same name with ``_embedded`` inserted before ``.csv``.
     """
     base_dir = Path(__file__).resolve().parent
     src_path = base_dir / file_path
@@ -97,10 +105,16 @@ def export_embedded_csv(file_path: str) -> None:
         with src_path.open("r", encoding="utf-8", newline="") as fh:
             cur.copy_expert(copy_in_query, fh)
 
+        # The derived aliases are quoted so the CSV header keeps their casing
+        # (an unquoted identifier would fold to lower case) and matches the keys
+        # in ``_csv_columns_clause``.
         copy_out_query = sql.SQL(
             "COPY ("
-            "  SELECT *, ai_embed(Content, {embedding_model}, 'local_ai')"
-            "::FLOAT[{embedding_dimension}] AS embedding"
+            "  SELECT *,"
+            "    (Date + Time)::TIMESTAMP AS \"LogTimestamp\","
+            "    CAST(Pid AS VARCHAR) AS \"PidText\","
+            "    ai_embed(Content, {embedding_model}, 'local_ai')"
+            "::FLOAT[{embedding_dimension}] AS \"Embedding\""
             "   FROM embed_src ORDER BY LineId"
             ") TO STDOUT WITH (FORMAT csv, HEADER)"
         ).format(
@@ -176,11 +190,12 @@ def copy_csv_to_container(file_path: str) -> None:
 def import_from_csv(table_name: str = TABLE_NAME):
     """Build the log table from the embedded CSV that lives inside SereneDB.
 
-    The CSV at ``LOG_CSV_PATH`` already carries the ``embedding`` column, so
-    there is no file COPY and no ``ai_embed`` step: rows are read straight from
-    ``read_csv`` and the table, full-text dictionary and inverted index are
-    (re)built from the result. The reader runs server-side, so ``LOG_CSV_PATH``
-    must be visible to the SereneDB container.
+    The CSV at ``LOG_CSV_PATH`` already carries the derived ``LogTimestamp`` and
+    ``PidText`` columns and the ``Embedding`` vector, so there is no file COPY, no
+    ``ai_embed`` step and no per-row math: rows are read straight from ``read_csv``
+    and the table, full-text dictionary and inverted index are (re)built from the
+    result. The reader runs server-side, so ``LOG_CSV_PATH`` must be visible to the
+    SereneDB container.
     """
 
     with db_cursor() as cur:
@@ -190,6 +205,10 @@ def import_from_csv(table_name: str = TABLE_NAME):
         cur.execute(drop_query)
         print(f"Dropped old table '{table_name}' if it existed.")
 
+        # ``log_timestamp`` and ``pid_text`` are derived by ``export_embedded_csv``
+        # and imported as-is (no per-row math here). ``pid`` is an INT and only
+        # text columns get a term dictionary in the inverted index, so ``pid_text``
+        # is what the auto-complete suggests pids from.
         create_table_query = sql.SQL("""
             CREATE TABLE {table_name} (
                 line_id INT PRIMARY KEY,
@@ -198,6 +217,7 @@ def import_from_csv(table_name: str = TABLE_NAME):
                 log_time TIME,
                 log_timestamp TIMESTAMP,
                 pid INT,
+                pid_text VARCHAR,
                 category VARCHAR(50),
                 service TEXT,
                 addr TEXT,
@@ -216,13 +236,13 @@ def import_from_csv(table_name: str = TABLE_NAME):
         insert_query = sql.SQL("""
             INSERT INTO {table_name} (
                 line_id, log_record, log_date, log_time, log_timestamp,
-                pid, category, service, addr, content, event_id,
+                pid, pid_text, category, service, addr, content, event_id,
                 event_template, embedding
             )
             SELECT
-                LineId, Logrecord, Date, Time, (Date + Time)::TIMESTAMP,
-                Pid, Level, Service, ADDR, Content, EventId,
-                EventTemplate, embedding
+                LineId, Logrecord, Date, Time, LogTimestamp,
+                Pid, PidText, Level, Service, ADDR, Content, EventId,
+                EventTemplate, Embedding
             FROM read_csv({csv_path}, header = true, columns = {columns})
         """).format(
             table_name=sql.Identifier(table_name),
@@ -247,11 +267,11 @@ def import_from_csv(table_name: str = TABLE_NAME):
             WITH (frequency, position)
         """)
 
-        # ``service``, ``event_id`` and ``event_template`` are indexed verbatim
-        # (no dictionary): one term per value, case intact, so the auto-complete
-        # recipe's ``ts_dict_agg`` walks the dictionary and returns the field's
-        # real values rather than lowercased word tokens. ``content`` keeps its
-        # dictionary for full-text search.
+        # ``service``, ``event_id``, ``event_template`` and ``pid_text`` are
+        # indexed verbatim (no dictionary): one term per value, case intact, so the
+        # auto-complete recipe's ``ts_dict_agg`` walks the dictionary and returns
+        # the field's real values rather than lowercased word tokens. ``content``
+        # keeps its dictionary for full-text search.
         create_index_query = sql.SQL("""
             CREATE INDEX {index_name} ON {table_name} USING inverted (
                 line_id, 
@@ -259,6 +279,7 @@ def import_from_csv(table_name: str = TABLE_NAME):
                 service, 
                 event_template, 
                 event_id, 
+                pid_text, 
                 embedding ivf (metric = 'cosine')
             )
         """).format(
@@ -273,7 +294,8 @@ def import_from_csv(table_name: str = TABLE_NAME):
             CREATE INDEX {index_name} ON {table_name} USING inverted (
                 service dotted, 
                 event_id english, 
-                event_template english
+                event_template english,
+                pid_text english
             )
         """).format(
             index_name=sql.Identifier(f"{table_name}_token_idx"),

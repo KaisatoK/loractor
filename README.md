@@ -125,10 +125,10 @@ Supporting pieces:
 
 ## Type-ahead auto-complete
 
-The chat box suggests indexed log-field values as you type. The *current word*
-(the run of non-space characters the caret sits in) is looked up through
-`GET /auto-complete`; the dropdown opens only while the box is focused, and
-picking a suggestion replaces the draft words it spans (a multi-word
+The chat box suggests indexed log-field values as you type a **selector**. The
+*current word* (the run of non-space characters the caret sits in) is looked up
+through `GET /auto-complete`; the dropdown opens only while the box is focused,
+and picking a suggestion replaces the draft words it spans (a multi-word
 `event_template` such as `Removable base files: <*>` replaces every word it lines
 up with, so nothing is duplicated).
 
@@ -141,11 +141,16 @@ never collide with real text:
 | `@` | `service` |
 | `#` | `event_id` |
 | `$` | `event_template` |
+| `!` | `pid` |
 
-So `@nova` suggests services, `#E25` suggests event ids, and `$Removable`
-suggests event templates; without a selector the word is matched across all three
-columns. A bare selector lists that column's most popular values. The selector is
-stripped before matching and is consumed when a suggestion is picked.
+So `@nova` suggests services, `#E25` suggests event ids, `$Removable` suggests
+event templates, and `!257` suggests pids. (`pid` is an integer column, so it is
+suggested through its indexed text mirror `pid_text`; the other columns are
+already text.) A bare selector lists that column's most popular values. A
+selector is **required**: a word without one is not looked up and suggests
+nothing. The selector is stripped before matching and is shown as a
+prefix on each dropdown entry (a display-only reminder of the column in scope);
+it is consumed when a suggestion is picked, so the bare value is inserted.
 
 ## Authentication
 
@@ -309,9 +314,10 @@ Static event stream used to exercise the UI without running the pipeline.
 
 ### `GET /auto-complete`
 
-Type-ahead suggestions from the indexed log-field values. `query` is required;
-a leading selector scopes it to one column (`@` service, `#` event_id, `$`
-event_template), and a bare selector lists that column's most popular values.
+Type-ahead suggestions from the indexed log-field values. `query` is required and
+must start with a selector scoping it to one column (`@` service, `#` event_id,
+`$` event_template, `!` pid); a bare selector lists that column's most popular
+values, while a query with no leading selector returns no suggestions.
 Returns `{"suggestions": [{"suggestion", "count"}, ...]}`.
 
 ### Chats

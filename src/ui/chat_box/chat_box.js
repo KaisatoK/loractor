@@ -9,6 +9,16 @@ let ready = false;
 let debounce = null;
 
 const SPACE = /\s/;
+const SELECTORS = "@#$!";
+
+// The selector that scoped the lookup behind the suggestions on screen, if the
+// queried word started with one. It is shown in the dropdown as a prefix but is
+// never inserted: the backend strips it before matching, and picking a
+// suggestion yields the bare field value.
+function activeSelector() {
+  const word = state.word || "";
+  return SELECTORS.includes(word.charAt(0)) ? word.charAt(0) : "";
+}
 
 function currentWord() {
   const value = input.value;
@@ -75,12 +85,23 @@ function setHeight() {
 function renderList() {
   list.innerHTML = "";
   list.classList.toggle("open", focused && suggestions.length > 0);
+  const selector = activeSelector();
 
   suggestions.forEach((s, i) => {
     const li = document.createElement("li");
     const term = document.createElement("span");
     term.className = "term";
-    term.textContent = s.suggestion;
+
+    // The selector is display-only -- it marks which column the suggestions came
+    // from but is not part of the value pick() inserts.
+    if (selector) {
+      const scope = document.createElement("span");
+      scope.className = "selector";
+      scope.textContent = selector;
+      term.appendChild(scope);
+    }
+
+    term.appendChild(document.createTextNode(String(s.suggestion)));
     const hits = document.createElement("span");
     hits.className = "hits";
     hits.textContent = s.count;

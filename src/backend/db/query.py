@@ -48,12 +48,12 @@ def search_logs(
                 LIMIT 100
             ) vec
         )
-        SELECT t.log_timestamp, t.pid, t.category, t.service, t.content,
+        SELECT t.log_timestamp, t.pid, t.category, t.service, t.content, t.event_id,
             SUM(1.0 / (60 + f.rank)) AS relevance
         FROM fused f
         JOIN {table_name} t ON t.line_id = f.line_id
         {category_filter}
-        GROUP BY t.log_timestamp, t.pid, t.category, t.service, t.content
+        GROUP BY t.log_timestamp, t.pid, t.category, t.service, t.content, t.event_id
         ORDER BY SUM(1.0 / (60 + f.rank)) DESC
         LIMIT %s
     """).format(

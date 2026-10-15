@@ -10,8 +10,11 @@ replaces the words it spans -- a suggestion for a multi-word field value such as
 so the shared words are not duplicated.
 
 A leading selector in the current word scopes the lookup to one indexed column:
-``@`` for ``service``, ``#`` for ``event_id`` and ``$`` for ``event_template``;
-without one the word is searched across all three.
+``@`` for ``service``, ``#`` for ``event_id``, ``$`` for ``event_template`` and
+``!`` for ``pid``. A selector is required -- a word without one is not looked up
+and suggests nothing (see :func:`_suggestions`). The selector is stripped before
+matching and echoed as a prefix on each suggestion in the dropdown (a display-only
+reminder of the column); picking a suggestion inserts the bare value without it.
 
 :func:`chat_box` is the whole widget: as a Streamlit fragment it renders the
 component and, on submit, starts the backend investigation via
@@ -30,15 +33,21 @@ _component = components.declare_component("chat_box", path=str(_DIR))
 
 _KEY = "chat_box"
 _SUBMIT_SEQ_KEY = "chat_box_submit_seq"
+# The column selectors the backend accepts (see ``backend.db.auto_complete``).
+_SELECTORS = "@#$!"
 
 
 def _suggestions(token: str, word: str) -> list[dict]:
     """Best-effort suggestions -- a lookup failure must never break the chat.
 
-    The word is sent as-is: a leading selector (``@``, ``#`` or ``$``) scopes the
-    lookup to ``service``, ``event_id`` or ``event_template`` on the backend.
+    Auto-complete is opt-in through a selector: the word must start with ``@``,
+    ``#``, ``$`` or ``!`` to scope the lookup to ``service``, ``event_id``,
+    ``event_template`` or ``pid`` on the backend (a bare selector lists that
+    column's most popular values). A word with no leading selector suggests
+    nothing, so the endpoint is not called.
     """
-    if not word.strip():
+    word = word.strip()
+    if not word or word[0] not in _SELECTORS:
         return []
     try:
         return chat_client.auto_complete(token, word)

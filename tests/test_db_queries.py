@@ -211,11 +211,13 @@ def test_compare_periods():
 
 # --- auto-complete -----------------------------------------------------------
 
-# A selector scoping the lookup to one column, with a query that matches it.
+# A selector scoping the lookup to one (text-indexed) column, with a query that
+# matches it. ``pid`` is suggested through its text mirror ``pid_text``.
 SELECTOR_CASES = [
     ("@", "service", "nova"),
     ("#", "event_id", "E25"),
     ("$", "event_template", "Removable"),
+    ("!", "pid_text", "25"),
 ]
 
 
@@ -245,11 +247,13 @@ def test_auto_complete_bare_selector_lists_its_column(selector, column, _query):
     assert {row["suggestion"] for row in rows} <= _column_values(column)
 
 
-def test_auto_complete_selector_only_applies_at_the_start():
-    # ``E25`` is an event_id, so a leading ``@`` scopes to service and finds
-    # nothing, while a trailing selector is treated as part of the query.
+def test_auto_complete_requires_a_leading_selector():
+    # A selector only counts at the start: ``E25`` is an event_id, so a leading
+    # ``@`` scopes to service and finds nothing, and a bare/trailing selector
+    # leaves the query unscoped, so nothing is suggested.
     assert auto_complete("@E25") == []
-    assert any(row["suggestion"] == "E25" for row in auto_complete("E25@"))
+    assert auto_complete("E25") == []
+    assert auto_complete("E25@") == []
 
 
 @pytest.mark.parametrize("selector", [case[0] for case in SELECTOR_CASES])
@@ -261,8 +265,9 @@ def test_auto_complete_selectors_are_absent_from_the_data(selector):
                 "SELECT 1 FROM {table} "
                 "WHERE position(%s in service) > 0 "
                 "OR position(%s in event_id) > 0 "
-                "OR position(%s in event_template) > 0 LIMIT 1"
+                "OR position(%s in event_template) > 0 "
+                "OR position(%s in pid_text) > 0 LIMIT 1"
             ).format(table=sql.Identifier(TABLE_NAME)),
-            (selector, selector, selector),
+            (selector, selector, selector, selector),
         )
         assert cur.fetchone() is None, f"{selector!r} occurs in the indexed values"

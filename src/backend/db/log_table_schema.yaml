@@ -26,6 +26,11 @@ columns:
   - name: pid
     type: INT
     description: Process ID that emitted the line.
+  - name: pid_text
+    type: VARCHAR
+    description: >
+      Text mirror of pid, present only so type-ahead search can suggest process
+      IDs. Filter and aggregate on pid; this column is not for queries.
   - name: category
     type: VARCHAR(50)
     description: Log level or type (INFO, WARNING, ERROR).
