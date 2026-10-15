@@ -1,7 +1,7 @@
 """The ``find_evidence`` deep agent.
 
 A single deepseek deep agent plans the investigation, reads the
-``log-investigation`` skill, calls the six database tools itself, and finishes by
+``log-investigation`` skill, calls the seven database tools itself, and finishes by
 writing a thorough free-text summary of the findings. Raw rows stay on the main
 agent's own transcript; ``graph.py`` collects them from its messages after the run
 (``collect_tool_results``). The ``EvidenceReport`` itself is built afterwards,
@@ -39,6 +39,7 @@ from backend.pipeline.tools import (
     compare_periods_tool,
     count_by_category_tool,
     get_data_tool,
+    get_log_by_line_id_tool,
     get_trend_tool,
     search_logs_tool,
     top_in_category_by_service_tool,
@@ -85,6 +86,7 @@ _EXCLUDED_TOOLS = frozenset(
 _DB_TOOLS = [
     count_by_category_tool,
     get_data_tool,
+    get_log_by_line_id_tool,
     get_trend_tool,
     search_logs_tool,
     top_in_category_by_service_tool,

@@ -57,6 +57,11 @@ TOOL_CATALOG = {
         "params: type (pid|service|event_id). "
         "Use to discover valid filter values before querying."
     ),
+    "get_log_by_line_id_tool": (
+        "Fetches one complete log row by its line_id (primary key); "
+        "params: line_id. "
+        "Use to resolve a 'Line ID: n' reference into the full log record."
+    ),
 }
 
 # Mission of the pipeline, given to the scope classifier as context so it can

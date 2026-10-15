@@ -2,6 +2,7 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import (
     compare_periods,
+    get_log_by_line_id,
     search_logs,
     top_in_category_by_service,
 )
@@ -9,6 +10,7 @@ from backend.db.config import TABLE_NAME
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import (
     ComparePeriods,
+    GetLogByLineId,
     SearchLogs,
     TopInCategoryByService,
 )
@@ -31,6 +33,23 @@ def search_logs_tool(
         runtime=runtime,
         operation=operation,
         function=lambda: search_logs(query_text, table_name, category, limit),
+    )
+
+
+@tool(args_schema=GetLogByLineId)
+def get_log_by_line_id_tool(
+    line_id: int,
+    runtime: ToolRuntime,
+    table_name: str = TABLE_NAME,
+) -> dict:
+    """Fetch one complete log row by its line_id (the primary key).
+
+    Use it to resolve a "Line ID: n" reference into the whole log record.
+    """
+    return execute_database_tool(
+        runtime=runtime,
+        operation=f"fetch the log row with line_id {line_id}",
+        function=lambda: get_log_by_line_id(line_id, table_name),
     )
 
 

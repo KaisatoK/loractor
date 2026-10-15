@@ -69,6 +69,29 @@ def search_logs(
 
 
 @query_runner
+def get_log_by_line_id(
+    line_id: int,
+    table_name: str = TABLE_NAME,
+) -> tuple[sql.Composable, list[str | int]]:
+    """Return the log row with this primary-key ``line_id``.
+
+    Only the meaningful fields are returned: the derived ``pid_text`` mirror, the
+    split ``log_date``/``log_time`` (covered by ``log_timestamp``) and the
+    ``embedding`` vector are omitted. An unknown id yields no rows.
+    """
+    logger.debug("Getting the log row with line_id %s", line_id)
+
+    query = sql.SQL("""
+        SELECT line_id, log_record, log_timestamp, pid, category,
+               service, addr, content, event_id, event_template
+        FROM {table_name}
+        WHERE line_id = %s
+    """).format(table_name=sql.Identifier(table_name))
+
+    return query, [line_id]
+
+
+@query_runner
 def top_in_category_by_service(
     start_time: str,
     end_time: str,

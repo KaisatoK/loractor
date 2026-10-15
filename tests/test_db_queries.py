@@ -18,6 +18,7 @@ from backend.db import (
     count_service_by_category,
     get_event_id_trend_by_category,
     get_event_ids,
+    get_log_by_line_id,
     get_pid_trend_by_category,
     get_pids,
     get_service_trend_by_category,
@@ -275,6 +276,33 @@ def test_auto_complete_requires_a_leading_selector():
     assert auto_complete("@E25") == []
     assert auto_complete("E25") == []
     assert auto_complete("E25@") == []
+
+
+# --- get log by line_id ------------------------------------------------------
+
+def test_get_log_by_line_id_returns_its_columns():
+    rows = get_log_by_line_id(1)
+    assert len(rows) == 1
+    record = rows[0]
+    assert record["line_id"] == 1
+    # The derived pid_text mirror, the split log_date/log_time and the embedding
+    # vector are deliberately not returned.
+    assert set(record) == {
+        "line_id",
+        "log_record",
+        "log_timestamp",
+        "pid",
+        "category",
+        "service",
+        "addr",
+        "content",
+        "event_id",
+        "event_template",
+    }
+
+
+def test_get_log_by_line_id_unknown_id_is_empty():
+    assert get_log_by_line_id(10_000_000) == []
 
 
 @pytest.mark.parametrize("selector", [case[0] for case in SELECTOR_CASES])

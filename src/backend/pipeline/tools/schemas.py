@@ -154,6 +154,17 @@ class ComparePeriods(BaseModel):
     ] = 5
 
 
+class GetLogByLineId(BaseModel):
+    line_id: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Primary-key line_id of the log row to fetch.",
+        ),
+    ]
+    table_name: str = TABLE_NAME
+
+
 class GetTools(BaseModel):
     type: Annotated[
         Literal["pid", "service", "event_id"],

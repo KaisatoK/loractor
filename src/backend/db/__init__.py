@@ -19,6 +19,7 @@ from backend.db.count_query import (
 from backend.db.list_query import get_event_ids, get_pids, get_services
 from backend.db.query import (
     compare_periods,
+    get_log_by_line_id,
     search_logs,
     top_in_category_by_service,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "get_conn",
     "get_event_id_trend_by_category",
     "get_event_ids",
+    "get_log_by_line_id",
     "get_pid_trend_by_category",
     "get_pids",
     "get_service_trend_by_category",
