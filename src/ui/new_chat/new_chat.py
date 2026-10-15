@@ -57,5 +57,3 @@ def new_chat():
                     width="stretch",
                 ):
                     start_chat(role["id"])
-
-    st.chat_input("Choose a role to start a chat", disabled=True)

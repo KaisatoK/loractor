@@ -107,6 +107,10 @@ body {
   background: color-mix(in srgb, var(--ac-primary) 18%, transparent);
 }
 
+#list li.active {
+  background: color-mix(in srgb, var(--ac-primary) 30%, transparent);
+}
+
 #list li .term {
   overflow: hidden;
   text-overflow: ellipsis;

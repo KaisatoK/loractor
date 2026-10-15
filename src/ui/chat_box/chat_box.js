@@ -8,6 +8,7 @@ let suggestions = [];
 let focused = false;
 let ready = false;
 let debounce = null;
+let active = -1; // suggestion the arrow keys have selected (Enter accepts it)
 
 const SPACE = /\s/;
 const SELECTORS = "@#$!";
@@ -103,9 +104,42 @@ function submit() {
   state.submitSeq += 1;
   input.value = "";
   suggestions = [];
+  active = -1;
   renderList();
   syncSend();
   setValue();
+}
+
+// Paint the arrow-key selection so Enter knows which suggestion it would accept.
+function highlight() {
+  Array.from(list.children).forEach((li, i) => {
+    const on = i === active;
+    li.classList.toggle("active", on);
+
+    if (on) {
+      li.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+// Move the keyboard selection by one, wrapping at either end. With nothing
+// selected, Down picks the first suggestion and Up the last.
+function moveActive(delta) {
+  const count = suggestions.length;
+
+  if (count === 0) {
+    active = -1;
+    highlight();
+    return;
+  }
+
+  if (active === -1) {
+    active = delta > 0 ? 0 : count - 1;
+  } else {
+    active = (active + delta + count) % count;
+  }
+
+  highlight();
 }
 
 function renderList() {
@@ -138,9 +172,16 @@ function renderList() {
       pick(i);
     });
 
+    // Keep the keyboard selection in step with the pointer.
+    li.addEventListener("mouseenter", () => {
+      active = i;
+      highlight();
+    });
+
     list.appendChild(li);
   });
 
+  highlight();
   setHeight();
 }
 
@@ -207,6 +248,7 @@ function pick(index) {
   state.word = "";
   state.submitted = "";
   suggestions = [];
+  active = -1;
   renderList();
   setValue();
   input.focus();
@@ -214,6 +256,7 @@ function pick(index) {
 
 input.addEventListener("focus", () => {
   focused = true;
+  active = -1;
   renderList();
 });
 
@@ -226,6 +269,8 @@ input.addEventListener("input", () => {
   state.text = input.value;
   state.word = currentWord().word;
   state.submitted = "";
+  active = -1;
+  highlight();
   syncSend();
   clearTimeout(debounce);
   debounce = setTimeout(setValue, 180);
@@ -234,15 +279,26 @@ input.addEventListener("input", () => {
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
-    submit();
+
+    if (active >= 0 && suggestions[active]) {
+      pick(active);
+    } else {
+      submit();
+    }
+  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (!focused || suggestions.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    moveActive(event.key === "ArrowDown" ? 1 : -1);
   } else if (event.key === "Escape") {
     suggestions = [];
+    active = -1;
     renderList();
   }
 });
 
-// Keep focus in the input when the button is pressed, so the box does not blur
-// (the click still fires).
 sendBtn.addEventListener("mousedown", (event) => {
   event.preventDefault();
 });
@@ -303,6 +359,7 @@ window.addEventListener("message", (event) => {
   }
 
   suggestions = Array.isArray(args.suggestions) ? args.suggestions : [];
+  active = -1;
   renderList();
   syncSend();
 });
