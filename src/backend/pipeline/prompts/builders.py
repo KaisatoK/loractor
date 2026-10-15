@@ -98,11 +98,10 @@ def summarized_attempts(tool_results: object) -> list[dict]:
 
 
 def normalized_is_usable(previous: object) -> bool:
-    """Whether a normalized result is real (not missing or the empty fallback).
+    """Whether a normalized result is real (not missing or the empty placeholder).
 
-    The error middleware falls back to ``NormalizedOutput`` with empty
-    ``normalized_question`` and ``intent``; that shape must not be treated as
-    accumulated context.
+    An empty/placeholder ``NormalizedOutput`` has empty ``normalized_question``
+    and ``intent``; that shape must not be treated as accumulated context.
     """
     if isinstance(previous, dict):
         return bool(previous.get("normalized_question")) or bool(previous.get("intent"))

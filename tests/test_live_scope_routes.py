@@ -74,7 +74,12 @@ if RUN_LIVE:
 
 import pytest
 
-from backend.pipeline.decision import classifier, decide_scope
+from backend.pipeline.decision import (
+    CLARIFY_THRESHOLD,
+    PROCEED_THRESHOLD,
+    classifier,
+    decide_scope,
+)
 from backend.pipeline.graph import normalize_node
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.roles import ROLE_OBJECTIVES
@@ -207,9 +212,9 @@ def _report_row(row: dict) -> str:
         row["route"],
         row["expected"],
         "✓" if row["ok"] else "✗",
-        f"{row['needs']:.3f}",
+        f"{row['needs']:.3f} (thr {CLARIFY_THRESHOLD:.2f})",
         f"{row['proceed']:.3f}",
-        f"{row['choice']} {row['probability']:.2f}",
+        f"{row['route_choice']} {row['probability']:.2f}",
         str(row["probabilities"]),
         str(row["clarify_count"]),
     ]
@@ -228,8 +233,8 @@ def _render_report_html() -> str:
         "expected",
         "ok",
         "needs_clarification",
-        "proceed_without_clarification",
-        "choice",
+        f"proceed_without_clarification (≥ {PROCEED_THRESHOLD:.2f})",
+        "route_choice (if proceeding)",
         "probabilities",
         "clarify_count",
     )
@@ -361,7 +366,7 @@ def run_conversation(conversation: Conversation) -> None:
                     "ok": matched,
                     "needs": needs,
                     "proceed": proceed,
-                    "choice": choice,
+                    "route_choice": choice,
                     "probability": probability,
                     "probabilities": probs,
                     "clarify_count": clarify_count,

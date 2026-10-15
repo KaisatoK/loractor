@@ -39,9 +39,10 @@ CLARIFY_SYSTEM_PROMPT = (
 )
 
 NORMALIZE_SYSTEM_PROMPT = (
-    "You normalize user requests into a structured format. Return only a "
-    "valid output without additional prose, which should adhere strictly to your specified response format."
-    "Read the format instructions carefully before responding.\n\n"
+    "You normalize user requests into a structured format. Convert the supplied "
+    "input into a single json object in the json format given in the user "
+    "message; read that json format carefully. Return only the json object and "
+    "no other text.\n\n"
     "You will receive one of two input shapes:\n"
     "- A full conversation on the first turn (no previous normalized context).\n"
     "- A `<previous normalized context>` block, optionally a `<previous answer>` "
@@ -66,7 +67,9 @@ NORMALIZE_SYSTEM_PROMPT = (
     "accumulated context so the rewritten question stands alone.\n"
     "5. Drop context that no longer affects the answer; keep the context "
     "focused on what the newest question needs.\n"
-    "6. Put unresolved uncertainties into `ambiguities`.\n"
+    "6. Put an uncertainty into `ambiguities` only when it must be resolved "
+    "before the request can be answered or investigated; otherwise leave "
+    "`ambiguities` empty.\n"
     "7. Do not answer the question.\n"
     "8. Do not invent information that is not present in the provided input.\n\n"
 )
@@ -163,7 +166,9 @@ ANSWER_SYSTEM_PROMPT = (
     "example \"R1\"). Put a table block exactly where the table belongs in reading "
     "order, between the text blocks that introduce and follow it.\n"
     "- The tool result catalog lists the available ids. Reference only ids from "
-    "that catalog, never invent an id, and show only the tables the reader needs.\n\n"
+    "that catalog, never invent an id, and show only the tables the reader needs.\n"
+    "- The exact json shape is given at the end of the user message; return a "
+    "single json object in that shape and no other text.\n\n"
     "Follow-up question field:\n"
     "- `follow_up` may hold AT MOST ONE short, natural question to the user, and only "
     "when knowing the answer would materially improve the next turn.\n"

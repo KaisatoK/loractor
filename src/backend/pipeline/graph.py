@@ -16,11 +16,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
 from backend.pipeline.agents import (
-    answer_agent,
+    generate_answer,
     clarify_agent,
     general_agent,
     get_find_evidence_agent,
-    normalize_agent,
+    generate_normalized,
 )
 from backend.pipeline.agents.evidence_report import generate_evidence_report
 from backend.pipeline.answers import serialize_answer
@@ -55,18 +55,11 @@ NO_REVISION = "No revision is required."
 
 def normalize_node(state: PipelineState) -> PipelineState:
     prompt = prompts.normalize(state)
-    result = normalize_agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": prompt},
-            ]
-        }
-    )
-    normalized = result["structured_response"].model_dump()
+    normalized = generate_normalized(prompt).model_dump()
 
-    # A failed model call yields the empty fallback shape; never overwrite a
-    # valid previous normalization with it. A new turn also resets the revision
-    # budget consumed by the confidence loop.
+    # Never overwrite a valid previous normalization with an unusable or empty
+    # one. A new turn also resets the revision budget consumed by the confidence
+    # loop.
     previous = state.get("normalized")
     if not normalized_is_usable(normalized) and normalized_is_usable(previous):
         return {**state, "normalized": previous, "revision_count": 0}
@@ -186,14 +179,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 
 
 def answer_node(state: PipelineState) -> PipelineState:
-    result = answer_agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": prompts.answer(state)},
-            ]
-        }
-    )
-    structured = result["structured_response"]
+    structured = generate_answer(prompts.answer(state))
     valid_ids = {record.get("id") for record in state.get("tool_results") or []}
     answer = serialize_answer(structured, valid_ids)
     # The answer agent drafts the optional follow-up; confidence decides whether
