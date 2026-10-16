@@ -452,3 +452,90 @@ src/
 skills/
 └── log-investigation/SKILL.md  hypothesis workflow for the evidence stage
 ```
+
+## MCP tool service
+
+The optional standalone MCP service owns SereneDB access, auto-complete, and the
+investigation skills. Start it separately from the backend:
+
+```bash
+bash ./mcp_server.sh                 # Streamable HTTP, default 127.0.0.1:8010/mcp
+TOOLS_TRANSPORT=mcp bash ./backend.sh
+```
+
+The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
+seven evidence tools and `/auto-complete` through MCP; if the service is
+unreachable, the backend logs the failure and falls back to the in-process DB
+implementation. MCP mode also exposes `list_skills` and `read_skill`, while
+local mode keeps the sandboxed `skills/` filesystem backend. The server exposes
+skills both as MCP resources (`skill://log-investigation`) and tools for clients
+such as MCP Inspector, Kiro, or Claude Desktop.
+
+MCP configuration: `MCP_HOST`, `MCP_PORT`, `MCP_PATH`, `MCP_URL`,
+`MCP_CALL_TIMEOUT_S`, and `MCP_SKILLS_ROOT`. Loopback is the default. Set
+`MCP_AUTH_TOKEN` before binding `MCP_HOST` to a non-loopback address; the server
+refuses an unauthenticated non-loopback configuration. FastMCP is pinned in
+`pyproject.toml`; regenerate `requirements.txt` with `uv export` after changing
+dependencies.
+
+### Connecting an external AI agent
+
+Any MCP-capable agent can add this service to its tool set. Start the MCP server
+first, then register the Streamable HTTP endpoint in the agent's MCP settings:
+
+```text
+Endpoint: http://127.0.0.1:8010/mcp
+Transport: Streamable HTTP
+```
+
+For a non-loopback server, use the configured HTTPS URL or hostname and send the
+bearer token from `MCP_AUTH_TOKEN` as an HTTP header:
+
+```text
+Authorization: Bearer <MCP_AUTH_TOKEN>
+```
+
+The exact registration command differs between Claude Code, Codex, Kiro,
+Claude Desktop, MCP Inspector, and other clients. Use the client's
+**Streamable HTTP / remote MCP server** option; do not configure this endpoint as
+an stdio subprocess. For MCP clients that accept a JSON server definition, the
+equivalent configuration is:
+
+```json
+{
+  "name": "ai-chatbot-serenedb",
+  "transport": "streamable-http",
+  "url": "http://127.0.0.1:8010/mcp",
+  "headers": {
+    "Authorization": "Bearer <MCP_AUTH_TOKEN>"
+  }
+}
+```
+
+The `headers` entry is only needed when `MCP_AUTH_TOKEN` is configured. Keep the
+actual token out of committed configuration files. Loopback development is
+unauthenticated by default; binding the server to a non-loopback address
+requires `MCP_AUTH_TOKEN`.
+
+After connecting, the agent should list the available MCP tools and use them as
+its evidence-gathering arsenal rather than inventing SQL or relying on
+unsupported log facts:
+
+1. Use `list_skills` and then `read_skill("log-investigation")` when the request
+   asks why a failure occurs, asks for root-cause analysis, or requires testable
+   hypotheses.
+2. Use `search_logs_tool` for semantic or message-content searches. Use
+   `get_log_by_line_id_tool` when the user supplies a `Line ID: n` reference.
+3. Use `get_data_tool` to discover known services, pids, or event ids before
+   requesting a trend for an exact target with `get_trend_tool`.
+4. Use `count_by_category_tool`, `top_in_category_by_service_tool`, and
+   `compare_periods_tool` for computed counts, rankings, and period comparisons.
+5. Use `auto_complete` only for selector-prefixed suggestions (`@` service, `#`
+   event id, `^` event template, `!` pid, `$` content).
+6. Ground the final answer in returned rows and aggregates. Preserve the tool
+   result identifiers and distinguish an empty result from a failed tool call.
+
+The external agent connects directly to the MCP service, so the backend does
+not need `TOOLS_TRANSPORT=mcp` for that agent to use the tools. Set
+`TOOLS_TRANSPORT=mcp` only when the chatbot's own LangGraph pipeline should use
+the same MCP service instead of its local fallback implementation.

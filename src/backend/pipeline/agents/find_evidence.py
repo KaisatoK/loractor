@@ -35,15 +35,7 @@ from backend.pipeline.middleware import (
 )
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import FIND_EVIDENCE_SYSTEM_PROMPT
-from backend.pipeline.tools import (
-    compare_periods_tool,
-    count_by_category_tool,
-    get_data_tool,
-    get_log_by_line_id_tool,
-    get_trend_tool,
-    search_logs_tool,
-    top_in_category_by_service_tool,
-)
+from backend.pipeline.tools.registry import get_db_tools
 
 MAX_TOOL_RETRIES = 2
 
@@ -83,15 +75,6 @@ _EXCLUDED_TOOLS = frozenset(
     }
 )
 
-_DB_TOOLS = [
-    count_by_category_tool,
-    get_data_tool,
-    get_log_by_line_id_tool,
-    get_trend_tool,
-    search_logs_tool,
-    top_in_category_by_service_tool,
-    compare_periods_tool,
-]
 
 _profile_lock = threading.Lock()
 _profile_registered = False
@@ -134,11 +117,11 @@ def get_find_evidence_agent(effort: str) -> CompiledStateGraph:
     """
     _ensure_profile_registered()
     spec = get_effort_spec(effort)
-
-    agent = create_deep_agent(
-        model=deepseek,
-        tools=_DB_TOOLS,
-        middleware=[
+    tools, mcp_enabled = get_db_tools()
+    agent_kwargs = {
+        "model": deepseek,
+        "tools": tools,
+        "middleware": [
             log_tool_calls,
             handle_tool_errors,
             TodoListMiddleware(),
@@ -150,10 +133,17 @@ def get_find_evidence_agent(effort: str) -> CompiledStateGraph:
             ),
             make_error_middleware(),
         ],
-        backend=FilesystemBackend(root_dir=SKILLS_ROOT, virtual_mode=True),
-        skills=SKILLS_SOURCES,
-        system_prompt=FIND_EVIDENCE_SYSTEM_PROMPT,
-    )
+        "system_prompt": FIND_EVIDENCE_SYSTEM_PROMPT + (
+            "\nAvailable MCP skill tools: call list_skills, then read_skill(name) "
+            "before applying a relevant skill."
+            if mcp_enabled else ""
+        ),
+    }
+    if not mcp_enabled:
+        agent_kwargs["backend"] = FilesystemBackend(root_dir=SKILLS_ROOT, virtual_mode=True)
+        agent_kwargs["skills"] = SKILLS_SOURCES
+
+    agent = create_deep_agent(**agent_kwargs)
     return agent
 
 

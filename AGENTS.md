@@ -86,3 +86,16 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline-
 - Tool results: `tools/results.py::collect_tool_results` reads the agent's own messages and assigns `id` (`R{n}`) and `row_count` inline, so those records ARE the display contract `{id, tool_name, arguments, row_count, rows}` consumed by `answers.py` (`valid_ids`), `api.py` and `ui/rendering.py`. `rows` is capped at 50 for display only; the tools themselves return full row sets into the agent's context.
 - Budgets: `effort.py` sets ONE all-tools `ToolCallLimitMiddleware(run_limit)` per effort — Low 4, Medium 8, High 10, Extreme 16, Brutal 20 — and to-do writes count against it. `max_iterations` remains the confidence revision-loop cap.
 - Tool progress reaches the UI only from depth ≤ 1. The DB tools emit `tool_progress` payloads on the graph's custom stream from inside the tool (`tools/executor.py`), and failures are re-raised as a generic `RuntimeError` so `handle_tool_errors` can convert them into a ToolMessage. The API's projection captures the root `custom` scope plus ONE level of direct-child `custom` only, so an event emitted from a deeper namespace never reaches the UI. Keep tool calls on the main agent for this reason.
+
+### MCP tool service
+
+`mcp_server.sh` runs the standalone FastMCP Streamable HTTP service on
+`127.0.0.1:8010/mcp`. The pipeline defaults to local tools; set
+`TOOLS_TRANSPORT=mcp` to use the server for the seven DB tools, auto-complete,
+and skills. The synchronous pipeline uses a dedicated asyncio loop thread for
+MCP calls and falls back to local DB tools when the service is unavailable.
+Skills are exposed by the server as `skill://` resources and `list_skills` /
+`read_skill` tools; local transport retains the sandboxed filesystem backend.
+`fastmcp` is pinned in `pyproject.toml`, and `requirements.txt` must be
+regenerated with `uv export`, not edited manually. Loopback is unauthenticated;
+set `MCP_AUTH_TOKEN` for non-loopback binding.

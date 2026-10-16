@@ -422,6 +422,14 @@ def get_auto_complete(query: str) -> dict:
     ``@`` for ``service``, ``#`` for ``event_id`` and ``$`` for ``event_template``.
     A query with no leading selector returns no suggestions.
     """
+    if os.getenv("TOOLS_TRANSPORT", "local").lower() == "mcp":
+        try:
+            from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
+            payload = get_mcp_bridge().call_tool("auto_complete", {"query": query})
+            return {"suggestions": payload.get("data", payload)}
+        except Exception:
+            metrics.inc("mcp_failures_total")
+            logger.warning("MCP auto-complete failed; using local query", exc_info=True)
     return {"suggestions": auto_complete(query)}
 
 
@@ -609,6 +617,17 @@ def readyz() -> dict:
     except Exception as e:  # noqa: BLE001
         checks["log_store"] = f"error: {e}"
         ok = False
+
+    if os.getenv("TOOLS_TRANSPORT", "local").lower() == "mcp":
+        try:
+            from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
+            checks["mcp"] = "ok" if get_mcp_bridge().check() else "unavailable (local fallback enabled)"
+            metrics.inc("mcp_readiness_checks_total")
+        except Exception as e:  # noqa: BLE001
+            checks["mcp"] = f"unavailable (local fallback enabled): {e}"
+            metrics.inc("mcp_failures_total")
+    else:
+        checks["mcp"] = "not_configured"
 
     return JSONResponse(
         status_code=200 if ok else 503,
