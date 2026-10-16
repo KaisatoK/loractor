@@ -28,7 +28,7 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 ## Testing
 
 - `uv run pytest` (testpaths = `tests`; 20 modules, nearly all offline).
-- Single test: `uv run pytest tests/test_decision_nodes.py::test_scope_routes_general_when_no_clarification_needed`.
+- Single test: `uv run pytest tests/test_decision_nodes.py::test_scope_routes_route_when_queryable_scope_present`.
 - `tests/conftest.py` sets dummy `GROQ_API_KEY` / `DEEPSEEK_API_KEY` / `GOOGLE_API_KEY` + `CHECKPOINT_BACKEND=memory` before backend import. `test_decision_nodes.py` additionally sets `TYPESAFE_API_KEY` before importing `decision.py`, because that module builds a live `TypeSafeClassifier` at import time.
 - Integration: `tests/test_db_queries.py` runs against a live, seeded SereneDB and fails loudly (never skips) if it is unreachable or empty.
 - Live route tests (`tests/test_live_scope_routes.py`): skipped offline; run alone with `bash ./routes.sh` (sets `RUN_LIVE_ROUTES=1`) — real normalize + scope-classifier calls, ~2 per asserted turn. Must not run inside the full suite (conftest installs dummy keys before the backend's import-time clients; the module reloads `.env` with `override=True` only when gated). Gated runs write the HTML report `.data/scope_routes_report.html` (gitignored; override `RUN_LIVE_ROUTES_REPORT`; its path is printed once per run), and the per-turn numbers appear in an assertion failure. Routes are stochastic — a flipped row shows as `✗` with raw numbers; re-run before treating it as a regression.
@@ -42,9 +42,9 @@ decision surface. If you change any of:
 
 - `prompts/system.py` (`NORMALIZE_SYSTEM_PROMPT`)
 - `agents/normalize.py`
-- `prompts/builders.py` (`scope_request` and its three questions)
-- `decision.py` (`decide_scope`, `CLARIFY_THRESHOLD`, `MAX_CLARIFY_ROUNDS`,
-  `PROCEED_THRESHOLD`)
+- `prompts/builders.py` (`scope_request` and its four questions)
+- `decision.py` (`decide_scope`, `LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`,
+  `MAX_CLARIFY_ROUNDS`, `PROCEED_THRESHOLD`)
 
 then revisit `CONVERSATIONS` in that file: update only the cases whose expectations the
 change actually affects, run `bash ./routes.sh`, and treat any flipped row as a product
@@ -54,7 +54,7 @@ re-baseline an expectation to match observed output, and never rewrite the whole
 
 ## Known failures
 
-Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 144 passed, 4 skipped` (the 4 skips are the gated live-route cases).
+Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 165 passed, 5 skipped` (the 5 skips are the gated live-route conversations).
 
 - All three failures are in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`. That test file and that module are byte-identical to HEAD and do not depend on the pipeline, so they are pre-existing, not regressions.
 - `POST /chat/stream` used to tear on every route that reaches `find_evidence` (now fixed; see the end of this bullet): the root `messages` branch at `src/backend/api.py:192` did `item[-1].text`, but langgraph v3 yields a `ChatModelStream` per root-scope LLM call, so it raised `TypeError: 'ChatModelStream' object is not subscriptable` — status 200 (headers already flushed), partial NDJSON including the `tool_progress` ticks, then the stream dies before the final `messages` event so the answer never arrives, and background `/chats/{id}/investigate` runs end `status=error` with that TypeError as `run.error`. The line is present at HEAD but only became reachable once the evidence report moved off-agent to a direct root-scope `deepseek.with_structured_output(...)` call (`agents/evidence_report.py`, invoked from `find_evidence_node`); at HEAD it ran inside a `create_agent` subgraph, so no root-scope `messages` event existed, and routes whose LLM work stays in subgraphs (for example `clarify`) complete normally — route-dependent, not a dependency regression (`langgraph` is `1.2.12` at HEAD and in the working tree). The fix has landed: the root `messages` branch (`api.py:191-201`) no longer indexes blindly — it logs `item[-1].text` only for a non-empty list/tuple (via `getattr(..., "text", None)`) and otherwise logs the item type, so a `ChatModelStream` cannot raise. That branch is debug-only (`logger.debug`, no `yield`), and the answer is still sourced from the `values` channel into `last_answer` and emitted at `api.py:234`. For pipeline-level end-to-end checks, drive `chatbot.stream_events(...)` and read the `values`/`subgraphs`/`custom` channels instead of the `messages` branch.
@@ -62,8 +62,9 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline-
 
 ## Pipeline & API notes
 
-- Graph: `normalize -> scope -> (clarify | general | direct_answer | find_evidence) -> answer -> confidence`, with `confidence` looping back to `find_evidence`/`answer`. There is no separate `direct_answer` node — that scope route maps to `answer`. Scope and confidence are TypeSafe classifiers (`decision.py`); thresholds live there (`CLARIFY_THRESHOLD`, `FOLLOW_UP_THRESHOLD`, `MAX_CLARIFY_ROUNDS`) and per-effort budgets in `effort.py`. Model instances are in `models.py` (Groq `gpt-oss-20b`/`120b`, DeepSeek, Gemini).
-- `decision.py` builds `TypeSafeClassifier()` at import, so importing `backend.pipeline.decision` (or `backend.api`) needs `TYPESAFE_API_KEY`. `decision.py` uses `effort.py`'s `max_iterations` (the confidence revision-loop cap); the old per-effort confidence-threshold field no longer exists.
+- Graph: `normalize -> scope -> (clarify | general | direct_answer | find_evidence) -> answer -> confidence`, with `confidence` looping back to `find_evidence`/`answer`. There is no separate `direct_answer` node — that scope route maps to `answer`. Scope and confidence are TypeSafe classifiers (`decision.py`); thresholds live there (`LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`, `PROCEED_THRESHOLD`, `FOLLOW_UP_THRESHOLD`, `MAX_CLARIFY_ROUNDS`) and per-effort budgets in `effort.py`. Model instances are in `models.py` (Groq `gpt-oss-20b`/`120b`, DeepSeek, Gemini).
+- `scope_request` sends the RAW `conversation` as `transcript` — never `state["normalized"]`, the normalizer's rewrite, which drops the wording that names queryable targets — plus `latest_message`, `latest_answer`, `mission`, `database_schema`, and `tool_catalog`, and asks four questions: `is_log_request`, `has_queryable_scope`, `proceed_without_clarification`, `route`. `decide_scope` routes `general` when `is_log_request < LOG_REQUEST_THRESHOLD`; otherwise it clarifies when `has_queryable_scope < QUERYABLE_SCOPE_THRESHOLD` (no queryable target named) and the user has not authorized proceeding, and otherwise takes the route.
+- `decision.py` builds `TypeSafeClassifier()` at import with no model argument, so the SDK default selects the release; the gate thresholds were live-tuned against whatever it resolved to at the time, so a model release can move them — so importing `backend.pipeline.decision` (or `backend.api`) needs `TYPESAFE_API_KEY`. `decision.py` uses `effort.py`'s `max_iterations` (the confidence revision-loop cap); the old per-effort confidence-threshold field no longer exists.
 - HTTP surface is broader than `/chat/stream`: background investigation jobs (`POST /chats/{id}/investigate`, poll `GET /chats/{id}/run/{run_id}`, plus `active-run`/`cancel`) backed by `backend/jobs.py`, plus `/chat/reframe`, auth, chat CRUD, and `/healthz`/`/readyz`/`/metrics`. `/chat/test` returns canned NDJSON for tests.
 - `/chat/stream` emits NDJSON events (`messages`, `tool_results`, `tool_progress`, `subgraph_name`, `subgraph_message`). Answers use `[[RESULT:Rn]]` markers serialized by `pipeline/answers.py` and rendered by `ui/rendering.py`; the serializer and renderer must stay in sync with the `id` fields on tool results.
 - DB query functions return `(sql.Composable, params)` and are wrapped by `query_runner`; each query sets `sdb_ai_allow_insecure_endpoint = true`.

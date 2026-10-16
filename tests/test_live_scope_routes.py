@@ -36,7 +36,7 @@ Stochasticity
 -------------
 The classifier is stochastic on borderline wording, so a failure is not
 automatically a regression: the assertion message prints the classifier's raw
-numbers (``needs_clarification`` and the route probabilities). Re-run before
+numbers (``has_queryable_scope`` and the route probabilities). Re-run before
 treating a failure as real.
 
 Notes
@@ -61,6 +61,7 @@ Notes
 
 import os
 import html
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,8 +76,9 @@ if RUN_LIVE:
 import pytest
 
 from backend.pipeline.decision import (
-    CLARIFY_THRESHOLD,
+    LOG_REQUEST_THRESHOLD,
     PROCEED_THRESHOLD,
+    QUERYABLE_SCOPE_THRESHOLD,
     classifier,
     decide_scope,
 )
@@ -142,6 +144,18 @@ CONVERSATIONS = [
             ("user", "How many timeout errors were there yesterday?", "find_evidence"),
         ],
     ),
+    Conversation(
+        id="greetings-are-not-an-investigation",
+        messages=[
+            ("user", "Yo", "general"),
+            (
+                "assistant",
+                "Hi! I dig through your logs — errors, recurring failures, and "
+                "what's driving them. What would you like me to look at?",
+            ),
+            ("user", "Wassup?", "general"),
+        ],
+    ),
 ]
 
 
@@ -203,6 +217,9 @@ def _report_row(row: dict) -> str:
             "",
             "",
             "",
+            "",
+            "",
+            "",
         ]
         return '<tr class="context">' + "".join(cell(value) for value in values) + "</tr>"
 
@@ -212,11 +229,14 @@ def _report_row(row: dict) -> str:
         row["route"],
         row["expected"],
         "✓" if row["ok"] else "✗",
-        f"{row['needs']:.3f} (thr {CLARIFY_THRESHOLD:.2f})",
+        f"{row['has_queryable_scope']:.3f} (thr {QUERYABLE_SCOPE_THRESHOLD:.2f})",
+        f"{row['is_log_request']:.3f}",
         f"{row['proceed']:.3f}",
         f"{row['route_choice']} {row['probability']:.2f}",
         str(row["probabilities"]),
         str(row["clarify_count"]),
+        row["normalized"],
+        row["transcript"],
     ]
     attributes = "" if row["ok"] else ' class="mismatch"'
     return f"<tr{attributes}>" + "".join(cell(value) for value in values) + "</tr>"
@@ -232,11 +252,14 @@ def _render_report_html() -> str:
         "route",
         "expected",
         "ok",
-        "needs_clarification",
+        f"has_queryable_scope (≥ {QUERYABLE_SCOPE_THRESHOLD:.2f})",
+        f"is_log_request (≥ {LOG_REQUEST_THRESHOLD:.2f})",
         f"proceed_without_clarification (≥ {PROCEED_THRESHOLD:.2f})",
         "route_choice (if proceeding)",
         "probabilities",
         "clarify_count",
+        "normalized",
+        "transcript",
     )
 
     parts = [
@@ -345,7 +368,8 @@ def run_conversation(conversation: Conversation) -> None:
             )
 
             response = classifier.invoke(prompts.scope_request(state))
-            needs = response.nouls["needs_clarification"].noul
+            has_queryable_scope = response.nouls["has_queryable_scope"].noul
+            is_log_request = response.nouls["is_log_request"].noul
             proceed = response.nouls["proceed_without_clarification"].noul
             choice = response.choices["route"].choice
             probs = response.choices["route"].probabilities
@@ -364,18 +388,21 @@ def run_conversation(conversation: Conversation) -> None:
                     "route": route,
                     "expected": expected,
                     "ok": matched,
-                    "needs": needs,
+                    "has_queryable_scope": has_queryable_scope,
+                    "is_log_request": is_log_request,
                     "proceed": proceed,
                     "route_choice": choice,
                     "probability": probability,
                     "probabilities": probs,
                     "clarify_count": clarify_count,
+                    "normalized": json.dumps(state["normalized"], default=str),
+                    "transcript": state["conversation"],
                 }
             )
 
             assert route == expected, (
                 f"[{conversation.id}] turn {index} {text!r}: expected {expected!r}, "
-                f"got {route!r} (needs_clarification={needs:.3f}, "
+                f"got {route!r} (has_queryable_scope={has_queryable_scope:.3f}, "
                 f"route_choice={choice!r}, probabilities={probs}). Borderline wording "
                 "can flip run-to-run — re-run before treating this as a regression."
             )

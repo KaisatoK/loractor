@@ -26,10 +26,15 @@ LangGraph pipeline (src/backend/pipeline/graph.py)
 SereneDB log queries (src/backend/db)   ← pooled connections
 ```
 
-The `scope` stage asks a clarifying question only when the request is too
-underspecified to act on **and** the user has not explicitly authorised
-proceeding (for example "just do it"); an explicit go-ahead investigates
-best-effort instead. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
+The `scope` stage sends a non-log-request message (a greeting, small talk, a
+capability or unrelated question) to a general conversational reply. For a log
+request it asks a clarifying question only when the conversation names no
+queryable target (a service, pid, event_id, error type or message text,
+severity, or time window) **and** the user has not explicitly authorised
+proceeding (for example "just do it"); an explicit go-ahead instead takes
+whatever route the classifier chose, and once a target is named the request is
+routed to an answer or an investigation. Only a spent clarify budget forces a
+best-effort investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
 investigation and calls the database tools itself, then submits a free-text
 summary of its findings. The report of `summary` plus `evidence` (and optional
 `hypotheses`) is built off-agent from that summary and the captured results,

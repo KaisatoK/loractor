@@ -2,9 +2,13 @@ from langchain_typesafe import ClassifierResponse, TypeSafeClassifier
 
 from backend.pipeline.effort import get_effort_spec
 
-# Route to a clarification question when the model is at least this sure that the
-# request cannot be answered or investigated without more information from the user.
-CLARIFY_THRESHOLD = 0.64
+# The "is a target named?" boundary for the scope gate. Below it the classifier
+# has concluded the conversation names no queryable target (no service, pid,
+# event_id, error type or message text, severity, or time window), so the
+# product's rule is to ask rather than investigate. The band is deliberately
+# biased toward asking: a clarification is cheap and recoverable, while a full
+# investigation launched on a vague request is not.
+QUERYABLE_SCOPE_THRESHOLD = 0.6
 
 # Only append the answer agent's drafted follow-up question when the model is at
 # least this sure it would materially improve the next turn.
@@ -18,8 +22,19 @@ PROCEED_THRESHOLD = 0.5
 # investigates best-effort so the user still gets an answer.
 MAX_CLARIFY_ROUNDS = 2
 
+# Below this confidence the classifier has concluded the newest message is not a
+# log request at all, so it is answered conversationally by ``general`` ahead of
+# the ambiguity gate. Deliberately a confident "not a log request": a false
+# ``true`` only costs one clarification nudge (recoverable), while a false
+# ``false`` would answer a real investigation with the general agent, so the
+# middle band must fall through to the existing gate rather than routing to
+# ``general``.
+LOG_REQUEST_THRESHOLD = 0.3
+
 # One long-lived classifier. Like the chat models in models.py, it reads
-# TYPESAFE_API_KEY at import time.
+# TYPESAFE_API_KEY at import time. No model is passed, so the SDK default
+# selects the release; the gate thresholds below were tuned by live measurement
+# against that selection, so a model release can move them.
 classifier = TypeSafeClassifier()
 
 _SCOPE_ROUTES = ("clarify", "general", "direct_answer", "find_evidence")
@@ -34,15 +49,21 @@ def _route(response: ClassifierResponse) -> str:
 def decide_scope(response: ClassifierResponse, clarify_count: int) -> str:
     """Return one of clarify/general/direct_answer/find_evidence.
 
-    Two-stage decision: gate on ambiguity, then pick the action. When the request
-    is ambiguous the classifier may still yield to the route if the user has
-    authorized proceeding without the missing detail; authorization is checked
-    before the retry cap so it decides even once the cap is spent. Otherwise the
-    request is clarified until the budget runs out, after which the pipeline
-    forces a best-effort investigation.
+    Three-stage decision. First, when the classifier is confident the newest
+    message is not a log request at all (a greeting, small talk, capability
+    question, or unrelated question) it routes to ``general`` immediately -- no
+    clarification and no clarification budget consumed. Otherwise it gates on
+    whether the conversation already names a queryable target: when it does not,
+    the request is clarified until the budget runs out (after which the pipeline
+    forces a best-effort investigation), unless the classifier is confident the
+    user authorized proceeding without the missing detail -- authorization is
+    checked before the retry cap so it decides even once the cap is spent. When a
+    target is named, the route choice answers the request.
     """
-    needs = response.nouls["needs_clarification"].noul
-    if needs >= CLARIFY_THRESHOLD:
+    if response.nouls["is_log_request"].noul < LOG_REQUEST_THRESHOLD:
+        return "general"
+    scoped = response.nouls["has_queryable_scope"].noul >= QUERYABLE_SCOPE_THRESHOLD
+    if not scoped:
         if response.nouls["proceed_without_clarification"].noul >= PROCEED_THRESHOLD:
             return _route(response)
         return "clarify" if clarify_count < MAX_CLARIFY_ROUNDS else "find_evidence"

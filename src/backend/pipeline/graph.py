@@ -85,13 +85,15 @@ def scope_node(state: PipelineState) -> PipelineState:
         route = response.choices.get("route")
         proceed = response.nouls["proceed_without_clarification"].noul
         logger.info(
-            "scope=%s needs_clarification=%.3f proceed=%.3f route=%s route_confidence=%s clarify_count=%d",
+            "scope=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f route=%s route_confidence=%s clarify_count=%d model=%s",
             scope,
-            response.nouls["needs_clarification"].noul,
+            response.nouls["has_queryable_scope"].noul,
+            response.nouls["is_log_request"].noul,
             proceed,
             getattr(route, "choice", "?"),
             f"{route.confidence:.3f}" if route is not None else "?",
             clarify_count,
+            getattr(response, "model", "?"),
         )
         logger.debug("scope probabilities: %s", getattr(route, "probabilities", {}))
     except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run

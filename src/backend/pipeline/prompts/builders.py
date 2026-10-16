@@ -1,11 +1,11 @@
 """State-dependent prompt builders used by the pipeline nodes.
 
 ``PipelinePrompts`` renders the per-stage prompts from ``PipelineState``. The
-TypeSafe classifier question builders (``needs_clarification_question``,
-``proceed_without_clarification_question``, ``route_question``, ``pass_question``,
-``next_state_question``, ``revision_reason_question``,
-``worth_follow_up_question``) back the scope and confidence routers wired up in
-``graph.py``.
+TypeSafe classifier question builders (``is_log_request_question``,
+``has_queryable_scope_question``, ``proceed_without_clarification_question``,
+``route_question``, ``pass_question``, ``next_state_question``,
+``revision_reason_question``, ``worth_follow_up_question``) back the scope and
+confidence routers wired up in ``graph.py``.
 """
 
 from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
@@ -137,17 +137,21 @@ class PipelinePrompts:
         return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
 
     def scope_request(self, state: PipelineState) -> ClassifierRequest:
+        # The classifier judges the RAW conversation, not the normalizer's
+        # rewrite: the rewrite summarizes and drops the wording that carries the
+        # queryable targets, so feeding it here hid them from the gate.
         return {
             "state": {
-                "conversation": state["normalized"],
                 "latest_message": state["latest_message"],
+                "transcript": state["conversation"],
                 "latest_answer": state["latest_answer"],
+                "mission": PIPELINE_MISSION,
                 "database_schema": LOG_SCHEMA,
                 "tool_catalog": TOOL_CATALOG,
-                "mission": PIPELINE_MISSION,
             },
             "questions": {
-                "needs_clarification": self.needs_clarification_question(),
+                "is_log_request": self.is_log_request_question(),
+                "has_queryable_scope": self.has_queryable_scope_question(),
                 "proceed_without_clarification": (
                     self.proceed_without_clarification_question()
                 ),
@@ -155,22 +159,45 @@ class PipelinePrompts:
             },
         }
 
-    def needs_clarification_question(self) -> Noul:
+    def is_log_request_question(self) -> Noul:
         return Noul(
             instructions=(
-                "Decide whether producing a useful response or beginning a meaningful "
-                "investigation requires more information from the user. "
-                "Use the full conversation to interpret follow-up questions and "
-                "references to earlier messages."
+                "Decide whether the newest user message is a request about the "
+                "user's log data that this service can answer or investigate. "
+                "Use the full conversation to interpret short follow-up messages."
             ),
             criteria=NoulCriteria(
                 true=(
-                    "The request is too ambiguous or underspecified to answer or "
-                    "investigate now; ask the user to clarify."
+                    "The newest message asks about the user's logs, or asks for "
+                    "an investigation or analysis of log data."
                 ),
                 false=(
-                    "The request is specific enough to answer or investigate now "
-                    "without asking the user for more information."
+                    "The newest message is a greeting, small talk, a question "
+                    "about what the service can or cannot do, or an unrelated "
+                    "technical or general-knowledge question."
+                ),
+            ),
+        )
+
+    def has_queryable_scope_question(self) -> Noul:
+        return Noul(
+            instructions=(
+                "Decide whether `latest_message`, read together with `transcript`, already "
+                "names at least one thing that can be queried in the log data. Look for a "
+                "service, pid, event_id, error type or message text, severity level, or time "
+                "window. A target established in an earlier turn counts. Do not treat a "
+                "filter that is not named as if it were present."
+            ),
+            criteria=NoulCriteria(
+                true=(
+                    "The conversation already names at least one queryable target (service, pid, "
+                    "event_id, error type, severity, or time window), so the request can be "
+                    "investigated or answered now."
+                ),
+                false=(
+                    "No queryable target is named anywhere in the conversation. This includes a "
+                    "broad pattern or status ask with no named filter, for example asking what "
+                    "recurring problems exist or what is wrong in general."
                 ),
             ),
         )

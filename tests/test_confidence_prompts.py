@@ -4,8 +4,9 @@ Three guarantees:
 
 * the tool catalog shown to the classifiers stays in sync with the evidence
   tools the pipeline can actually call (``backend.pipeline.tools.__all__``);
-* the scope request carries the shared pipeline mission the scope classifier
-  uses to judge underspecification;
+* the scope request carries the shared pipeline mission, schema and tool
+  catalog, plus the RAW conversation (not the normalized rewrite) the scope
+  classifier uses to judge whether a queryable target is named;
 * the confidence request carries the attempt history and revision count the
   confidence classifier uses.
 
@@ -16,6 +17,7 @@ import os
 
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
+from backend.db.config import LOG_SCHEMA
 from backend.pipeline import tools
 from backend.pipeline.prompts.builders import (
     PIPELINE_MISSION,
@@ -27,6 +29,7 @@ from backend.pipeline.prompts.builders import (
 def _state():
     """A representative mid-revision state (one round already attempted)."""
     return {
+        "conversation": "user: Why did checkout errors spike this morning?",
         "normalized": "Why did checkout errors spike this morning?",
         "latest_message": "Why did checkout errors spike this morning?",
         "latest_answer": "Checkout errors rose 3x after 09:00.",
@@ -77,6 +80,26 @@ def test_scope_request_carries_latest_message_and_answer():
     request = PipelinePrompts().scope_request(_state())
     assert request["state"]["latest_message"] == "Why did checkout errors spike this morning?"
     assert request["state"]["latest_answer"] == "Checkout errors rose 3x after 09:00."
+
+
+def test_scope_request_sends_raw_transcript_not_normalized():
+    # The classifier must judge the raw conversation: the normalizer's rewrite
+    # drops the wording that names the queryable targets.
+    request = PipelinePrompts().scope_request(_state())
+    assert request["state"]["transcript"] == _state()["conversation"]
+    assert "normalized" not in request["state"]
+
+
+def test_scope_request_asks_has_queryable_scope():
+    request = PipelinePrompts().scope_request(_state())
+    assert "has_queryable_scope" in request["questions"]
+    assert "needs_clarification" not in request["questions"]
+
+
+def test_scope_request_keeps_shared_schema_and_catalog():
+    payload = PipelinePrompts().scope_request(_state())["state"]
+    assert payload["database_schema"] == LOG_SCHEMA
+    assert payload["tool_catalog"] == TOOL_CATALOG
 
 
 def test_scope_request_asks_proceed_without_clarification():

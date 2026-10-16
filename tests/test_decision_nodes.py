@@ -12,9 +12,10 @@ os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 from langchain_typesafe import ChoiceAnswer, ClassifierResponse, NoulAnswer
 from backend.pipeline.decision import (
-    CLARIFY_THRESHOLD,
+    LOG_REQUEST_THRESHOLD,
     MAX_CLARIFY_ROUNDS,
     PROCEED_THRESHOLD,
+    QUERYABLE_SCOPE_THRESHOLD,
     decide_confidence,
     decide_scope,
 )
@@ -37,10 +38,11 @@ def _choice(label, confidence=0.8):
     )
 
 
-def _scope_response(needs, route_label, proceed=0.0):
+def _scope_response(has_queryable_scope, route_label, proceed=0.0, is_log_request=1.0):
     return _response(
         {
-            "needs_clarification": _noul(needs),
+            "is_log_request": _noul(is_log_request),
+            "has_queryable_scope": _noul(has_queryable_scope),
             "proceed_without_clarification": _noul(proceed),
             "route": _choice(route_label),
         }
@@ -61,69 +63,95 @@ def _conf_response(pass_p, next_state, reason, worth=0.0):
 # --- decide_scope ---------------------------------------------------------
 
 
-def test_scope_clarifies_when_needs_meets_threshold_and_budget_remains():
-    response = _scope_response(CLARIFY_THRESHOLD, "general")
+def test_scope_clarifies_when_no_queryable_scope_and_budget_remains():
+    response = _scope_response(0.0, "general")
     assert decide_scope(response, clarify_count=0) == "clarify"
 
 
 def test_scope_finds_evidence_when_clarify_budget_spent():
-    response = _scope_response(CLARIFY_THRESHOLD, "general")
+    response = _scope_response(0.0, "general")
     assert decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "find_evidence"
 
 
-def test_scope_routes_general_when_no_clarification_needed():
-    response = _scope_response(0.0, "general")
+def test_scope_routes_route_when_queryable_scope_present():
+    response = _scope_response(QUERYABLE_SCOPE_THRESHOLD, "general")
     assert decide_scope(response, clarify_count=0) == "general"
 
 
 def test_scope_routes_direct_answer():
-    response = _scope_response(0.0, "direct_answer")
+    response = _scope_response(1.0, "direct_answer")
     assert decide_scope(response, clarify_count=0) == "direct_answer"
 
 
 def test_scope_routes_find_evidence():
-    response = _scope_response(0.0, "find_evidence")
+    response = _scope_response(1.0, "find_evidence")
     assert decide_scope(response, clarify_count=0) == "find_evidence"
 
 
 def test_scope_unknown_route_falls_back_to_direct_answer():
-    response = _scope_response(0.0, "mystery")
+    response = _scope_response(1.0, "mystery")
     assert decide_scope(response, clarify_count=0) == "direct_answer"
 
 
 def test_scope_proceeds_to_route_when_authorized():
-    response = _scope_response(0.86, "find_evidence", proceed=0.9)
+    response = _scope_response(0.0, "find_evidence", proceed=0.9)
     assert decide_scope(response, clarify_count=0) == "find_evidence"
 
 
 def test_scope_authorization_bypasses_spent_clarify_cap():
     # Authorization is checked before the cap, so the route decides at the cap.
-    response = _scope_response(0.86, "direct_answer", proceed=0.9)
+    response = _scope_response(0.0, "direct_answer", proceed=0.9)
     assert (
         decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "direct_answer"
     )
 
 
 def test_scope_not_authorized_still_clarifies_when_budget_remains():
-    response = _scope_response(0.86, "find_evidence", proceed=0.1)
+    response = _scope_response(0.0, "find_evidence", proceed=0.1)
     assert decide_scope(response, clarify_count=0) == "clarify"
 
 
 def test_scope_authorized_route_general_is_honored():
-    response = _scope_response(0.86, "general", proceed=0.9)
+    response = _scope_response(0.0, "general", proceed=0.9)
     assert decide_scope(response, clarify_count=0) == "general"
 
 
 def test_scope_proceed_at_threshold_fires():
-    response = _scope_response(0.86, "find_evidence", proceed=PROCEED_THRESHOLD)
+    response = _scope_response(0.0, "find_evidence", proceed=PROCEED_THRESHOLD)
     assert decide_scope(response, clarify_count=0) == "find_evidence"
 
 
 def test_scope_proceed_below_threshold_clarifies():
     response = _scope_response(
-        0.86, "find_evidence", proceed=PROCEED_THRESHOLD - 0.01
+        0.0, "find_evidence", proceed=PROCEED_THRESHOLD - 0.01
     )
     assert decide_scope(response, clarify_count=0) == "clarify"
+
+
+def test_scope_routes_general_when_not_a_log_request():
+    # A content-free greeting is not an investigation, so the log-request gate
+    # wins over an unscoped request and an unrelated route choice.
+    response = _scope_response(0.0, "find_evidence", is_log_request=0.0)
+    assert decide_scope(response, clarify_count=0) == "general"
+
+
+def test_scope_not_a_log_request_routes_general_even_when_clarify_budget_spent():
+    # The gate precedes the spent-cap fallback, so it yields general, not
+    # find_evidence, even at the clarification cap.
+    response = _scope_response(0.0, "find_evidence", is_log_request=0.1)
+    assert decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "general"
+
+
+def test_scope_still_clarifies_when_log_request_and_no_queryable_scope():
+    # A real but unscoped log request keeps the existing behavior.
+    response = _scope_response(0.0, "general", is_log_request=0.9)
+    assert decide_scope(response, clarify_count=0) == "clarify"
+
+
+def test_queryable_scope_threshold_exceeds_log_request_threshold():
+    # The log-request gate must fire first: a confident "not a log request"
+    # routes general before the target gate is ever consulted.
+    assert LOG_REQUEST_THRESHOLD < QUERYABLE_SCOPE_THRESHOLD
 
 
 # --- decide_confidence ----------------------------------------------------
@@ -200,7 +228,7 @@ def test_scope_node_persists_no_authorization_signal(monkeypatch):
     """
     from backend.pipeline import graph
 
-    response = _scope_response(0.9, "find_evidence", proceed=0.95)
+    response = _scope_response(0.0, "find_evidence", proceed=0.95)
 
     class _StubClassifier:
         def invoke(self, request):
@@ -211,6 +239,11 @@ def test_scope_node_persists_no_authorization_signal(monkeypatch):
     # No clarify_count: the node's ``state.get("clarify_count", 0)`` default is
     # the turn's starting count, so the node adds it (and scope) itself.
     state = {
+        "conversation": (
+            "user: What recurring problem do we have\n"
+            "assistant: Which services or time window should I look at?\n"
+            "user: Just do it"
+        ),
         "normalized": {
             "normalized_question": "What recurring problem do we have",
             "intent": "understand recurring problems",
