@@ -201,6 +201,25 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                 logger.debug("stream message: %s", getattr(item[-1], "text", None))
             else:
                 logger.debug("stream message item: %s", type(item).__name__)
+            # Forward the root-scope call's reasoning (mirrors the subgraphs
+            # branch below). The projection is iterable deltas, not a list. A
+            # root-scope call need not emit reasoning at all, so only a
+            # non-empty consolidated message is sent — an empty one would
+            # append a bare "Thinking: " line to the persisted progress.
+            reasoning = getattr(item, "reasoning", None)
+            if reasoning is not None:
+                thought = ""
+                for delta in reasoning:
+                    thought += delta
+                    yield emit(
+                        {
+                            "type": "thinking_delta",
+                            "id": getattr(item, "message_id", "") or "",
+                            "content": delta,
+                        }
+                    )
+                if thought:
+                    yield emit({"type": "subgraph_message", "content": thought})
         elif name == "values":
             # Change detection (not a once-per-request flag): a follow-up turn
             # re-emits the *previous* turn's persisted payloads in its first
@@ -241,10 +260,13 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                         {"type": "tool_progress", "content": json.dumps(sub_item)}
                     )
         elif name == "custom":
-            # No root-scope custom producers today, but forward the same shape
-            # so a future node-level writer is surfaced without UI changes.
+            # Root-scope custom producers: ``normalize``/``answer`` announce
+            # their stage here via ``node_stage``, and any tool_progress is
+            # forwarded with the same shape as the subgraph branch.
             if isinstance(item, dict) and item.get("type") == "tool_progress":
                 yield emit({"type": "tool_progress", "content": json.dumps(item)})
+            elif isinstance(item, dict) and item.get("type") == "node_stage":
+                yield emit({"type": "stage", "content": str(item.get("name", ""))})
 
     yield emit({"type": "messages", "content": last_answer or ""})
 

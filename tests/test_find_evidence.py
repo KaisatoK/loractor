@@ -15,7 +15,8 @@ import os
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from pydantic import ValidationError
 
 from backend.pipeline import graph
 from backend.pipeline.agents import evidence_report
@@ -77,23 +78,42 @@ def _tool(call_id, payload):
     return _FakeMessage(type="tool", tool_call_id=call_id, content=json.dumps(payload))
 
 
-class _RaisingFormatter:
-    """A runnable stand-in whose ``invoke`` always raises."""
+class _RaisingModel:
+    """A model stand-in whose ``invoke`` always raises."""
 
-    def invoke(self, messages):
-        raise RuntimeError("formatter boom")
+    def invoke(self, messages, **kwargs):
+        raise RuntimeError("model boom")
 
 
-class _RecordingFormatter:
-    """Captures the messages it receives and returns a minimal valid report."""
+# A minimal payload that satisfies the ``EvidenceReport`` contract; the model
+# returns it as its text block and the entry point parses it locally.
+_REPORT_JSON = json.dumps({"summary": "s", "evidence": [], "hypotheses": []})
 
-    def __init__(self):
-        self.report = EvidenceReport(summary="s", evidence=[], hypotheses=[])
+
+class _RecordingModel:
+    """Captures each call and returns a fabricated ``AIMessage``.
+
+    ``messages`` and ``kwargs`` record how the entry point called the model, so
+    the tests can assert both the prompt it built and the absence of a
+    ``response_format`` (which would collapse the streamed projection to one
+    delta). The returned message carries a reasoning block and a text block by
+    default, mirroring a real DeepSeek reply.
+    """
+
+    def __init__(self, message=None):
+        self.message = message or AIMessage(
+            content=[
+                {"type": "reasoning", "reasoning": "weighing the evidence"},
+                {"type": "text", "text": _REPORT_JSON},
+            ]
+        )
         self.messages = None
+        self.kwargs = None
 
-    def invoke(self, messages):
+    def invoke(self, messages, **kwargs):
         self.messages = messages
-        return self.report
+        self.kwargs = kwargs
+        return self.message
 
 
 # --- collect_tool_results -------------------------------------------------
@@ -158,8 +178,8 @@ def test_collect_tool_results_caps_rows_but_reports_true_count():
 
 
 def test_generate_evidence_report_uses_system_prompt_and_json_example(monkeypatch):
-    recorder = _RecordingFormatter()
-    monkeypatch.setattr(evidence_report, "evidence_report_formatter", recorder)
+    recorder = _RecordingModel()
+    monkeypatch.setattr(evidence_report, "deepseek", recorder)
 
     report = evidence_report.generate_evidence_report(
         request="count the errors",
@@ -168,8 +188,8 @@ def test_generate_evidence_report_uses_system_prompt_and_json_example(monkeypatc
         results=_RECORDS,
     )
 
-    # The runnable's result is returned unchanged.
-    assert report is recorder.report
+    # The model's text is parsed into the report contract and returned.
+    assert report == EvidenceReport(summary="s", evidence=[], hypotheses=[])
 
     messages = recorder.messages
     # The system prompt is the system message, and it keeps its rules
@@ -200,8 +220,8 @@ def test_generate_evidence_report_spec_enumerates_tool_status_values(monkeypatch
     # failed tool call is rejected by pydantic with a literal_error, so the spec
     # must enumerate both allowed values explicitly. Pin it here so a future trim
     # cannot silently drop the enumeration again.
-    recorder = _RecordingFormatter()
-    monkeypatch.setattr(evidence_report, "evidence_report_formatter", recorder)
+    recorder = _RecordingModel()
+    monkeypatch.setattr(evidence_report, "deepseek", recorder)
 
     evidence_report.generate_evidence_report(
         request="count the errors",
@@ -221,14 +241,49 @@ def test_generate_evidence_report_spec_enumerates_tool_status_values(monkeypatch
     assert '"success"' in user.content and '"failure"' in user.content
 
 
-def test_generate_evidence_report_propagates_formatter_errors(monkeypatch):
-    # There is no empty-report fallback: a formatter failure escapes the entry
+def test_generate_evidence_report_propagates_model_errors(monkeypatch):
+    # There is no empty-report fallback: a model failure escapes the entry
     # point so the caller sees it.
-    monkeypatch.setattr(
-        evidence_report, "evidence_report_formatter", _RaisingFormatter()
+    monkeypatch.setattr(evidence_report, "deepseek", _RaisingModel())
+
+    with pytest.raises(RuntimeError, match="model boom"):
+        evidence_report.generate_evidence_report(
+            request="count the errors",
+            role="engineer: investigate a specific error",
+            investigation="We ran search_logs_tool and found 3 errors.",
+            results=_RECORDS,
+        )
+
+
+def test_generate_evidence_report_streams_without_response_format(monkeypatch):
+    # The streamed reasoning projects incrementally only when the call carries no
+    # structured-output guarantee; ``response_format`` (in any form) collapses it
+    # to a single delta, so the live progress panel would show one block. Pin its
+    # absence here so it cannot be reintroduced silently.
+    recorder = _RecordingModel()
+    monkeypatch.setattr(evidence_report, "deepseek", recorder)
+
+    report = evidence_report.generate_evidence_report(
+        request="count the errors",
+        role="engineer: investigate a specific error",
+        investigation="We ran search_logs_tool and found 3 errors.",
+        results=_RECORDS,
     )
 
-    with pytest.raises(RuntimeError, match="formatter boom"):
+    # The reasoning block is excluded from ``message.text``, so only the json
+    # text block is parsed into the report.
+    assert report == EvidenceReport(summary="s", evidence=[], hypotheses=[])
+    assert recorder.kwargs == {}
+    assert "response_format" not in recorder.kwargs
+
+
+def test_generate_evidence_report_malformed_text_raises_validation_error(monkeypatch):
+    # No fence handling or repair: text that is not valid json for the contract
+    # raises rather than being swallowed.
+    recorder = _RecordingModel(message=AIMessage(content="not json at all"))
+    monkeypatch.setattr(evidence_report, "deepseek", recorder)
+
+    with pytest.raises(ValidationError):
         evidence_report.generate_evidence_report(
             request="count the errors",
             role="engineer: investigate a specific error",

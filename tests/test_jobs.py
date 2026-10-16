@@ -78,6 +78,24 @@ def test_registry_buffers_persists_and_derives_progress():
     assert finished["status"] == DONE
 
 
+def test_registry_mirrors_stage_event_as_current_stage():
+    """The backend ``_track`` mirror maps a root-scope ``stage`` event to the
+    same "Currently at stage" progress line the UI renders, matching the
+    ``subgraph_name`` fixtures above."""
+    registry = RunRegistry()
+
+    def produce(_run):
+        yield _event(type="stage", content="normalize")
+        yield _event(type="messages", content="done")
+
+    run = registry.start(
+        user_id="u", chat_id="c", produce=produce, on_finish=lambda r: None
+    )
+    snapshot = _wait_terminal(registry, run.run_id)
+
+    assert snapshot["result"]["progress"] == ["Currently at stage: normalize"]
+
+
 def test_snapshot_replays_from_cursor():
     registry = RunRegistry()
 

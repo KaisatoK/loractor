@@ -1,10 +1,19 @@
-"""Unit tests for answer serialization and marker rendering.
+"""Unit tests for the answer generator, serialization, and marker rendering.
 
 Pure/offline: these never touch SereneDB, unlike ``test_db_queries.py``. They
-cover the structured-answer serializer and the markdown canonicalization that
-guarantees no marker decoration ("weird trailing characters") reaches the UI.
+cover ``generate_answer`` (a direct model call that validates the message text
+locally), the structured-answer serializer, and the markdown canonicalization
+that guarantees no marker decoration ("weird trailing characters") reaches the
+UI.
 """
 
+import json
+
+import pytest
+from langchain_core.messages import AIMessage
+from pydantic import ValidationError
+
+from backend.pipeline.agents import answer as answer_module
 from backend.pipeline.answers import serialize_answer
 from backend.pipeline.contracts import AnswerOutput, AnswerText
 from ui.rendering import canonicalize, render_answer
@@ -175,3 +184,57 @@ def test_serialize_fallback_text_block():
 
 def test_serialize_empty_returns_empty():
     assert serialize_answer(AnswerOutput.model_construct(blocks=[]), set()) == ""
+
+
+# --- generate_answer (direct call + local validation) ----------------------
+
+
+class _RecordingModel:
+    """A model stand-in that captures its call and returns a fabricated reply."""
+
+    def __init__(self, message):
+        self.message = message
+        self.kwargs = None
+
+    def invoke(self, messages, **kwargs):
+        self.kwargs = kwargs
+        return self.message
+
+
+_ANSWER_JSON = json.dumps(
+    {"blocks": [{"type": "text", "text": "Intro."}], "follow_up": None}
+)
+
+
+def test_generate_answer_parses_text_without_response_format(monkeypatch):
+    # The streamed reasoning projects incrementally only when the call carries no
+    # structured-output guarantee; ``response_format`` (in any form) collapses it
+    # to a single delta. Pin its absence so it cannot be reintroduced silently.
+    message = AIMessage(
+        content=[
+            {"type": "reasoning", "reasoning": "drafting the answer"},
+            {"type": "text", "text": _ANSWER_JSON},
+        ]
+    )
+    recorder = _RecordingModel(message)
+    monkeypatch.setattr(answer_module, "deepseek", recorder)
+
+    parsed = answer_module.generate_answer("count the errors")
+
+    # ``message.text`` excludes the reasoning block, so only the json text block
+    # is parsed into the contract.
+    assert parsed == AnswerOutput.model_validate(
+        {"blocks": [{"type": "text", "text": "Intro."}], "follow_up": None}
+    )
+    assert recorder.kwargs == {}
+    assert "response_format" not in recorder.kwargs
+
+
+def test_generate_answer_malformed_text_raises_validation_error(monkeypatch):
+    # No fence handling or repair: text that is not valid json for the contract
+    # raises rather than being swallowed.
+    recorder = _RecordingModel(AIMessage(content="not json at all"))
+    monkeypatch.setattr(answer_module, "deepseek", recorder)
+
+    with pytest.raises(ValidationError):
+        answer_module.generate_answer("count the errors")

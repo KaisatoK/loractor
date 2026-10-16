@@ -237,6 +237,8 @@ class RunRegistry:
                 run.progress.append(f"{action} — failed")
         elif etype == "subgraph_name":
             run.progress.append(f"Currently at stage: {content}")
+        elif etype == "stage":
+            run.progress.append(f"Currently at stage: {content}")
         elif etype == "subgraph_message":
             run.progress.append(f"Thinking: {content}")
 

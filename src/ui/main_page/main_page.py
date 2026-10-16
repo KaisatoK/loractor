@@ -57,6 +57,8 @@ def _apply_event(run: dict, event: dict) -> None:
             run["progress"].append(f"{action} — failed")
     elif etype == "subgraph_name":
         run["progress"].append(f"Currently at stage: {content}")
+    elif etype == "stage":
+        run["progress"].append(f"Currently at stage: {content}")
     elif etype == "thinking_delta":
         key = event.get("id") or ""
         if run.get("thinking_key") != key:
@@ -134,21 +136,25 @@ def render_active_run(container, current_chat, token: str, chat_id: str) -> None
     with container:
         stage_idx = [i for i, stage in enumerate(run["progress"]) if "Currently at stage" in stage]
         stage_idx.append(len(run["progress"]))
-        for i in range(len(stage_idx) - 2):
+        # No stage may have started yet (normalize/scope no longer surface a
+        # subgraph), so the marker list can be empty; "Processing..." is the
+        # label this panel used before it was stage-grouped.
+        markers = stage_idx[:-1]
+        for i in range(len(markers) - 1):
             with st.status(
-                label=run["progress"][stage_idx[i]],
+                label=run["progress"][markers[i]],
                 type="compact",
                 state="complete"
             ):
-                for stage in run["progress"][stage_idx[i] + 1 : stage_idx[i + 1]]:
+                for stage in run["progress"][markers[i] + 1 : markers[i + 1]]:
                     st.caption(stage)
         with st.expander(
-            label=run["progress"][stage_idx[-2]],
+            label=run["progress"][markers[-1]] if markers else "Processing...",
             expanded=True,
             type="compact",
             width="stretch",
         ):
-            for stage in run["progress"][stage_idx[-2] + 1 : stage_idx[-1]]:
+            for stage in run["progress"][(markers[-1] + 1) if markers else 0 : stage_idx[-1]]:
                 st.caption(stage)
 
     with st.chat_message("assistant"):

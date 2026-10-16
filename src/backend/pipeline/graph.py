@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 
 from backend.pipeline.agents import (
@@ -53,7 +54,16 @@ REVISION_FEEDBACK = {
 NO_REVISION = "No revision is required."
 
 
+def _emit_stage(name: str) -> None:
+    """Announce a pipeline node's stage to the live progress panel."""
+    try:
+        get_stream_writer()({"type": "node_stage", "name": name})
+    except RuntimeError:
+        pass  # node invoked outside a runnable context (direct calls in tests)
+
+
 def normalize_node(state: PipelineState) -> PipelineState:
+    _emit_stage("normalize")
     prompt = prompts.normalize(state)
     normalized = generate_normalized(prompt).model_dump()
 
@@ -157,9 +167,10 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     # `serialize_answer`/`ui/rendering.py`.
     records = collect_tool_results(result["messages"])
 
-    # The tool-less JSON-mode formatter (``generate_evidence_report``) builds the
-    # report from the agent's summary plus the captured results. A provider or
-    # validation failure propagates rather than being swallowed.
+    # The report builder (``generate_evidence_report``) makes a direct DeepSeek
+    # call, with no structured-output wrapper, from the agent's summary plus the
+    # captured results. A provider or validation failure propagates rather than
+    # being swallowed.
     role = state["role"]
     evidence_report = generate_evidence_report(
         request=json.dumps(state["normalized"], default=str),
@@ -179,6 +190,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 
 
 def answer_node(state: PipelineState) -> PipelineState:
+    _emit_stage("answer")
     structured = generate_answer(prompts.answer(state))
     valid_ids = {record.get("id") for record in state.get("tool_results") or []}
     answer = serialize_answer(structured, valid_ids)

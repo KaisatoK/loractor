@@ -1,13 +1,12 @@
-"""JSON-mode final answer: runnable, prompt contract, and entry point.
+"""Final answer call: prompt contract and entry point.
 
 ``graph.answer_node`` and ``api.chat_reframe`` need a validated
 :class:`AnswerOutput` (an ordered list of prose and table blocks plus an
-optional follow-up). This module maps the answer prompt onto that contract using
-DeepSeek JSON mode.
+optional follow-up). This module maps the answer prompt onto that contract with
+a direct ``deepseek.invoke`` call.
 
-It owns exactly three things: the module-level json-mode structured-output
-runnable (``answer_formatter``), the prompt/JSON contract that shapes the
-model's output (``ANSWER_JSON_SPEC``), and the single public entry point
+It owns exactly two things: the prompt/JSON contract that shapes the model's
+output (``ANSWER_JSON_SPEC``) and the single public entry point
 ``generate_answer``. Callers (``graph.py``'s ``answer_node`` and
 ``api.chat_reframe``) use that entry point and nothing else. This module does not
 catch errors — provider or pydantic validation failures propagate to the caller.
@@ -15,11 +14,14 @@ The writing and grounding semantics live in ``ANSWER_SYSTEM_PROMPT``; the spec
 here only pins the json shape and block vocabulary the model cannot otherwise
 see.
 
-DeepSeek's JSON mode sets ``response_format={"type": "json_object"}`` and cannot
-be steered with a forced ``tool_choice`` (``json_schema``/``ProviderStrategy``
-are rejected by the provider), so ``method="json_mode"`` is used and the prompt
-carries both the word "json" and an explicit JSON example of the expected shape
-— the provider's documented requirements for this mode.
+The call deliberately passes no ``response_format`` — neither
+``with_structured_output`` nor a ``response_format`` kwarg. Any structured-output
+guarantee collapses the streamed reply to a single delta, so the live progress
+panel could not render the model's reasoning token-by-token; without it the
+projection streams incrementally. The prompt therefore carries the json shape
+and ``ANSWER_JSON_SPEC``, and the returned message's text is validated here with
+``model_validate_json``. ``message.text`` is the text blocks only, so the
+reasoning the model emits alongside the answer is excluded from the payload.
 """
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -28,16 +30,11 @@ from backend.pipeline.contracts import AnswerOutput
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import ANSWER_SYSTEM_PROMPT
 
-# Bound once at import: the JSON-mode structured-output runnable that
-# ``generate_answer`` invokes. DeepSeek JSON mode is selected by
-# ``response_format`` (no tools).
-answer_formatter = deepseek.with_structured_output(AnswerOutput, method="json_mode")
-
 # The json output contract. It lives in the user message so the
-# ``ANSWER_SYSTEM_PROMPT`` can stay the system message; DeepSeek's json mode only
-# requires the word "json" and an explicit example in the messages. The system
-# prompt already carries the writing/grounding rules, so this spec enumerates
-# the two block shapes and the follow-up type.
+# ``ANSWER_SYSTEM_PROMPT`` can stay the system message; no schema is
+# transmitted, so the prompt must carry the word "json" and an explicit example
+# of the shape. The system prompt already carries the writing/grounding rules,
+# so this spec enumerates the two block shapes and the follow-up type.
 ANSWER_JSON_SPEC = (
     "Return ONLY one json object and no other text, markdown, or commentary. "
     "The json object MUST match exactly this shape:\n"
@@ -67,10 +64,11 @@ def generate_answer(prompt: str) -> AnswerOutput:
         prompt: The answer prompt built by ``prompts.answer`` (or
             ``prompts.reframe`` for the reframe endpoint).
 
-    Returns the :class:`AnswerOutput` unchanged. A provider failure or a pydantic
-    validation error is not caught and propagates to the caller.
+    Returns the :class:`AnswerOutput` parsed from the model's text. A provider
+    failure or a pydantic validation error is not caught and propagates to the
+    caller.
     """
-    return answer_formatter.invoke(
+    message = deepseek.invoke(
         [
             SystemMessage(content=ANSWER_SYSTEM_PROMPT),
             HumanMessage(
@@ -81,6 +79,7 @@ def generate_answer(prompt: str) -> AnswerOutput:
             ),
         ]
     )
+    return AnswerOutput.model_validate_json(message.text)
 
 
-__all__ = ["answer_formatter", "generate_answer"]
+__all__ = ["generate_answer"]
