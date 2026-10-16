@@ -1,14 +1,11 @@
-"""State-dependent prompt builders used by the pipeline nodes.
+"""State-dependent prompts and atomic TypeSafe questions for the pipeline.
 
-``PipelinePrompts`` renders the per-stage prompts from ``PipelineState``. The
-TypeSafe classifier question builders (``is_log_request_question``,
-``has_queryable_scope_question``, ``proceed_without_clarification_question``,
-``route_question``, ``pass_question``, ``next_state_question``,
-``revision_reason_question``, ``worth_follow_up_question``) back the scope and
-confidence routers wired up in ``graph.py``.
+The TypeSafe questions are independent judgments evaluated in one request. Code
+in ``decision.py`` owns routing and revision policy; Jev supplies only the
+narrow semantic signals that code cannot derive reliably from text.
 """
 
-from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
+from langchain_typesafe import ClassifierRequest, Noul, NoulCriteria
 
 from backend.db.config import LOG_SCHEMA
 from backend.pipeline.effort import get_effort_spec
@@ -77,14 +74,21 @@ PIPELINE_MISSION = (
 )
 
 
-def summarized_attempts(tool_results: object) -> list[dict]:
-    """Compact summaries of the tool calls already attempted this turn.
+# Short, code-owned vocabulary used by the scope judgment. The database schema
+# is intentionally not sent: the scope gate only needs to know what counts as a
+# queryable target, not how every table is implemented.
+QUERYABLE_TARGETS = [
+    "service",
+    "pid",
+    "event_id",
+    "event_template or error/message text",
+    "severity",
+    "time window",
+]
 
-    Derived from ``state["tool_results"]`` records
-    (``{id, tool_name, arguments, row_count, rows}``) so the confidence
-    classifier can tell which queries have already run -- and avoid routing back
-    to find_evidence for a query that would only duplicate existing results.
-    """
+
+def summarized_attempts(tool_results: object) -> list[dict]:
+    """Compact summaries of the tool calls already attempted this turn."""
     summary = []
     for record in tool_results or []:
         summary.append(
@@ -137,16 +141,15 @@ class PipelinePrompts:
         return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
 
     def scope_request(self, state: PipelineState) -> ClassifierRequest:
-        # The classifier judges the RAW conversation, not the normalizer's
-        # rewrite: the rewrite summarizes and drops the wording that carries the
-        # queryable targets, so feeding it here hid them from the gate.
+        # Use raw messages, not the normalizer's rewrite: target wording must
+        # remain visible to the scope judgments.
         return {
             "state": {
                 "latest_message": state["latest_message"],
-                "transcript": state["conversation"],
+                "transcript": state.get("messages", []),
                 "latest_answer": state["latest_answer"],
                 "mission": PIPELINE_MISSION,
-                "database_schema": LOG_SCHEMA,
+                "queryable_targets": QUERYABLE_TARGETS,
                 "tool_catalog": TOOL_CATALOG,
             },
             "questions": {
@@ -155,130 +158,181 @@ class PipelinePrompts:
                 "proceed_without_clarification": (
                     self.proceed_without_clarification_question()
                 ),
-                "route": self.route_question(),
+                "needs_new_evidence": self.needs_new_evidence_question(),
             },
         }
 
     def is_log_request_question(self) -> Noul:
         return Noul(
-            instructions=(
-                "Decide whether the newest user message is a request about the "
-                "user's log data that this service can answer or investigate. "
-                "Use the full conversation to interpret short follow-up messages."
-            ),
+            instructions={
+                "question": "Is `latest_message` a request about the user's logs that this service can answer or investigate?",
+                "inspect": ["`latest_message`", "`transcript`"],
+                "focus": "Use `transcript` only to interpret a short follow-up.",
+            },
             criteria=NoulCriteria(
-                true=(
-                    "The newest message asks about the user's logs, or asks for "
-                    "an investigation or analysis of log data."
-                ),
-                false=(
-                    "The newest message is a greeting, small talk, a question "
-                    "about what the service can or cannot do, or an unrelated "
-                    "technical or general-knowledge question."
-                ),
+                true={
+                    "what": "The latest message asks about the user's logs or requests log investigation or analysis.",
+                },
+                false={
+                    "what": "The latest message is not a log-data request.",
+                    "examples": ["greeting", "small talk", "capability question", "unrelated technical or general-knowledge question"],
+                },
             ),
         )
 
     def has_queryable_scope_question(self) -> Noul:
         return Noul(
-            instructions=(
-                "Decide whether `latest_message`, read together with `transcript`, already "
-                "names at least one thing that can be queried in the log data. Look for a "
-                "service, pid, event_id, error type or message text, severity level, or time "
-                "window. A target established in an earlier turn counts. Do not treat a "
-                "filter that is not named as if it were present."
-            ),
+            instructions={
+                "question": "Does `latest_message`, interpreted with `transcript`, name at least one queryable target?",
+                "compare": ["`latest_message`", "`transcript`", "`queryable_targets`"],
+                "focus": "A target from an earlier message counts; an unnamed filter does not.",
+            },
             criteria=NoulCriteria(
-                true=(
-                    "The conversation already names at least one queryable target (service, pid, "
-                    "event_id, error type, severity, or time window), so the request can be "
-                    "investigated or answered now."
-                ),
-                false=(
-                    "No queryable target is named anywhere in the conversation. This includes a "
-                    "broad pattern or status ask with no named filter, for example asking what "
-                    "recurring problems exist or what is wrong in general."
-                ),
+                true={
+                    "what": "At least one target from `queryable_targets` is named, so the request can be investigated or answered now.",
+                },
+                false={
+                    "what": "No queryable target is named anywhere in the conversation.",
+                    "examples": ["what recurring problems exist?", "what is wrong in general?"],
+                },
             ),
         )
 
     def proceed_without_clarification_question(self) -> Noul:
         return Noul(
-            instructions=(
-                "Decide whether the user has authorized proceeding without the "
-                "detail the previous assistant message asked for. Judge the latest "
-                "user message in relation to that previous assistant message. "
-                "This is about authorization, not about how well-specified the "
-                "request is: a vague request can still be authorized. Restating "
-                "the task in other words is not authorization to choose missing "
-                "parameters."
-            ),
+            instructions={
+                "question": "Does `latest_message` authorize proceeding without the detail requested in `latest_answer`?",
+                "compare": ["`latest_message`", "`latest_answer`"],
+                "focus": "Judge authorization, not how well-specified the request is.",
+            },
             criteria=NoulCriteria(
-                true=(
-                    "The user explicitly declined to supply the requested detail, "
-                    "or instructed the assistant to proceed without it, for example "
-                    "'just do it', 'pick one', 'use whichever', 'use your "
-                    "judgement', 'I don't care, proceed', or 'no more questions'."
-                ),
-                false=(
-                    "The user supplied the requested detail, restated the task "
-                    "without declining to provide it, did not address the question, "
-                    "or expressed plain task intent such as 'I want you to do it', "
-                    "which is not authorization to choose missing parameters."
-                ),
+                true={
+                    "what": "The user declines to provide the requested detail or explicitly authorizes the assistant to choose and proceed.",
+                    "examples": ["just do it", "pick one", "use whichever", "use your judgement", "I don't care, proceed", "no more questions"],
+                },
+                false={
+                    "what": "The user supplies the detail, restates the task, or does not address the clarification.",
+                    "not_for": ["I want you to do it", "plain task intent without authorization to choose missing parameters"],
+                },
             ),
         )
 
-    def route_question(self) -> Choice:
-        return Choice(
-            instructions=(
-                "Assuming the request can be answered or investigated without asking "
-                "the user for more information, choose the action that answers it. "
-                "Use the full conversation to interpret follow-up questions and "
-                "references to earlier messages."
-            ),
-            criteria={
-                "general": (
-                    "Respond directly as a general assistant. The request is unrelated "
-                    "to log investigation: greetings, small talk, questions about what "
-                    "the assistant can do, or unrelated technical questions."
-                ),
-                "direct_answer": (
-                    "Answer without retrieving new log evidence. The request concerns "
-                    "log investigation but the needed evidence is already available in "
-                    "the conversation, or it asks for an explanation, summary, "
-                    "interpretation, or next step based on existing information."
-                ),
-                "find_evidence": (
-                    "Retrieve new log evidence before answering. The request concerns "
-                    "log investigation and cannot be answered accurately without "
-                    "searching, filtering, counting, aggregating, correlating, "
-                    "comparing, or verifying log records not already provided."
-                ),
+    def needs_new_evidence_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Does answering `latest_message` require log records not already present in `latest_answer` or `transcript`?",
+                "compare": ["`latest_message`", "`latest_answer`", "`transcript`", "`tool_catalog`"],
+                "focus": "Judge whether retrieval is needed, not whether the request is generally about logs.",
             },
+            criteria=NoulCriteria(
+                true={
+                    "what": "A search, filter, count, aggregation, comparison, or verification of log records is needed.",
+                },
+                false={
+                    "what": "The request can be answered from existing information.",
+                    "examples": ["explanation", "summary", "interpretation", "next step based on existing evidence"],
+                },
+            ),
         )
 
     def confidence_request(self, state: PipelineState) -> ClassifierRequest:
-        revision_count = state.get("revision_count", 0)
         return {
             "state": {
                 "request": state["normalized"],
                 "role": state["role"],
                 "evidence_report": state.get("evidence_report", {}),
                 "answer": state.get("answer", ""),
-                "revision_feedback": state.get("revision_feedback", ""),
                 "tool_catalog": TOOL_CATALOG,
-                "evidence_report_history": state.get("evidence_report_history", []),
                 "attempted_tools": summarized_attempts(state.get("tool_results")),
-                "revision_count": revision_count,
             },
             "questions": {
-                "pass": self.pass_question(state["role"]),
-                "next_state": self.next_state_question(state["role"]),
-                "revision_reason": self.revision_reason_question(),
+                "evidence_relevant": self.evidence_relevant_question(),
+                "evidence_gap_remains": self.evidence_gap_remains_question(),
+                "gap_closable_by_untried_tool": self.gap_closable_by_untried_tool_question(),
+                "answer_grounded": self.answer_grounded_question(),
+                "answer_fits_role": self.answer_fits_role_question(),
+                "answer_complete": self.answer_complete_question(),
                 "worth_follow_up": self.worth_follow_up_question(),
             },
         }
+
+    def evidence_relevant_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Does `evidence_report` address the user's `request`?",
+                "compare": ["`evidence_report`", "`request`"],
+                "focus": "Judge relevance to the request, not whether the report is polished.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "The report contains evidence that directly addresses the requested question."},
+                false={"what": "The report is missing the requested subject, dimensions, or comparison."},
+            ),
+        )
+
+    def evidence_gap_remains_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Does a specific missing database fact remain that would materially change `answer` for `request`?",
+                "compare": ["`request`", "`evidence_report`", "`answer`"],
+                "focus": "Judge whether new log retrieval is needed. Do not treat a desire to rewrite, add detail, or improve role fit as a database evidence gap.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "A specific missing fact or check could materially change the answer."},
+                false={"what": "The report contains the facts needed to answer `request`, even if `answer` needs rewriting for grounding, role fit, or completeness."},
+            ),
+        )
+
+    def gap_closable_by_untried_tool_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Assuming a material evidence gap remains, is there a concrete untried query in `tool_catalog` that could plausibly close it?",
+                "compare": ["`request`", "`evidence_report`", "`attempted_tools`", "`tool_catalog`"],
+                "focus": "This is a speculative availability check; ignore it when no gap remains.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "An available tool has a specific query not already attempted that could address the gap."},
+                false={"what": "No available untried tool can address the gap, or the needed data is unavailable."},
+            ),
+        )
+
+    def answer_grounded_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Are the material claims in `answer` supported by `evidence_report`?",
+                "compare": ["`answer`", "`evidence_report`"],
+                "focus": "Check claims, numbers, causes, and evidence status; do not reward fluent unsupported prose.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "Material claims are supported by the report and do not invent facts."},
+                false={"what": "A material claim is unsupported, contradicted, or presented with invented certainty."},
+            ),
+        )
+
+    def answer_fits_role_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Does `answer` serve the user's `role.objective` at an appropriate level?",
+                "compare": ["`answer`", "`role.objective`"],
+                "focus": "Judge the answer's decision usefulness for the stated role, not whether it is generally readable.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "The answer supports the role objective with appropriate emphasis and detail."},
+                false={"what": "The answer substantially serves a different role or omits what this role needs."},
+            ),
+        )
+
+    def answer_complete_question(self) -> Noul:
+        return Noul(
+            instructions={
+                "question": "Does `answer` resolve `request` or clearly state its evidence-based limitations?",
+                "compare": ["`answer`", "`request`", "`evidence_report`"],
+                "focus": "Completeness means addressing the question, not including every possible detail.",
+            },
+            criteria=NoulCriteria(
+                true={"what": "The answer resolves the request or explicitly explains the remaining limitation."},
+                false={"what": "Important parts of the request are unanswered and the limitation is not stated."},
+            ),
+        )
 
     def worth_follow_up_question(self) -> Noul:
         return Noul(
@@ -428,73 +482,4 @@ class PipelinePrompts:
             "<reframe instructions>\n"
             f"{self.REFRAME_INSTRUCTION}\n"
             "</reframe instructions>\n"
-        )
-
-    def pass_question(self, role: Role) -> Noul:
-        return Noul(
-            instructions=(
-                "Estimate whether the current evidence and answer are sufficient "
-                "to answer the user's question accurately and for the user's role.\n\n"
-                f"{self.role_context(role)}"
-            ),
-            criteria=NoulCriteria(
-                true={
-                    "role_fit": "The answer supports the role objective at the appropriate level of detail.",
-                    "grounding": "Material claims, evidence statuses, and any hypotheses are supported by tool results.",
-                    "completeness": "The answer resolves the question or clearly states its limitations.",
-                },
-                false={
-                    "role_fit": "The answer does not support the role objective.",
-                    "grounding": "The answer contains unsupported claims or misrepresents evidence.",
-                    "completeness": "Important findings or limitations are missing.",
-                },
-            ),
-        )
-
-    def next_state_question(self, role: Role) -> Choice:
-        return Choice(
-            instructions=(
-                "Choose the next pipeline state based on evidence sufficiency, "
-                "answer quality, and the availability of a useful next action.\n\n"
-                f"{self.role_context(role)}"
-            ),
-            criteria={
-                "find_evidence": (
-                    "A specific evidence gap remains and there is "
-                    "at least one concrete, untried, tool-executable query that could "
-                    "plausibly close that gap and materially change the answer. The "
-                    "gap must be addressable by an available catalog tool. Do not "
-                    "choose this state for a previously attempted query, speculative "
-                    "research, unavailable data, or evidence that would not affect "
-                    "the answer."
-                ),
-                "answer": (
-                    "The available evidence is sufficient, but the answer "
-                    "still needs to be written or materially revised. This includes "
-                    "improving role fit, reasoning, organization, clarity, or the use "
-                    "of evidence already collected. No additional evidence retrieval "
-                    "is needed."
-                ),
-                "end": (
-                    "The answer is grounded, role-appropriate, and ready "
-                    "to return. Also when a remaining deficiency "
-                    "cannot be resolved with any concrete, untried query supported by "
-                    "the available tools."
-                ),
-            },
-        )
-
-    def revision_reason_question(self) -> Choice:
-        return Choice(
-            instructions=(
-                "Identify the main reason the current attempt should be revised. "
-                "Choose none only when the evidence and answer are ready to return."
-            ),
-            criteria={
-                "missing_evidence": "More evidence is required.",
-                "irrelevant_evidence": "The evidence does not address the request.",
-                "unsupported_answer": "The evidence is adequate, but the answer misuses or omits it.",
-                "role_mismatch": "The answer does not support the user's role objective.",
-                "none": "The result is grounded and ready to return.",
-            },
         )

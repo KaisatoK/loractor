@@ -1,35 +1,24 @@
-"""Offline tests for the scope/confidence classifier prompt payloads.
-
-Three guarantees:
-
-* the tool catalog shown to the classifiers stays in sync with the evidence
-  tools the pipeline can actually call (``backend.pipeline.tools.__all__``);
-* the scope request carries the shared pipeline mission, schema and tool
-  catalog, plus the RAW conversation (not the normalized rewrite) the scope
-  classifier uses to judge whether a queryable target is named;
-* the confidence request carries the attempt history and revision count the
-  confidence classifier uses.
-
-No network access: the builders only render dicts from ``PipelineState``.
-"""
+"""Offline tests for TypeSafe scope and confidence request payloads."""
 
 import os
 
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
-from backend.db.config import LOG_SCHEMA
 from backend.pipeline import tools
 from backend.pipeline.prompts.builders import (
     PIPELINE_MISSION,
+    QUERYABLE_TARGETS,
     TOOL_CATALOG,
     PipelinePrompts,
 )
 
 
 def _state():
-    """A representative mid-revision state (one round already attempted)."""
     return {
         "conversation": "user: Why did checkout errors spike this morning?",
+        "messages": [
+            {"role": "user", "content": "Why did checkout errors spike this morning?"}
+        ],
         "normalized": "Why did checkout errors spike this morning?",
         "latest_message": "Why did checkout errors spike this morning?",
         "latest_answer": "Checkout errors rose 3x after 09:00.",
@@ -40,8 +29,6 @@ def _state():
         "effort": "Medium",
         "evidence_report": [{"hypotheses": []}],
         "answer": "draft answer",
-        "revision_feedback": "More evidence is required.",
-        "evidence_report_history": [{"round": 1}],
         "tool_results": [
             {
                 "id": "R1",
@@ -58,7 +45,6 @@ def _state():
                 "rows": [],
             },
         ],
-        "revision_count": 1,
     }
 
 
@@ -66,59 +52,38 @@ def test_tool_catalog_matches_available_tools():
     assert set(TOOL_CATALOG) == set(tools.__all__)
 
 
-def test_scope_request_includes_tool_catalog():
-    request = PipelinePrompts().scope_request(_state())
-    assert request["state"]["tool_catalog"] == TOOL_CATALOG
+def test_scope_request_contains_only_code_owned_scope_context():
+    payload = PipelinePrompts().scope_request(_state())["state"]
+    assert payload["tool_catalog"] == TOOL_CATALOG
+    assert payload["mission"] == PIPELINE_MISSION
+    assert payload["queryable_targets"] == QUERYABLE_TARGETS
+    assert payload["transcript"] == _state()["messages"]
+    assert "database_schema" not in payload
+    assert "normalized" not in payload
+    assert "clarify_count" not in payload
 
 
-def test_scope_request_includes_mission():
-    request = PipelinePrompts().scope_request(_state())
-    assert request["state"]["mission"] == PIPELINE_MISSION
+def test_scope_request_has_atomic_questions():
+    questions = PipelinePrompts().scope_request(_state())["questions"]
+    assert set(questions) == {
+        "is_log_request",
+        "has_queryable_scope",
+        "proceed_without_clarification",
+        "needs_new_evidence",
+    }
+    assert "route" not in questions
 
 
 def test_scope_request_carries_latest_message_and_answer():
-    request = PipelinePrompts().scope_request(_state())
-    assert request["state"]["latest_message"] == "Why did checkout errors spike this morning?"
-    assert request["state"]["latest_answer"] == "Checkout errors rose 3x after 09:00."
-
-
-def test_scope_request_sends_raw_transcript_not_normalized():
-    # The classifier must judge the raw conversation: the normalizer's rewrite
-    # drops the wording that names the queryable targets.
-    request = PipelinePrompts().scope_request(_state())
-    assert request["state"]["transcript"] == _state()["conversation"]
-    assert "normalized" not in request["state"]
-
-
-def test_scope_request_asks_has_queryable_scope():
-    request = PipelinePrompts().scope_request(_state())
-    assert "has_queryable_scope" in request["questions"]
-    assert "needs_clarification" not in request["questions"]
-
-
-def test_scope_request_keeps_shared_schema_and_catalog():
     payload = PipelinePrompts().scope_request(_state())["state"]
-    assert payload["database_schema"] == LOG_SCHEMA
-    assert payload["tool_catalog"] == TOOL_CATALOG
+    assert payload["latest_message"] == "Why did checkout errors spike this morning?"
+    assert payload["latest_answer"] == "Checkout errors rose 3x after 09:00."
 
 
-def test_scope_request_asks_proceed_without_clarification():
-    request = PipelinePrompts().scope_request(_state())
-    assert "proceed_without_clarification" in request["questions"]
-
-
-def test_scope_request_does_not_carry_clarify_count():
-    # Authorization must stay independent of the retry count.
-    request = PipelinePrompts().scope_request(_state())
-    assert "clarify_count" not in request["state"]
-
-
-def test_confidence_request_includes_catalog_history_and_budgets():
+def test_confidence_request_has_atomic_questions_and_trimmed_state():
     request = PipelinePrompts().confidence_request(_state())
     payload = request["state"]
-
     assert payload["tool_catalog"] == TOOL_CATALOG
-    assert payload["evidence_report_history"] == [{"round": 1}]
     assert payload["attempted_tools"] == [
         {
             "tool_name": "search_logs_tool",
@@ -131,16 +96,28 @@ def test_confidence_request_includes_catalog_history_and_budgets():
             "row_count": 3,
         },
     ]
-    # Medium: max_tool_calls=5, max_iterations=1.
-    assert payload["revision_count"] == 1
-
-
-def test_confidence_request_keeps_existing_keys():
-    payload = PipelinePrompts().confidence_request(_state())["state"]
-    assert set(payload) >= {
+    assert set(payload) == {
         "request",
         "role",
         "evidence_report",
         "answer",
-        "revision_feedback",
+        "tool_catalog",
+        "attempted_tools",
     }
+    assert set(request["questions"]) == {
+        "evidence_relevant",
+        "evidence_gap_remains",
+        "gap_closable_by_untried_tool",
+        "answer_grounded",
+        "answer_fits_role",
+        "answer_complete",
+        "worth_follow_up",
+    }
+
+
+def test_confidence_questions_reference_role_state_not_pasted_role():
+    question = PipelinePrompts().confidence_request(_state())["questions"][
+        "answer_fits_role"
+    ]
+    assert "`role.objective`" in question.instructions["compare"]
+    assert "engineer" not in str(question.instructions)

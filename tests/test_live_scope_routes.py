@@ -77,6 +77,7 @@ import pytest
 
 from backend.pipeline.decision import (
     LOG_REQUEST_THRESHOLD,
+    NEW_EVIDENCE_THRESHOLD,
     PROCEED_THRESHOLD,
     QUERYABLE_SCOPE_THRESHOLD,
     classifier,
@@ -219,7 +220,6 @@ def _report_row(row: dict) -> str:
             "",
             "",
             "",
-            "",
         ]
         return '<tr class="context">' + "".join(cell(value) for value in values) + "</tr>"
 
@@ -232,8 +232,7 @@ def _report_row(row: dict) -> str:
         f"{row['has_queryable_scope']:.3f} (thr {QUERYABLE_SCOPE_THRESHOLD:.2f})",
         f"{row['is_log_request']:.3f}",
         f"{row['proceed']:.3f}",
-        f"{row['route_choice']} {row['probability']:.2f}",
-        str(row["probabilities"]),
+        f"{row['needs_new_evidence']:.3f} (thr {NEW_EVIDENCE_THRESHOLD:.2f})",
         str(row["clarify_count"]),
         row["normalized"],
         row["transcript"],
@@ -255,8 +254,7 @@ def _render_report_html() -> str:
         f"has_queryable_scope (≥ {QUERYABLE_SCOPE_THRESHOLD:.2f})",
         f"is_log_request (≥ {LOG_REQUEST_THRESHOLD:.2f})",
         f"proceed_without_clarification (≥ {PROCEED_THRESHOLD:.2f})",
-        "route_choice (if proceeding)",
-        "probabilities",
+        f"needs_new_evidence (≥ {NEW_EVIDENCE_THRESHOLD:.2f})",
         "clarify_count",
         "normalized",
         "transcript",
@@ -350,6 +348,10 @@ def run_conversation(conversation: Conversation) -> None:
             state.update(
                 {
                     "conversation": _render(transcript),
+                    "messages": [
+                        {"role": item_role, "content": item_text}
+                        for item_role, item_text in transcript
+                    ],
                     "latest_message": text,
                     "latest_answer": _last_assistant(transcript[:-1]),
                     "role": {
@@ -371,12 +373,10 @@ def run_conversation(conversation: Conversation) -> None:
             has_queryable_scope = response.nouls["has_queryable_scope"].noul
             is_log_request = response.nouls["is_log_request"].noul
             proceed = response.nouls["proceed_without_clarification"].noul
-            choice = response.choices["route"].choice
-            probs = response.choices["route"].probabilities
+            needs_new_evidence = response.nouls["needs_new_evidence"].noul
             route = decide_scope(response, clarify_count)
 
             asserted_total += 1
-            probability = probs.get(choice, 0.0)
             matched = route == expected
             if matched:
                 asserted_matched += 1
@@ -391,20 +391,20 @@ def run_conversation(conversation: Conversation) -> None:
                     "has_queryable_scope": has_queryable_scope,
                     "is_log_request": is_log_request,
                     "proceed": proceed,
-                    "route_choice": choice,
-                    "probability": probability,
-                    "probabilities": probs,
+                    "needs_new_evidence": needs_new_evidence,
                     "clarify_count": clarify_count,
                     "normalized": json.dumps(state["normalized"], default=str),
-                    "transcript": state["conversation"],
+                    "transcript": json.dumps(state["messages"], default=str),
                 }
             )
 
             assert route == expected, (
                 f"[{conversation.id}] turn {index} {text!r}: expected {expected!r}, "
                 f"got {route!r} (has_queryable_scope={has_queryable_scope:.3f}, "
-                f"route_choice={choice!r}, probabilities={probs}). Borderline wording "
-                "can flip run-to-run — re-run before treating this as a regression."
+                f"needs_new_evidence={needs_new_evidence:.3f}, "
+                f"is_log_request={is_log_request:.3f}, proceed={proceed:.3f}). "
+                "Borderline wording can flip run-to-run — re-run before treating "
+                "this as a regression."
             )
 
             clarify_count = clarify_count + 1 if route == "clarify" else 0

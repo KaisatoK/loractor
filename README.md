@@ -26,20 +26,18 @@ LangGraph pipeline (src/backend/pipeline/graph.py)
 SereneDB log queries (src/backend/db)   ← pooled connections
 ```
 
-The `scope` stage sends a non-log-request message (a greeting, small talk, a
-capability or unrelated question) to a general conversational reply. For a log
-request it asks a clarifying question only when the conversation names no
-queryable target (a service, pid, event_id, error type or message text,
-severity, or time window) **and** the user has not explicitly authorised
-proceeding (for example "just do it"); an explicit go-ahead instead takes
-whatever route the classifier chose, and once a target is named the request is
-routed to an answer or an investigation. Only a spent clarify budget forces a
-best-effort investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
-investigation and calls the database tools itself, then submits a free-text
-summary of its findings. The report of `summary` plus `evidence` (and optional
-`hypotheses`) is built off-agent from that summary and the captured results,
-which are renumbered `R1..Rn` for the answer tables. A bundled
-`log-investigation` skill decides when hypotheses apply.
+The `scope` stage uses four independent TypeSafe (Jev) Noul judgments: whether
+`latest_message` is a log request, whether the raw message transcript names a
+queryable target, whether the user authorized proceeding without clarification,
+and whether new log evidence is needed. Code owns the policy: non-log requests go
+to a general reply; vague log requests are clarified unless authorized or out of
+clarification budget; otherwise `needs_new_evidence` selects a direct answer or
+investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
+investigation and calls the database tools itself, then submits a free-text summary
+of its findings. The report of `summary` plus `evidence` (and optional
+`hypotheses`) is built off-agent from that summary and the captured results, which
+are renumbered `R1..Rn` for the answer tables. A bundled `log-investigation` skill
+decides when hypotheses apply.
 
 ## Prerequisites
 
@@ -274,7 +272,7 @@ Everything else runs without external services (the gated live route tests below
 | `test_config.py` | env-driven config and the pooled connection layer |
 | `test_observability.py` | metrics registry and request-correlation middleware |
 | `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
-| `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_find_evidence.py` | scope & confidence decisions, classifier prompt payloads, evidence-node wiring |
+| `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 
 > The offline suite has three known, pre-existing failures in
@@ -291,6 +289,16 @@ sets it) and must be run alone — never inside the full suite, because
 `tests/conftest.py` installs dummy provider keys before the backend's
 import-time clients are built. Each gated run writes
 `.data/scope_routes_report.html` (gitignored; override with
+### Live confidence checks
+
+`bash ./confidence.sh` replays representative evidence and answer states through
+the real confidence classifier and checks the code-owned revision policy. It is
+gated by `RUN_LIVE_CONFIDENCE=1`, must run alone, and writes
+`.data/confidence_report.html` (override with `RUN_LIVE_CONFIDENCE_REPORT`). The
+report includes each atomic Noul signal and the selected policy route. Thresholds
+are starting values validated against these cases; the cases are stochastic and
+must not be re-baselined to match a flipped result.
+
 `RUN_LIVE_ROUTES_REPORT`) and prints its path once; the per-turn numbers appear in
 the assertion failure. Offline, only a case-data sanity check runs. Costs two
 live API calls per asserted turn, and the classifier is stochastic — re-run
@@ -410,6 +418,7 @@ include streams started/completed/rejected, logins, chats, and messages.
 backend.sh    uvicorn backend.api:app (demo account provisioned on start)
 frontend.sh   streamlit run src/ui/streamlit_app.py
 routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
+confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 setup.sh      legacy DB seeding script (prefer: uv run python -m backend.db.setup)
 src/
 ├── backend/

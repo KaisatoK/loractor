@@ -160,6 +160,10 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
         PipelineState,
         {
             "conversation": _render_conversation(history),
+            "messages": [
+                {"role": item["role"], "content": item["content"]}
+                for item in history
+            ],
             "latest_message": _latest(history, "user"),
             "latest_answer": _latest(history, "assistant"),
             "role": {

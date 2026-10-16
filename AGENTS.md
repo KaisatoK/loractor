@@ -33,6 +33,7 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 - Integration: `tests/test_db_queries.py` runs against a live, seeded SereneDB and fails loudly (never skips) if it is unreachable or empty.
 - Live route tests (`tests/test_live_scope_routes.py`): skipped offline; run alone with `bash ./routes.sh` (sets `RUN_LIVE_ROUTES=1`) — real normalize + scope-classifier calls, ~2 per asserted turn. Must not run inside the full suite (conftest installs dummy keys before the backend's import-time clients; the module reloads `.env` with `override=True` only when gated). Gated runs write the HTML report `.data/scope_routes_report.html` (gitignored; override `RUN_LIVE_ROUTES_REPORT`; its path is printed once per run), and the per-turn numbers appear in an assertion failure. Routes are stochastic — a flipped row shows as `✗` with raw numbers; re-run before treating it as a regression.
 - `test_answer_rendering.py` is pure/offline and asserts the serializer and UI renderer stay in sync.
+- Live confidence tests (`tests/test_live_confidence.py`): skipped offline; run alone with `bash ./confidence.sh` (sets `RUN_LIVE_CONFIDENCE=1`) — real atomic confidence judgments and code-owned revision policy. Gated runs write `.data/confidence_report.html` (override `RUN_LIVE_CONFIDENCE_REPORT`). If confidence prompts or policy thresholds change, revisit the representative cases, re-run once on a flip, and classify the result as an input or product issue; never re-baseline to match observed output.
 
 ### Live route cases are coupled to normalize/scope
 
@@ -44,17 +45,26 @@ decision surface. If you change any of:
 - `agents/normalize.py`
 - `prompts/builders.py` (`scope_request` and its four questions)
 - `decision.py` (`decide_scope`, `LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`,
-  `MAX_CLARIFY_ROUNDS`, `PROCEED_THRESHOLD`)
+  `NEW_EVIDENCE_THRESHOLD`, `MAX_CLARIFY_ROUNDS`, `PROCEED_THRESHOLD`)
 
 then revisit `CONVERSATIONS` in that file: update only the cases whose expectations the
 change actually affects, run `bash ./routes.sh`, and treat any flipped row as a product
+### Live confidence cases are coupled to confidence policy
+
+`tests/test_live_confidence.py` replays representative evidence and answer states
+against the real atomic confidence judgments. If `confidence_request`, any
+confidence question, `decide_confidence`, or `EVIDENCE_REVISION_THRESHOLD` /
+`ANSWER_OK_THRESHOLD` changes, revisit the cases and run `bash ./confidence.sh`.
+A flipped case is a product signal: re-run once, then fix the input or product;
+never re-baseline an expectation just to make the run green.
+
 signal before touching it - re-run once to rule out stochasticity, then decide whether
 the *input* is wrong (fix the input) or the *product* is wrong (leave it red). Never
 re-baseline an expectation to match observed output, and never rewrite the whole list.
 
 ## Known failures
 
-Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 165 passed, 5 skipped` (the 5 skips are the gated live-route conversations).
+Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q --ignore=tests/test_db_queries.py` currently reports `3 failed, 160 passed, 11 skipped` (the skips are the gated live route and confidence cases).
 
 - All three failures are in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`. That test file and that module are byte-identical to HEAD and do not depend on the pipeline, so they are pre-existing, not regressions.
 - `POST /chat/stream` used to tear on every route that reaches `find_evidence` (now fixed; see the end of this bullet): the root `messages` branch at `src/backend/api.py:192` did `item[-1].text`, but langgraph v3 yields a `ChatModelStream` per root-scope LLM call, so it raised `TypeError: 'ChatModelStream' object is not subscriptable` — status 200 (headers already flushed), partial NDJSON including the `tool_progress` ticks, then the stream dies before the final `messages` event so the answer never arrives, and background `/chats/{id}/investigate` runs end `status=error` with that TypeError as `run.error`. The line is present at HEAD but only became reachable once the evidence report moved off-agent to a direct root-scope `deepseek.with_structured_output(...)` call (`agents/evidence_report.py`, invoked from `find_evidence_node`); at HEAD it ran inside a `create_agent` subgraph, so no root-scope `messages` event existed, and routes whose LLM work stays in subgraphs (for example `clarify`) complete normally — route-dependent, not a dependency regression (`langgraph` is `1.2.12` at HEAD and in the working tree). The fix has landed: the root `messages` branch (`api.py:191-201`) no longer indexes blindly — it logs `item[-1].text` only for a non-empty list/tuple (via `getattr(..., "text", None)`) and otherwise logs the item type, so a `ChatModelStream` cannot raise. That branch is debug-only (`logger.debug`, no `yield`), and the answer is still sourced from the `values` channel into `last_answer` and emitted at `api.py:234`. For pipeline-level end-to-end checks, drive `chatbot.stream_events(...)` and read the `values`/`subgraphs`/`custom` channels instead of the `messages` branch.
@@ -62,8 +72,9 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline-
 
 ## Pipeline & API notes
 
-- Graph: `normalize -> scope -> (clarify | general | direct_answer | find_evidence) -> answer -> confidence`, with `confidence` looping back to `find_evidence`/`answer`. There is no separate `direct_answer` node — that scope route maps to `answer`. Scope and confidence are TypeSafe classifiers (`decision.py`); thresholds live there (`LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`, `PROCEED_THRESHOLD`, `FOLLOW_UP_THRESHOLD`, `MAX_CLARIFY_ROUNDS`) and per-effort budgets in `effort.py`. Model instances are in `models.py` (Groq `gpt-oss-20b`/`120b`, DeepSeek, Gemini).
-- `scope_request` sends the RAW `conversation` as `transcript` — never `state["normalized"]`, the normalizer's rewrite, which drops the wording that names queryable targets — plus `latest_message`, `latest_answer`, `mission`, `database_schema`, and `tool_catalog`, and asks four questions: `is_log_request`, `has_queryable_scope`, `proceed_without_clarification`, `route`. `decide_scope` routes `general` when `is_log_request < LOG_REQUEST_THRESHOLD`; otherwise it clarifies when `has_queryable_scope < QUERYABLE_SCOPE_THRESHOLD` (no queryable target named) and the user has not authorized proceeding, and otherwise takes the route.
+- Graph: `normalize -> scope -> (clarify | general | direct_answer | find_evidence) -> answer -> confidence`, with `confidence` looping back to `find_evidence`/`answer`. There is no separate `direct_answer` node — that scope route maps to `answer`. Scope and confidence use atomic TypeSafe Nouls (`decision.py`); code composes their probabilities into policy routes. Scope thresholds are `LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`, `PROCEED_THRESHOLD`, `NEW_EVIDENCE_THRESHOLD`, `FOLLOW_UP_THRESHOLD`, and `MAX_CLARIFY_ROUNDS`; confidence thresholds are `EVIDENCE_REVISION_THRESHOLD` and `ANSWER_OK_THRESHOLD`; per-effort revision budgets live in `effort.py`. Model instances are in `models.py` (Groq `gpt-oss-20b`/`120b`, DeepSeek, Gemini).
+- `scope_request` sends the RAW structured `messages` transcript — never `state["normalized"]`, the normalizer's rewrite — plus `latest_message`, `latest_answer`, `mission`, `queryable_targets`, and `tool_catalog`, and asks four Nouls: `is_log_request`, `has_queryable_scope`, `proceed_without_clarification`, `needs_new_evidence`. `decide_scope` routes `general` when `is_log_request < LOG_REQUEST_THRESHOLD`; otherwise it clarifies when `has_queryable_scope < QUERYABLE_SCOPE_THRESHOLD` and the user has not authorized proceeding, and otherwise uses `needs_new_evidence` in code to select `direct_answer` or `find_evidence`.
+- `confidence_request` asks independent Nouls about `evidence_relevant`, `evidence_gap_remains`, `gap_closable_by_untried_tool`, `answer_grounded`, `answer_fits_role`, `answer_complete`, and `worth_follow_up`. `decide_confidence` owns the revision route and reason in code, preserving the raw signals in state; Noul probabilities are not separate confidence values.
 - `decision.py` builds `TypeSafeClassifier()` at import with no model argument, so the SDK default selects the release; the gate thresholds were live-tuned against whatever it resolved to at the time, so a model release can move them — so importing `backend.pipeline.decision` (or `backend.api`) needs `TYPESAFE_API_KEY`. `decision.py` uses `effort.py`'s `max_iterations` (the confidence revision-loop cap); the old per-effort confidence-threshold field no longer exists.
 - HTTP surface is broader than `/chat/stream`: background investigation jobs (`POST /chats/{id}/investigate`, poll `GET /chats/{id}/run/{run_id}`, plus `active-run`/`cancel`) backed by `backend/jobs.py`, plus `/chat/reframe`, auth, chat CRUD, and `/healthz`/`/readyz`/`/metrics`. `/chat/test` returns canned NDJSON for tests.
 - `/chat/stream` emits NDJSON events (`messages`, `tool_results`, `tool_progress`, `subgraph_name`, `subgraph_message`). Answers use `[[RESULT:Rn]]` markers serialized by `pipeline/answers.py` and rendered by `ui/rendering.py`; the serializer and renderer must stay in sync with the `id` fields on tool results.

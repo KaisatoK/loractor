@@ -15,13 +15,16 @@ class Role(TypedDict):
 
 class PipelineRoute(TypedDict):
     next_state: Literal["find_evidence", "answer", "end"]
-    pass_probability: float
-    probabilities: dict[str, float]
     revision_reason: str
+    # Raw Noul yes-probabilities used by the code-owned revision policy.
+    signals: dict[str, float]
 
 
 class PipelineState(TypedDict):
     conversation: str
+    # Structured raw transcript for semantic classifiers; conversation remains
+    # the rendered string consumed by the text-oriented agents.
+    messages: list[dict[str, str]]
     latest_message: str
     latest_answer: str
     role: Role

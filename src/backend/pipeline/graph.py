@@ -1,8 +1,8 @@
 """LangGraph pipeline: normalize → scope → (clarify | general | answer) → confidence.
 
-The scope and confidence routers are TypeSafe classifiers (see ``decision.py``):
-``scope`` picks one action-oriented route and ``confidence`` decides whether to
-return the answer or revise it.
+Scope and confidence use TypeSafe (Jev) for independent semantic judgments.
+The deterministic policies in ``decision.py`` compose those Noul probabilities
+and own every route and bounded revision transition.
 """
 
 import json
@@ -49,6 +49,7 @@ REVISION_FEEDBACK = {
         "The evidence is adequate, but the answer misuses or omits it."
     ),
     "role_mismatch": "The answer does not support the user's role objective.",
+    "incomplete_answer": "The answer does not resolve the request or state its limitations.",
     "none": "No revision is required.",
 }
 NO_REVISION = "No revision is required."
@@ -82,20 +83,17 @@ def scope_node(state: PipelineState) -> PipelineState:
     try:
         response = classifier.invoke(prompts.scope_request(state))
         scope = decide_scope(response, clarify_count)
-        route = response.choices.get("route")
         proceed = response.nouls["proceed_without_clarification"].noul
         logger.info(
-            "scope=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f route=%s route_confidence=%s clarify_count=%d model=%s",
+            "scope=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f needs_new_evidence=%.3f clarify_count=%d model=%s",
             scope,
             response.nouls["has_queryable_scope"].noul,
             response.nouls["is_log_request"].noul,
             proceed,
-            getattr(route, "choice", "?"),
-            f"{route.confidence:.3f}" if route is not None else "?",
+            response.nouls["needs_new_evidence"].noul,
             clarify_count,
-            getattr(response, "model", "?"),
+            response.model,
         )
-        logger.debug("scope probabilities: %s", getattr(route, "probabilities", {}))
     except Exception as error:  # noqa: BLE001 - a classifier failure must not break the run
         logger.warning("scope classifier failed, investigating instead: %s", error)
         scope = "find_evidence"
@@ -219,26 +217,25 @@ def confidence_node(state: PipelineState) -> PipelineState:
         logger.warning("confidence classifier failed, returning answer: %s", error)
         route = {
             "next_state": "end",
-            "pass_probability": 1.0,
-            "probabilities": {"find_evidence": 0.0, "answer": 0.0, "end": 1.0},
             "revision_reason": "none",
+            "signals": {},
             "worth_follow_up": 0.0,
         }
 
     next_state = route["next_state"]
     logger.info(
-        "confidence=%s pass=%.3f reason=%s worth_follow_up=%.3f revision_count=%d",
+        "confidence=%s reason=%s worth_follow_up=%.3f revision_count=%d model=%s signals=%s",
         next_state,
-        route["pass_probability"],
         route["revision_reason"],
         route.get("worth_follow_up", 0.0),
         revision_count,
+        getattr(response, "model", "classifier-failed") if "response" in locals() else "classifier-failed",
+        route.get("signals", {}),
     )
     confidence = {
         "next_state": next_state,
-        "pass_probability": route["pass_probability"],
-        "probabilities": route["probabilities"],
         "revision_reason": route["revision_reason"],
+        "signals": route.get("signals", {}),
     }
 
     # Only a final (non-revising) answer gets the drafted follow-up question, and
