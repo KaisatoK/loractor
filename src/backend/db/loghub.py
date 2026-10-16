@@ -1,21 +1,28 @@
-"""Loader for loghub's structured log corpora.
+"""Loader for loghub's log corpora: BGL and OpenStack.
 
 `loghub <https://github.com/logpai/loghub>`_ publishes many real log corpora in
 one shape: a ``*_structured.csv`` with per-line fields plus a parsed
-``EventId``/``EventTemplate`` pair. That regularity is the point of this module
--- adding another corpus should be a :class:`LoghubSpec` and a dataset
-registration, not new query code.
+``EventId``/``EventTemplate`` pair, and the raw ``*.log`` the sample was cut
+from. That regularity is the point of this module -- adding another corpus
+should be a :class:`LoghubSpec`, a line parser and a dataset registration, not
+new query code.
 
-The test that matters for this claim is in ``tests/test_bgl.py``: every query
-builder must work on BGL with **no new SQL**. If adding a corpus required
-touching ``count_query`` or ``query``, the registry would not actually be an
-abstraction.
+Two corpora are loaded here, each from its raw log and, for fast iteration,
+from its 2,000-line structured sample:
+
+* ``bgl`` -- the Blue Gene/L RAS log, parsed by :func:`parse_bgl_line`;
+* ``openstack`` -- three OpenStack nova runs loaded one after another into one
+  table, parsed by :func:`parse_openstack_line`.
+
+The test that matters for the abstraction claim is in ``tests/test_bgl.py``:
+every query builder must work on BGL with **no new SQL**. If adding a corpus
+required touching ``count_query`` or ``query``, the registry would not actually
+be an abstraction.
 
 Rows are streamed with ``COPY ... FROM STDIN`` rather than read by the server
-from a path. The existing OpenStack importer uses ``read_csv``, which executes
-*inside* the server and therefore needs the file copied into the container with
-docker. Streaming removes that dependency entirely, so a loader works against
-any reachable SereneDB regardless of where it runs.
+from a path, because ``read_csv`` executes *inside* the server and would need
+the file copied into the container. Streaming removes that dependency, so a
+loader works against any reachable SereneDB regardless of where it runs.
 """
 
 from __future__ import annotations
@@ -26,10 +33,12 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 from psycopg2 import sql
 
@@ -41,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# Rows per COPY buffer flush. Keeps client memory flat for a corpus of any size.
 # Rows per COPY buffer flush. Bounds client memory independently of corpus
 # size: 4.7M rows stream through in ~95 flushes of this size.
 COPY_CHUNK_ROWS = 50_000
@@ -82,6 +90,15 @@ class SourceKind(StrEnum):
     """
 
 
+LineParser = Callable[[str], "dict | None"]
+"""Splits one raw log line into a physical row, or returns ``None`` to skip it.
+
+The row carries every column except ``LineId`` and ``EventTemplate``, which the
+streamer adds -- including ``Timestamp``, because only the parser knows how its
+corpus spells time.
+"""
+
+
 @dataclass(frozen=True)
 class LoghubSpec:
     """How to load one loghub corpus.
@@ -90,6 +107,12 @@ class LoghubSpec:
     computed on insert, used by the CSV path where values arrive verbatim;
     the raw path computes the same values client-side while it is already
     parsing each line, which avoids staging the corpus twice.
+
+    ``raw_names`` lists the raw files in load order. Several files land in one
+    table with a single running ``LineId``, so ids stay unique across them.
+    ``header_renames`` maps a structured CSV's headers onto physical column
+    names, per corpus: BGL's ``Timestamp``/``Time`` clash with names the raw
+    schema uses for other things, while OpenStack's headers are used as-is.
     """
 
     dataset_id: str
@@ -99,15 +122,12 @@ class LoghubSpec:
     text_columns: tuple[str, ...] = ()
     verbatim_columns: tuple[str, ...] = ()
     token_columns: tuple[tuple[str, str], ...] = ()
-    numeric_mirrors: tuple[tuple[str, str], ...] = field(default=())
     source_kind: SourceKind = SourceKind.STRUCTURED_CSV
-    raw_name: str | None = None
-    raw_fields: tuple[str, ...] = ()
-    raw_content_column: str = "Content"
-    anchor_column: str = ""
-    anchor_values: frozenset[str] = frozenset()
-    anchor_guard_column: str = ""
-    anchor_guard_values: frozenset[str] = frozenset()
+    raw_names: tuple[str, ...] = ()
+    line_parser: LineParser | None = None
+    header_renames: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     path_env: str | None = None
     expected_rows: int | None = None
 
@@ -116,20 +136,23 @@ class LoghubSpec:
         return DATA_DIR / self.csv_name
 
     @property
-    def source_path(self) -> Path:
-        """Where the corpus actually lives.
+    def source_paths(self) -> tuple[Path, ...]:
+        """Where the corpus actually lives, in load order.
 
-        A full corpus is hundreds of megabytes, so it is deliberately *not*
-        expected inside the repository: the environment variable wins, letting
-        large data sit on whatever volume has room.
+        A full corpus is hundreds of megabytes, so it need not sit inside the
+        repository: for a single-file corpus the environment variable wins,
+        letting large data live on whatever volume has room. A multi-file corpus
+        is always read from :data:`DATA_DIR`, since one variable cannot name
+        several files.
         """
-        if self.path_env:
-            override = os.getenv(self.path_env)
-            if override:
-                return Path(override).expanduser()
-        if self.source_kind is SourceKind.RAW_LINES and self.raw_name:
-            return DATA_DIR / self.raw_name
-        return self.csv_path
+        override = os.getenv(self.path_env) if self.path_env else None
+        if self.source_kind is SourceKind.RAW_LINES and self.raw_names:
+            if override and len(self.raw_names) == 1:
+                return (Path(override).expanduser(),)
+            return tuple(DATA_DIR / name for name in self.raw_names)
+        if override:
+            return (Path(override).expanduser(),)
+        return (self.csv_path,)
 
     @property
     def all_column_names(self) -> tuple[str, ...]:
@@ -167,6 +190,146 @@ def derive_template(content: str) -> str:
     for pattern in _TEMPLATE_PATTERNS:
         text = pattern.sub("<*>", text)
     return text
+
+
+# --- Line parsers ------------------------------------------------------------
+#
+# One per corpus, next to each other so the two strategies can be compared. Both
+# take a raw line and return the physical row -- every column except ``LineId``
+# and ``EventTemplate``, which the streamer adds -- or ``None`` for a line that
+# cannot be loaded, which the streamer counts.
+
+# BGL's severity vocabulary, and the ``Type`` vocabulary that guards it.
+_BGL_LEVELS = frozenset({"INFO", "WARNING", "ERROR", "SEVERE", "FATAL", "FAILURE"})
+_BGL_TYPES = frozenset({"RAS", "NULL"})
+
+# Nine whitespace-separated fields precede the message: Label, EpochSeconds,
+# Date, Node, RawTime, NodeRepeat, Type, Component, Level.
+_BGL_HEAD_FIELDS = 9
+
+
+def parse_bgl_line(line: str) -> dict | None:
+    """Split one raw BGL line into fields, anchored on a known vocabulary.
+
+    Positional parsing is not safe on this corpus, and the failure is silent
+    rather than loud. BGL omits ``NodeRepeat`` on 306 lines, which shifts every
+    later field by one: a fixed offset then reads ``KERNEL`` as the type,
+    ``FATAL`` as the component and the first word of the message as the
+    severity. Nothing errors -- the rows simply land mislabelled, and a severity
+    query quietly misses them.
+
+    So the fields are located rather than counted. ``Level`` is found by its own
+    small vocabulary, guarded by ``Type`` two positions earlier, whose
+    vocabulary is only ``RAS`` and ``NULL``. Requiring both makes a false match
+    on message text essentially impossible, and it anchors every one of the
+    4,747,963 lines -- including ten that are corrupt in the source, where a
+    fragment of an earlier message is spliced into the node field.
+
+    ``Timestamp`` is computed here from the epoch seconds, in UTC: loghub's own
+    ``Time`` string (``2005-06-03-15.42.50.675872``) is unparseable, and doing
+    the conversion in SQL would mean staging 743 MB of corpus twice. A line
+    whose epoch is not an integer cannot be placed in time and is skipped.
+    """
+    parts = line.split()
+    if len(parts) < _BGL_HEAD_FIELDS:
+        return None
+
+    level_index = next(
+        (
+            i
+            for i in range(6, len(parts))
+            if parts[i] in _BGL_LEVELS and parts[i - 2] in _BGL_TYPES
+        ),
+        None,
+    )
+    if level_index is None:
+        return None
+
+    try:
+        epoch = int(parts[1])
+    except ValueError:
+        return None
+
+    # Fields before the anchor are addressed backwards from it; the fixed head
+    # (label, epoch, date, node, time) is addressed forwards. NodeRepeat exists
+    # only when there is room for it between the two.
+    node_repeat_index = level_index - 3
+    return {
+        "Label": parts[0],
+        "EpochSeconds": parts[1],
+        "Date": parts[2],
+        "Node": parts[3],
+        "RawTime": parts[4],
+        "NodeRepeat": parts[node_repeat_index] if node_repeat_index > 4 else None,
+        "Type": parts[level_index - 2],
+        "Component": parts[level_index - 1],
+        "Level": parts[level_index],
+        # An empty message is a real record: 34,470 BGL rows carry every field
+        # and no message, most of them FATAL.
+        "Content": " ".join(parts[level_index + 1 :]),
+        "Timestamp": datetime.fromtimestamp(epoch, UTC).isoformat(sep=" "),
+    }
+
+
+# ``<Logrecord> <Date> <Time> <Pid> <Level> <Component> [<ADDR>] <Content>``.
+# Unlike BGL every OpenStack line carries the same fixed header, so a positional
+# regex is safe here. The bracketed ``ADDR`` token is optional and is split off
+# the trailing text by :func:`_split_openstack_addr`.
+_OPENSTACK_LINE_RE = re.compile(
+    r"^(?P<logrecord>\S+) "
+    r"(?P<date>\d{4}-\d{2}-\d{2}) "
+    r"(?P<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?) "
+    r"(?P<pid>\d+) "
+    r"(?P<level>\S+) "
+    r"(?P<component>\S+)"
+    r"(?: (?P<rest>.*))?$"
+)
+
+
+def _split_openstack_addr(rest: str) -> tuple[str, str]:
+    """Split a line's trailing text into ``(addr, content)``.
+
+    A leading ``[...]`` token is the request context (``req-<uuid> <user>
+    <project> - - -``, or ``-``); it is taken up to the first ``]``. The
+    remainder is the message, kept exactly as written apart from the leading
+    space. Real nova lines always carry the header bracket, so a message that
+    itself starts with ``[instance: ...]`` keeps it.
+    """
+    rest = rest.lstrip()
+
+    if rest.startswith("["):
+        end = rest.find("]")
+        if end != -1:
+            return rest[1:end], rest[end + 1 :].lstrip()
+
+    return "", rest
+
+
+def parse_openstack_line(line: str) -> dict | None:
+    """Split one raw OpenStack nova line into fields.
+
+    ``Timestamp`` is ``Date`` + ``Time`` read as UTC: the logs carry no zone, and
+    storing an explicit offset keeps windows independent of the server's own
+    time zone. An empty ``ADDR`` loads as NULL, because the COPY dialect reads
+    an empty field as NULL.
+    """
+    match = _OPENSTACK_LINE_RE.match(line)
+    if match is None:
+        return None
+
+    addr, content = _split_openstack_addr(match.group("rest") or "")
+    date, clock = match.group("date"), match.group("time")
+    return {
+        "Logrecord": match.group("logrecord"),
+        "Date": date,
+        "Time": clock,
+        "Pid": match.group("pid"),
+        "Level": match.group("level"),
+        "Component": match.group("component"),
+        "ADDR": addr,
+        "Content": content,
+        "Timestamp": f"{date} {clock}+00",
+    }
 
 
 # BGL: Blue Gene/L supercomputer RAS logs.
@@ -207,6 +370,11 @@ BGL_SPEC = LoghubSpec(
     # Identifiers in a derived expression must be quoted: SereneDB folds
     # unquoted names to lower case, and loghub's columns are CamelCase.
     derived=(("Timestamp", 'to_timestamp("EpochSeconds")'),),
+    # loghub's CSV headers, mapped onto physical column names. Only entries that
+    # differ are listed; anything else is taken verbatim.
+    header_renames=MappingProxyType(
+        {"Timestamp": "EpochSeconds", "Time": "RawTime"}
+    ),
     text_columns=("Content",),
     verbatim_columns=("Component", "Level", "EventId", "EventTemplate", "Node", "Label"),
     # Every selector-addressable column needs a word-split entry: the
@@ -229,30 +397,11 @@ BGL_SPEC = LoghubSpec(
 BGL_FULL_SPEC = LoghubSpec(
     dataset_id="bgl",
     csv_name="BGL_2k.log_structured.csv",
-    raw_name="BGL.log",
+    raw_names=("BGL.log",),
+    line_parser=parse_bgl_line,
     path_env="BGL_LOG_PATH",
     source_kind=SourceKind.RAW_LINES,
     expected_rows=4_747_963,
-    # Fields are located by vocabulary, not by position: BGL's arity varies.
-    anchor_column="Level",
-    anchor_values=frozenset(
-        {"INFO", "WARNING", "ERROR", "SEVERE", "FATAL", "FAILURE"}
-    ),
-    anchor_guard_column="Type",
-    anchor_guard_values=frozenset({"RAS", "NULL"}),
-    # Nine fixed whitespace-separated fields, then the message. ``Content`` is
-    # everything after the ninth, so a message containing spaces stays intact.
-    raw_fields=(
-        "Label",
-        "EpochSeconds",
-        "Date",
-        "Node",
-        "RawTime",
-        "NodeRepeat",
-        "Type",
-        "Component",
-        "Level",
-    ),
     columns=(
         ("LineId", "BIGINT"),
         ("Label", "VARCHAR"),
@@ -277,14 +426,79 @@ BGL_FULL_SPEC = LoghubSpec(
     ),
 )
 
+
+# OpenStack: three nova runs, loaded into one ``openstack`` table.
+#
+# The column names follow loghub's structured export and BGL (``Level``,
+# ``Component``), so both local corpora read the same way. The raw logs carry
+# no event id, so -- as for BGL -- only a derived ``EventTemplate`` is stored,
+# and there is no ``PidText`` mirror: the integer pid is not offered by the
+# type-ahead.
+_OPENSTACK_COLUMNS = (
+    ("LineId", "BIGINT"),
+    ("Logrecord", "VARCHAR"),
+    ("Date", "DATE"),
+    ("Time", "TIME"),
+    ("Pid", "BIGINT"),
+    ("Level", "VARCHAR"),
+    ("Component", "VARCHAR"),
+    ("ADDR", "VARCHAR"),
+    ("Content", "VARCHAR"),
+)
+_OPENSTACK_TEXT_COLUMNS = ("Content",)
+_OPENSTACK_VERBATIM_COLUMNS = ("Component", "Level", "EventTemplate")
+_OPENSTACK_TOKEN_COLUMNS = (
+    ("Component", "dotted"),
+    ("EventTemplate", "english"),
+)
+
+# The 2,000-line structured sample, for fast iteration (``openstack_2k``). Its
+# headers already match the physical names, so nothing is renamed; ``Date`` +
+# ``Time`` is read as UTC to match the raw loader.
+OPENSTACK_SPEC = LoghubSpec(
+    dataset_id="openstack",
+    csv_name="OpenStack_2k.log_structured.csv",
+    columns=(
+        *_OPENSTACK_COLUMNS,
+        ("EventId", "VARCHAR"),
+        ("EventTemplate", "VARCHAR"),
+    ),
+    derived=(("Timestamp", "timezone('UTC', \"Date\" + \"Time\")"),),
+    text_columns=_OPENSTACK_TEXT_COLUMNS,
+    verbatim_columns=_OPENSTACK_VERBATIM_COLUMNS,
+    token_columns=_OPENSTACK_TOKEN_COLUMNS,
+)
+
+# The full corpus: 207,820 lines from three files, in this order. ``LineId``
+# runs on across them, so it is unique in the shared table; nothing records
+# which file a row came from.
+OPENSTACK_FULL_SPEC = LoghubSpec(
+    dataset_id="openstack",
+    csv_name="OpenStack_2k.log_structured.csv",
+    raw_names=(
+        "openstack_normal1.log",
+        "openstack_normal2.log",
+        "openstack_abnormal.log",
+    ),
+    line_parser=parse_openstack_line,
+    source_kind=SourceKind.RAW_LINES,
+    expected_rows=207_820,
+    columns=(
+        *_OPENSTACK_COLUMNS,
+        ("EventTemplate", "VARCHAR"),
+        ("Timestamp", "TIMESTAMPTZ"),
+    ),
+    text_columns=_OPENSTACK_TEXT_COLUMNS,
+    verbatim_columns=_OPENSTACK_VERBATIM_COLUMNS,
+    token_columns=_OPENSTACK_TOKEN_COLUMNS,
+)
+
 SPECS: dict[str, LoghubSpec] = {
     "bgl": BGL_FULL_SPEC,
     "bgl_2k": BGL_SPEC,
+    "openstack": OPENSTACK_FULL_SPEC,
+    "openstack_2k": OPENSTACK_SPEC,
 }
-
-# The CSV header loghub ships, mapped onto physical column names. Only entries
-# that differ are listed; anything else is taken verbatim.
-_HEADER_RENAMES = {"Timestamp": "EpochSeconds", "Time": "RawTime"}
 
 
 def spec_for(dataset: Dataset | str) -> LoghubSpec:
@@ -317,9 +531,11 @@ def _stream_rows(spec: LoghubSpec, cur) -> int:
     physical = [name for name, _ in spec.columns]
     copied = 0
 
+    renames = spec.header_renames
+
     with spec.csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        header = [_HEADER_RENAMES.get(name, name) for name in (reader.fieldnames or [])]
+        header = [renames.get(name, name) for name in (reader.fieldnames or [])]
         missing = set(physical) - set(header)
         if missing:
             raise refuse(
@@ -351,9 +567,7 @@ def _stream_rows(spec: LoghubSpec, cur) -> int:
             pending = 0
 
         for record in reader:
-            row = {
-                _HEADER_RENAMES.get(key, key): value for key, value in record.items()
-            }
+            row = {renames.get(key, key): value for key, value in record.items()}
             writer.writerow([row.get(name) for name in physical])
             pending += 1
             copied += 1
@@ -364,72 +578,27 @@ def _stream_rows(spec: LoghubSpec, cur) -> int:
     return copied
 
 
-def parse_raw_line(spec: LoghubSpec, line: str) -> dict | None:
-    """Split one raw log line into fields, anchored on a known vocabulary.
-
-    Positional parsing is not safe on this corpus, and the failure is silent
-    rather than loud. BGL omits ``NodeRepeat`` on 306 lines, which shifts every
-    later field by one: a fixed offset then reads ``KERNEL`` as the type,
-    ``FATAL`` as the component and the first word of the message as the
-    severity. Nothing errors -- the rows simply land mislabelled, and a severity
-    query quietly misses them.
-
-    So the fields are located rather than counted. ``Level`` is found by its own
-    small vocabulary, guarded by ``Type`` two positions earlier, whose
-    vocabulary is only ``RAS`` and ``NULL``. Requiring both makes a false match
-    on message text essentially impossible, and it anchors every one of the
-    4,747,963 lines -- including ten that are corrupt in the source, where a
-    fragment of an earlier message is spliced into the node field.
-    """
-    parts = line.split()
-    if len(parts) < len(spec.raw_fields):
-        return None
-
-    level_index = next(
-        (
-            i
-            for i in range(6, len(parts))
-            if parts[i] in spec.anchor_values
-            and parts[i - 2] in spec.anchor_guard_values
-        ),
-        None,
-    )
-    if level_index is None:
-        return None
-
-    # Fields before the anchor are addressed backwards from it; the fixed head
-    # (label, epoch, date, node, time) is addressed forwards. NodeRepeat exists
-    # only when there is room for it between the two.
-    node_repeat_index = level_index - 3
-    return {
-        "Label": parts[0],
-        "EpochSeconds": parts[1],
-        "Date": parts[2],
-        "Node": parts[3],
-        "RawTime": parts[4],
-        "NodeRepeat": parts[node_repeat_index] if node_repeat_index > 4 else None,
-        "Type": parts[level_index - 2],
-        "Component": parts[level_index - 1],
-        "Level": parts[level_index],
-        # An empty message is a real record: 34,470 BGL rows carry every field
-        # and no message, most of them FATAL.
-        "Content": " ".join(parts[level_index + 1 :]),
-    }
-
-
 def _stream_raw_lines(spec: LoghubSpec, cur, table: str, progress=None) -> int:
-    """Parse the raw log and COPY it straight into the final table.
+    """Parse the raw log files and COPY them straight into the final table.
 
     Single pass, by design. The CSV path stages rows and then projects them,
     which doubles a corpus on disk -- acceptable for 2,000 rows, not for 743 MB.
-    Here the line is already being split in Python, so the derived timestamp and
-    template are computed in the same pass and COPY writes the finished row.
+    Here the line is already being split in Python, so the timestamp (by the
+    corpus' own :attr:`LoghubSpec.line_parser`) and the template are computed in
+    the same pass and COPY writes the finished row.
+
+    Files are read in :attr:`LoghubSpec.source_paths` order with one running
+    ``LineId`` and one skipped-line count, so several files share one table
+    without colliding ids.
 
     Memory stays flat regardless of corpus size: lines are read lazily and
     flushed every :data:`COPY_CHUNK_ROWS`.
     """
+    if spec.line_parser is None:
+        raise ValueError(f"loghub spec '{spec.dataset_id}' has no line parser")
+
+    parse = spec.line_parser
     physical = [name for name, _ in spec.columns]
-    field_count = len(spec.raw_fields)
     copied = 0
     skipped = 0
 
@@ -453,43 +622,40 @@ def _stream_raw_lines(spec: LoghubSpec, cur, table: str, progress=None) -> int:
         buffer.truncate(0)
         pending = 0
 
-    with spec.source_path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            values = parse_raw_line(spec, line)
-            if values is None:
-                # Counted rather than dropped silently, so the report can say
-                # the corpus was not wholly loadable.
-                skipped += 1
-                continue
+    for path in spec.source_paths:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.rstrip("\r\n")
+                if not line:
+                    continue
+                values = parse(line)
+                if values is None:
+                    # Counted rather than dropped silently, so the report can
+                    # say the corpus was not wholly loadable.
+                    skipped += 1
+                    continue
 
-            try:
-                epoch = int(values["EpochSeconds"])
-            except ValueError:
-                skipped += 1
-                continue
+                copied += 1
+                row = {
+                    **values,
+                    "LineId": copied,
+                    "EventTemplate": derive_template(values["Content"]),
+                }
+                writer.writerow([row.get(name) for name in physical])
+                pending += 1
 
-            content = values["Content"]
-            copied += 1
-            row = {
-                **values,
-                "LineId": copied,
-                "EventTemplate": derive_template(content),
-                "Timestamp": datetime.fromtimestamp(epoch, UTC).isoformat(sep=" "),
-            }
-            writer.writerow([row.get(name) for name in physical])
-            pending += 1
-
-            if pending >= COPY_CHUNK_ROWS:
-                flush()
-                if progress is not None:
-                    progress(copied, skipped)
-        flush()
+                if pending >= COPY_CHUNK_ROWS:
+                    flush()
+                    if progress is not None:
+                        progress(copied, skipped)
+    flush()
 
     if skipped:
-        logger.warning("Skipped %d unparseable lines in %s", skipped, spec.source_path)
+        logger.warning(
+            "Skipped %d unparseable lines in %s",
+            skipped,
+            ", ".join(str(p) for p in spec.source_paths),
+        )
     return copied
 
 
@@ -509,24 +675,33 @@ def load(
     staging = f"{table}_staging"
     raw = spec.source_kind is SourceKind.RAW_LINES
 
-    if not spec.source_path.exists():
-        hint = (
-            f"Set {spec.path_env} to the file, or place {spec.raw_name} in "
-            f"{DATA_DIR}."
-            if spec.path_env
-            else f"Place {spec.csv_name} in {DATA_DIR}."
-        )
+    missing = [path for path in spec.source_paths if not path.exists()]
+    if missing:
+        names = ", ".join(str(path) for path in missing)
+        if raw and spec.path_env and len(spec.raw_names) == 1:
+            hint = (
+                f"Set {spec.path_env} to the file, or place {spec.raw_names[0]} "
+                f"in {DATA_DIR}."
+            )
+        elif raw:
+            hint = (
+                "Place these files in "
+                f"{DATA_DIR}: {', '.join(spec.raw_names)}."
+            )
+        else:
+            hint = f"Place {spec.csv_name} in {DATA_DIR}."
         raise refuse(
-            f"{spec.source_path} is not present.",
+            f"Not present: {names}.",
             hint,
             code="missing_source",
             dataset=spec.dataset_id,
+            missing=[str(path) for path in missing],
         )
 
     report: dict = {
         "dataset": spec.dataset_id,
         "table": table,
-        "source": str(spec.source_path),
+        "source": ", ".join(str(path) for path in spec.source_paths),
         "source_kind": spec.source_kind.value,
     }
 
@@ -716,11 +891,12 @@ def status(dataset: Dataset | str = "bgl") -> dict:
 
 
 def main() -> None:
-    """Load a loghub corpus and embed its templates.
+    """Load a loghub corpus and, unless ``--no-embed``, embed its templates.
 
-    Separate from ``backend.db.setup`` on purpose: that module drops and
-    recreates the OpenStack table, which is not something loading a different
-    corpus should ever do.
+    Each corpus is one table, dropped and rebuilt on every run: ``openstack``
+    from its three nova logs, ``bgl`` from ``BGL.log``, and the ``*_2k`` specs
+    from loghub's structured samples (which replace the same table).
+    ``bash ./setup.sh`` runs this for ``openstack`` and then ``bgl``.
     """
     import argparse
     import json

@@ -8,9 +8,9 @@ matches, then popularity.
 
 A leading selector is required and scopes the lookup to one canonical field. The
 selector map lives in the **dataset registry**, not here, so each corpus exposes
-only the selectors it can serve: ``@`` service, ``#`` event id, ``^`` template,
-``!`` entity id, ``$`` message text. A selector a corpus lacks suggests nothing
-rather than erroring, and a query with no leading selector matches nothing.
+only the selectors it can serve: ``@`` service, ``^`` template, ``$`` message
+text. A selector a corpus lacks suggests nothing rather than erroring, and a
+query with no leading selector matches nothing.
 
 Suggestions are only ever served from an **inverted index**. A corpus without one
 -- the remote OTel tier -- returns nothing, so a keystroke can never trigger a
@@ -20,7 +20,8 @@ Suggestions are ranked case-insensitively by default -- a value is never preferr
 merely for matching the typed case. A ``!`` placed immediately after the selector
 switches to a case-sensitive ranking, where values whose case matches the typed
 text rank first (see :func:`_order_keys`). The modifier is stripped before
-matching, so ``@!nova`` searches the same values as ``@nova``.
+matching, so ``@!nova`` searches the same values as ``@nova``. ``!`` is only ever
+this modifier; it is not a selector.
 
 ``$`` searches the message text. Because that column is word-indexed it is
 handled separately: suggestions are whole lines rather than the single words the
@@ -28,6 +29,11 @@ shared ``ts_dict_agg`` recipe would return, and each carries its record id in
 place of a count (see :func:`_content_matches`), so the UI can insert a
 reference instead of pasting the whole message. A corpus with no record id
 cannot offer that, so ``$`` is unavailable there.
+
+:func:`auto_complete` -- the only public entry point -- runs the per-corpus
+lookup (:func:`_auto_complete_dataset`) over every local corpus loaded from a
+``.log`` file and merges the results, tagging each ``$`` suggestion with the
+dataset its record id belongs to. There is no public single-dataset lookup.
 """
 
 import logging
@@ -36,7 +42,13 @@ import re
 from psycopg2 import sql
 
 from backend.db.connection import query_runner
-from backend.db.datasets import Capability, Dataset, resolve
+from backend.db.datasets import (
+    Capability,
+    Dataset,
+    DatasetKind,
+    datasets_with,
+    resolve,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +170,15 @@ def _content_matches(
 
 
 @query_runner
-def auto_complete(
+def _auto_complete_dataset(
     query: str,
     dataset: str | None = None,
 ) -> tuple[sql.Composable, list[str | int]]:
-    """Return the top ``_LIMIT`` indexed values that contain ``query``.
+    """Return one corpus' top ``_LIMIT`` indexed values that contain ``query``.
+
+    Private: the public :func:`auto_complete` calls this once per local corpus
+    and merges the results. Each corpus has its own index relations and column
+    names, so the SQL is necessarily built per dataset.
 
     Suggestions are ranked so values that start with ``query`` come first, then
     values whose case matches, then values carried by more live documents. If
@@ -278,3 +294,96 @@ def auto_complete(
     # branch, then the ORDER BY's ranking keys.
     params = [contains] + words + order_params
     return query_sql, params
+
+
+# --- Public entry point: suggestions merged across the local corpora ----------
+#
+# Every caller (the HTTP route, the MCP tool, the chat box) is served from every
+# corpus loaded from a local ``.log`` file (``openstack``, ``bgl``). Each corpus
+# is queried with :func:`_auto_complete_dataset` above and the results are merged
+# here; the remote OTel tiers are never touched, so a keystroke cannot reach S3.
+
+
+def local_datasets() -> tuple[Dataset, ...]:
+    """Corpora the merged type-ahead reads: local tables with the index pair."""
+    return tuple(
+        ds
+        for ds in datasets_with(Capability.AUTO_COMPLETE)
+        if ds.kind is DatasetKind.NATIVE_TABLE
+    )
+
+
+def _merge_rank(
+    rows: list[dict], query: str, case_sensitive: bool
+) -> list[dict]:
+    """Order merged suggestions as the per-dataset SQL does, then cap them.
+
+    Values starting with the typed text first, then (case-sensitive mode only)
+    values whose case matches, then popularity for field values. ``$`` lines
+    carry a record id instead of a count; ids from different corpora are not
+    comparable, so they are kept in corpus order behind the same match keys.
+    """
+    lowered = query.lower()
+
+    def sort_key(indexed: tuple[int, dict]) -> tuple:
+        position, row = indexed
+        suggestion = str(row.get("suggestion") or "")
+        starts = not suggestion.lower().startswith(lowered)
+        case_miss = case_sensitive and query not in suggestion
+        if "line_id" in row:
+            return (starts, case_miss, 0, position)
+        return (starts, case_miss, -int(row.get("count") or 0), suggestion)
+
+    ranked = sorted(enumerate(rows), key=sort_key)
+    return [row for _, row in ranked[:_LIMIT]]
+
+
+def auto_complete(query: str) -> list[dict]:
+    """Suggestions for ``query`` merged across every local corpus.
+
+    The only public type-ahead entry point. Identical field values from different corpora become one suggestion with
+    their counts summed. ``$`` lines are never merged -- a record id is only
+    meaningful within its corpus -- and each carries the ``dataset`` it belongs
+    to, which the chat box inserts as ``Line ID: n (dataset)``. A corpus whose
+    table is not loaded yet is skipped with a warning instead of failing the
+    keystroke.
+    """
+    if not query:
+        return []
+
+    bare, case_sensitive = _resolve_modifier(query[1:])
+
+    values: dict[str, dict] = {}
+    lines: list[dict] = []
+
+    for ds in local_datasets():
+        try:
+            rows = list(_auto_complete_dataset(query, ds.id))
+        except Exception as exc:  # noqa: BLE001 -- e.g. the table is not loaded
+            logger.warning(
+                "Auto-complete skipped '%s': %s", ds.id, exc, exc_info=False
+            )
+            continue
+
+        for row in rows:
+            if row.get("line_id") is not None:
+                lines.append(
+                    {
+                        "suggestion": row["suggestion"],
+                        "line_id": row["line_id"],
+                        "dataset": ds.id,
+                    }
+                )
+                continue
+
+            suggestion = row["suggestion"]
+            merged = values.get(suggestion)
+            if merged is None:
+                values[suggestion] = {
+                    "suggestion": suggestion,
+                    "count": int(row.get("count") or 0),
+                }
+            else:
+                merged["count"] += int(row.get("count") or 0)
+
+    return _merge_rank([*values.values(), *lines], bare, case_sensitive)

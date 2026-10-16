@@ -52,23 +52,63 @@ def test_unauthenticated_requests_are_rejected(client):
     )
 
 
-def test_auto_complete_returns_suggestions_for_authenticated_user(
+def test_auto_complete_returns_merged_suggestions_for_authenticated_user(
     client, api_module, registered, monkeypatch
 ):
-    # Stub the DB lookup: this exercises the route, not the query layer.
-    # The route now passes a dataset through, so the stub accepts it.
+    # Stub the DB lookup: this exercises the route, not the query layer. The
+    # route always serves the merged lookup; it takes no dataset.
     monkeypatch.setattr(
         api_module,
         "auto_complete",
-        lambda query, dataset=None: [{"suggestion": f"match:{query}", "count": 2}],
+        lambda query: [{"suggestion": f"merged:{query}", "count": 5}],
     )
     response = client.get(
         "/auto-complete", params={"query": "@nova"}, headers=registered["headers"]
     )
     assert response.status_code == 200
     assert response.json() == {
-        "suggestions": [{"suggestion": "match:@nova", "count": 2}]
+        "suggestions": [{"suggestion": "merged:@nova", "count": 5}]
     }
+
+
+def test_auto_complete_never_goes_through_mcp(
+    client, api_module, registered, monkeypatch
+):
+    # Auto-complete is not an MCP tool: even with TOOLS_TRANSPORT=mcp the route
+    # answers in-process and never touches the bridge.
+    import backend.pipeline.tools.mcp_bridge as mcp_bridge
+
+    monkeypatch.setenv("TOOLS_TRANSPORT", "mcp")
+    monkeypatch.setattr(
+        mcp_bridge,
+        "get_mcp_bridge",
+        lambda: pytest.fail("auto-complete must not use the MCP bridge"),
+    )
+    monkeypatch.setattr(
+        api_module, "auto_complete", lambda query: [{"suggestion": "x", "count": 1}]
+    )
+    response = client.get(
+        "/auto-complete", params={"query": "@x"}, headers=registered["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json() == {"suggestions": [{"suggestion": "x", "count": 1}]}
+
+
+def test_auto_complete_ignores_a_dataset_parameter(
+    client, api_module, registered, monkeypatch
+):
+    # There is no single-dataset lookup: an extra query parameter is ignored.
+    seen: list[str] = []
+    monkeypatch.setattr(
+        api_module, "auto_complete", lambda query: seen.append(query) or []
+    )
+    response = client.get(
+        "/auto-complete",
+        params={"query": "@nova", "dataset": "bgl"},
+        headers=registered["headers"],
+    )
+    assert response.status_code == 200
+    assert seen == ["@nova"]
 
 
 def test_auth_flow_register_login_logout(client):

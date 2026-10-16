@@ -192,11 +192,21 @@ class GetLogByLineId(_DatasetScoped):
 
     Only works on a corpus that has one. The raw OTel corpus does not, so this
     is refused there with a pointer to the datasets that do.
+
+    A ``Line ID: n (dataset)`` reference in the user's message -- what the chat
+    box inserts for a picked log line -- names both arguments: ``line_id=n`` and
+    ``dataset``. Ids are only unique within one corpus.
     """
 
     line_id: Annotated[
         int,
-        Field(ge=1, description="Primary-key id of the row to fetch."),
+        Field(
+            ge=1,
+            description=(
+                "Primary-key id of the row to fetch. For a 'Line ID: n (dataset)' "
+                "reference, pass n here and that dataset as `dataset`."
+            ),
+        ),
     ]
 
 

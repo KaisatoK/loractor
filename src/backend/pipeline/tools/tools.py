@@ -57,7 +57,9 @@ def get_log_by_line_id_tool(
 ) -> dict:
     """Fetch one complete log row by its primary-key id.
 
-    Use it to resolve a "Line ID: n" reference into the whole record. Only
+    Use it to resolve a "Line ID: n (dataset)" reference -- what the chat box
+    inserts for a picked log line -- into the whole record: pass ``line_id=n``
+    and ``dataset=<dataset>``. Ids are unique only within one corpus. Only
     corpora that have a primary key support this; the raw OTel corpus does not.
     """
     return execute_database_tool(

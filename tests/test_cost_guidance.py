@@ -94,7 +94,7 @@ def test_dataset_catalog_describes_each_corpus_without_identifiers():
         assert "severity_values" in entry
 
     blob = repr(catalog)
-    for identifier in ("log_timestamp", "log_idx", "pid_text", "SeverityText"):
+    for identifier in ("openstack_idx", "LineId", "EventTemplate", "SeverityText"):
         assert identifier not in blob, identifier
 
 

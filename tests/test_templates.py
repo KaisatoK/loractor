@@ -195,20 +195,19 @@ def test_a_templated_corpus_falls_back_to_lexical_without_vectors(monkeypatch):
     assert "BM25" in text
 
 
-def test_openstack_keeps_its_per_row_embeddings(monkeypatch):
-    """The per-row path must not be replaced by the template path.
-
-    OpenStack is 2,000 rows, where per-row embedding is cheap and strictly more
-    precise. A regression here would silently coarsen its search.
-    """
+def test_openstack_has_no_per_row_embeddings(monkeypatch):
+    """OpenStack is loaded with ``--no-embed`` and declares no VECTOR capability,
+    so search never takes the per-row hybrid path. It is lexical until template
+    vectors are built for it, exactly like BGL."""
     from backend.db import query
 
-    monkeypatch.setattr(templates, "has_template_vectors", lambda _d: True)
+    monkeypatch.setattr(templates, "has_template_vectors", lambda _d: False)
     text = render(
         query.search_logs.__wrapped__("spawn failure", dataset="openstack", limit=3)[0]
     )
+    assert "embedding <=>" not in text
     assert "openstack_templates" not in text
-    assert "embedding <=>" in text
+    assert "BM25" in text
 
 
 def test_the_template_mode_discloses_itself_in_the_stats(monkeypatch):

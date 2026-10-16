@@ -1,11 +1,6 @@
 """Rendering helpers for assistant answers that embed [[RESULT:Rx]] markers.
-
-The pipeline serializes a structured answer into the marker protocol, so markers
-are normally well formed and alone on their own line. The renderer still tolerates
-the sloppy variants a model can produce — inline markers, wrapped in parentheses,
-bold, quotes, or CJK/fullwidth brackets — and canonicalizes them: the prose is
-cleaned of marker decoration and each table is placed in reading order (an inline
-marker's table follows its paragraph).
+Markers are normally well formed on their own line, but sloppy variants (inline,
+wrapped, bold, quotes, CJK brackets) are tolerated and canonicalized in order.
 """
 
 import re
@@ -45,12 +40,8 @@ _LINE_DECORATION = " \t\r()[]{}<>（）［］【】「」『』\"'“”‘’*_
 
 def canonicalize(text: str) -> list[tuple[str, str]]:
     """Split an answer into ordered ``("text" | "table", value)`` blocks.
-
-    Marker-only lines become table blocks in place; markers embedded in prose are
-    removed (with their wrapper punctuation) and their tables are emitted after
-    the surrounding paragraph. Unknown handling (missing ids, dedupe) is left to
-    the caller.
-    """
+    Marker-only lines become table blocks in place; inline markers are stripped
+    (with wrappers), their tables emitted after; unknown handling is the caller's."""
     blocks: list[tuple[str, str]] = []
     text_lines: list[str] = []
     inline_tables: list[str] = []

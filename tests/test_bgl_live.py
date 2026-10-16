@@ -151,15 +151,20 @@ def test_fetch_by_record_id_returns_one_row(loaded):
 
 
 def test_every_selector_returns_suggestions(loaded):
-    """All five selectors, since a column missing from the token index fails
+    """Every offered selector, since a column missing from the token index fails
     only at query time."""
-    # Four selectors, not five: the raw corpus carries no event ids, so '#' is
-    # deliberately not offered.
-    for query in ("@KERN", "^instruction", "!R02", "$parity"):
-        suggestions = db.auto_complete(query, dataset="bgl")
+    # Three selectors: the raw corpus carries no event ids, so '#' is not
+    # offered, and '!' is only the case modifier, never a selector. Checked per
+    # corpus through the private lookup, since the merged one hides which
+    # corpus answered.
+    from backend.db.auto_complete import _auto_complete_dataset
+
+    for query in ("@KERN", "^instruction", "$parity"):
+        suggestions = _auto_complete_dataset(query, dataset="bgl")
         assert suggestions, query
 
     assert "#" not in resolve("bgl").selectors
+    assert "!" not in resolve("bgl").selectors
 
 
 def test_the_corpus_stays_well_inside_its_allowance(loaded):

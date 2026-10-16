@@ -4,9 +4,9 @@ Offline: registrations are data, and SQL shapes are rendered by
 ``tests/sql_render.py`` rather than by a database.
 
 The load-bearing test here is
-:func:`test_openstack_registration_matches_the_pre_registry_constants`: the
-registry must reproduce the original hardcoded behaviour exactly, because the
-OpenStack demo has to keep answering identically.
+:func:`test_openstack_registration_matches_the_loghub_table`: the registry must
+describe the single ``openstack`` table exactly as the loghub loader builds it,
+because every query is composed from these declarations.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from __future__ import annotations
 import pytest
 
 from backend.db import datasets as ds
-from backend.db.config import TABLE_NAME
 from sql_render import normalized
 
 
@@ -44,38 +43,63 @@ def test_register_rejects_a_duplicate_id():
         ds.register(ds.OPENSTACK)
 
 
-# --- The compatibility contract ---------------------------------------------
-def test_openstack_registration_matches_the_pre_registry_constants():
-    """Same table, same indexes, same columns as before the registry existed."""
+# --- The OpenStack registration ---------------------------------------------
+def test_openstack_registration_matches_the_loghub_table():
+    """One table, loaded by loghub from three files, with loghub column names."""
     d = ds.resolve("openstack")
 
-    assert d.sources == (TABLE_NAME,)
-    assert d.index_name == f"{TABLE_NAME}_idx"
-    assert d.token_index_name == f"{TABLE_NAME}_token_idx"
+    assert d.kind is ds.DatasetKind.NATIVE_TABLE
+    assert d.sources == ("openstack",)
+    assert d.index_name == "openstack_idx"
+    assert d.token_index_name == "openstack_token_idx"
+    assert d.ts_cast == "timestamptz"
+    assert d.row_estimate == 207_820
 
-    # Column names the original queries used verbatim.
-    assert d.column_for(ds.TS) == "log_timestamp"
-    assert d.column_for(ds.SEVERITY) == "category"
-    assert d.column_for(ds.SERVICE) == "service"
-    assert d.column_for(ds.MESSAGE) == "content"
-    assert d.column_for(ds.ENTITY_ID) == "pid"
-    assert d.column_for(ds.TEMPLATE) == "event_template"
-    assert d.column_for(ds.EVENT_ID) == "event_id"
-    assert d.column_for(ds.RECORD_ID) == "line_id"
+    # The same Level/Component naming BGL uses.
+    assert d.column_for(ds.TS) == "Timestamp"
+    assert d.column_for(ds.SEVERITY) == "Level"
+    assert d.column_for(ds.SERVICE) == "Component"
+    assert d.column_for(ds.MESSAGE) == "Content"
+    assert d.column_for(ds.ENTITY_ID) == "Pid"
+    assert d.column_for(ds.TEMPLATE) == "EventTemplate"
+    assert d.column_for(ds.RECORD_ID) == "LineId"
+    # The raw logs carry no event id, so none is mapped.
+    assert not d.has_field(ds.EVENT_ID)
 
 
-def test_openstack_keeps_its_original_severity_vocabulary():
-    # Upper case here, unlike the OTel corpus. Both are measured, not assumed.
-    assert ds.resolve("openstack").severity_values == ("INFO", "WARNING", "ERROR")
+def test_openstack_pid_has_no_text_mirror():
+    # No PidText column: the integer pid is neither indexed nor suggestable.
+    entity = ds.resolve("openstack").field(ds.ENTITY_ID)
+    assert entity.autocomplete_column is None
+    assert not entity.text_indexed and not entity.token_indexed
 
 
-def test_openstack_keeps_its_original_selector_map():
+def test_openstack_severity_vocabulary_includes_critical():
+    assert ds.resolve("openstack").severity_values == (
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    )
+
+
+def test_openstack_selector_map():
     d = ds.resolve("openstack")
     assert d.selector_field("@") == ds.SERVICE
-    assert d.selector_field("#") == ds.EVENT_ID
     assert d.selector_field("^") == ds.TEMPLATE
-    assert d.selector_field("!") == ds.ENTITY_ID
     assert d.selector_field("$") == ds.MESSAGE
+    # No event-id selector, and '!' is only the case modifier, never a selector.
+    assert d.selector_field("#") is None
+    assert d.selector_field("!") is None
+
+
+def test_no_dataset_offers_the_bang_selector():
+    for dataset in ds.all_datasets():
+        assert "!" not in dataset.selectors, dataset.id
+
+
+def test_default_dataset_is_openstack():
+    assert ds.DEFAULT_DATASET_ID == "openstack"
 
 
 def test_unknown_selector_resolves_to_none():
@@ -84,17 +108,17 @@ def test_unknown_selector_resolves_to_none():
 
 # --- Relations ---------------------------------------------------------------
 def test_native_table_scans_the_table_itself():
-    assert normalized(ds.resolve("openstack").scan_relation()) == f'"{TABLE_NAME}"'
+    assert normalized(ds.resolve("openstack").scan_relation()) == '"openstack"'
 
 
 def test_native_table_searches_the_index_relation():
     # Search goes through the index, never the base table.
-    assert normalized(ds.resolve("openstack").search_relation()) == f'"{TABLE_NAME}_idx"'
+    assert normalized(ds.resolve("openstack").search_relation()) == '"openstack_idx"'
 
 
 # --- Fields ------------------------------------------------------------------
 def test_sql_for_quotes_a_column_as_an_identifier():
-    assert normalized(ds.resolve("openstack").sql_for(ds.MESSAGE)) == '"content"'
+    assert normalized(ds.resolve("openstack").sql_for(ds.MESSAGE)) == '"Content"'
 
 
 def test_expression_fields_render_verbatim():
@@ -113,7 +137,7 @@ def test_missing_field_raises_and_lists_what_is_available():
         d.field("not_a_field")
     message = str(excinfo.value)
     assert "openstack" in message
-    assert "content" not in message  # lists canonical names, not columns
+    assert "Content" not in message  # lists canonical names, not columns
     assert ds.MESSAGE in message
 
 
@@ -122,14 +146,15 @@ def test_openstack_declares_the_capabilities_it_actually_has():
     d = ds.resolve("openstack")
     for capability in (
         ds.Capability.BM25,
-        ds.Capability.VECTOR,
         ds.Capability.RECORD_ID,
         ds.Capability.EXACT_COUNTS,
         ds.Capability.TEMPLATES,
         ds.Capability.AUTO_COMPLETE,
     ):
         assert d.supports(capability), capability
-    # The 2k-row demo corpus is not a sweep target.
+    # Loaded with --no-embed: no per-row vectors.
+    assert not d.supports(ds.Capability.VECTOR)
+    # A local corpus is not a sweep target.
     assert not d.supports(ds.Capability.CHUNK_SWEEP)
 
 
@@ -139,7 +164,8 @@ def test_exact_counts_shortcut_matches_the_capability():
 
 
 def test_datasets_with_filters_by_capability():
-    assert ds.OPENSTACK in ds.datasets_with(ds.Capability.VECTOR)
+    assert ds.OPENSTACK in ds.datasets_with(ds.Capability.AUTO_COMPLETE)
+    assert ds.OPENSTACK not in ds.datasets_with(ds.Capability.VECTOR)
 
 
 # --- Model-facing catalog ----------------------------------------------------
@@ -156,8 +182,8 @@ def test_catalog_describes_every_dataset_without_leaking_identifiers():
     # No table, index, or column name may reach the model through the catalog.
     # Checked structurally: the keys that hold identifiers must be absent, and
     # the unambiguous identifier strings must not appear anywhere in the values.
-    # (A naive substring check on TABLE_NAME would false-positive on the word
-    # "log" in the prose description.)
+    # (A naive substring check on a table name would false-positive on the
+    # dataset id, which the catalog is keyed by.)
     for entry in catalog.values():
         assert "sources" not in entry
         assert "index_name" not in entry
@@ -165,12 +191,10 @@ def test_catalog_describes_every_dataset_without_leaking_identifiers():
 
     blob = repr(catalog)
     for identifier in (
-        "log_timestamp",
-        "log_idx",
-        "log_token_idx",
-        "event_template",
-        "pid_text",
-        "line_id",
+        "openstack_idx",
+        "openstack_token_idx",
+        "EventTemplate",
+        "LineId",
     ):
         assert identifier not in blob, identifier
 

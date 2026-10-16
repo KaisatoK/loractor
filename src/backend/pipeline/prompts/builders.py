@@ -150,7 +150,6 @@ QUERYABLE_TARGETS = [
     "dataset or corpus (which system's logs)",
     "service",
     "entity id (process id, trace id, or node)",
-    "event id",
     "event template or error/message text",
     "severity",
     "time window",

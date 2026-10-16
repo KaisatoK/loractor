@@ -5,7 +5,4 @@ __pycache__
 .data/
 .opencode/
 .kiro/
-
-# Full loghub corpora are hundreds of MB; keep them out of the repo
-src/backend/data/*.log
-src/backend/data/BGL.log
+*.log

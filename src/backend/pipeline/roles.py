@@ -8,14 +8,14 @@ ROLE_OBJECTIVES: dict[RoleName, str] = {
         "the supporting log evidence, and determine the next technical action required "
         "to resolve or further diagnose the issue. Answer specifically and technically. "
         "Be evidence-first, chronological, and traceable: include timestamps, trace IDs, "
-        "request IDs, services, hosts, error codes, and log sources when available. "
+        "request IDs, components, hosts, error codes, and log sources when available. "
         "Separate confirmed facts from likely causes and uncertainties. Structure the "
         "answer as: What happened; Most likely cause; Relevant evidence; Event timeline; "
         "Confidence and uncertainties; Recommended next debugging steps."
     ),
     "team_lead": (
         "Help the team lead understand recurring failures, identify patterns across "
-        "services and time periods, assess operational impact, and determine which "
+        "components and time periods, assess operational impact, and determine which "
         "engineering improvement would prevent the most repeated incidents. Focus on "
         "aggregated, comparative, quantitative findings: counts, rates, trends, and "
         "affected users or requests when available. Prioritize recurring problems by "

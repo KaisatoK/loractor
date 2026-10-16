@@ -85,10 +85,9 @@ def get_messages(token: str, chat_id: str) -> list:
 
 def auto_complete(token: str, query: str) -> list[dict]:
     """Type-ahead suggestions from the log index's field values.
-
-    A leading selector in ``query`` scopes it to one column: ``@`` for service,
-    ``#`` for event_id and ``$`` for event_template.
-    """
+    A leading selector in ``query`` scopes it to one field: ``@`` component,
+    ``^`` event template, ``$`` content. No dataset is sent, so the backend
+    merges every local corpus; a ``$`` suggestion carries its ``dataset``."""
     response = requests.get(
         f"{API_BASE}/auto-complete",
         params={"query": query},
@@ -136,9 +135,7 @@ def stream_chat(
     history: list[dict],
 ) -> Iterator[dict]:
     """Stream chat events from the backend as decoded dicts.
-
-    Retained for compatibility; the UI now uses ``start_investigation`` so
-    generation outlives the script run.
+    Retained for compatibility; the UI now uses ``start_investigation``.
     """
     with requests.post(
         STREAM_URL,

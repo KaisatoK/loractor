@@ -163,11 +163,8 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
 @st.fragment(run_every="0.5s")
 def render_active_run(container, current_chat, token: str, chat_id: str) -> None:
     """Watch the chat's in-flight investigation and render it live.
-
-    A fragment (not the whole script) polls, so a periodic refresh never reruns
-    the page; state is keyed by chat id, so navigating away and back re-attaches
-    to the same run instead of cancelling it.
-    """
+    A fragment (not the whole script) polls, so refreshes never rerun the page;
+    state keyed by chat id re-attaches on navigation instead of cancelling."""
     run = st.session_state.active_runs.get(chat_id)
     if not run:
         return

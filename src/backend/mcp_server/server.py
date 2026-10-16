@@ -14,7 +14,6 @@ from typing import Any
 from fastmcp import FastMCP
 
 from backend.db import (
-    auto_complete,
     compare_periods,
     count_by_field,
     get_field_values,
@@ -169,12 +168,6 @@ def get_trend_tool(start_time: str, end_time: str, type: tuple[str, str],
         lambda: get_trend(v["start_time"], v["end_time"], field, value,
                           v["dataset"], v["bucket"], v["category"]),
     )
-
-
-@mcp.tool(name="auto_complete")
-def auto_complete_tool(query: str, dataset: str = DEFAULT_DATASET_ID) -> dict:
-    """Suggest indexed log values for a selector-prefixed query."""
-    return _run(f"auto-complete '{query}'", lambda: auto_complete(query, dataset))
 
 
 _SKILLS_ROOT = Path(MCP_SKILLS_ROOT) if MCP_SKILLS_ROOT else Path(__file__).resolve().parents[3] / "skills"

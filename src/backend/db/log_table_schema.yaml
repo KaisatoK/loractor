@@ -1,63 +1,147 @@
-table: log
 description: >
   Parsed system log records. Each row is one log line split into structured
-  fields. This document is context only: it explains what the data means.
-  Content overview: OpenStack Nova logs from a single day, 2017-05-16,
-  covering the first 15 minutes after midnight (00:00:00 to 00:15:00).
+  fields. This document is context only: it explains what the data means. Two
+  local corpora are described here: OpenStack Nova logs (nova-api,
+  nova-compute, and related components) and Blue Gene/L supercomputer RAS logs.
+  Other corpora (the remote OpenTelemetry tiers) are described by the dataset
+  catalog, not here.
 
-primary_key: line_id
+datasets:
+  description: >
+    Every query tool takes a ``dataset`` id, never a table name. Pick the
+    dataset the request is about. Tool arguments use canonical names that map
+    onto the columns below in both datasets: ``category`` (severity) is the
+    ``Level`` column, ``service`` is the ``Component`` column.
+  names:
+    - name: openstack
+      description: >
+        OpenStack Nova logs from three runs -- two normal runs and one run
+        containing failures/anomalies -- loaded one after another into one
+        table (207,820 rows). LineId continues across the three runs, so it is
+        unique in the table; nothing records which run a row came from. The
+        default dataset.
+    - name: bgl
+      description: >
+        Blue Gene/L supercomputer RAS (reliability, availability,
+        serviceability) log, 4,747,963 rows spanning seven months of 2005-2006.
+        The dataset for long-range questions.
 
-columns:
-  - name: line_id
-    type: INT
-    description: Unique ID of the log line. Follows the original file order.
-  - name: log_record
-    type: TEXT
-    description: Where and when the log line came from.
-  - name: log_date
-    type: DATE
-    description: Date of the event (no time part) with format YYYY-MM-DD.
-  - name: log_time
-    type: TIME
-    description: Time of day of the event (no date part) with format HH:MM:SS.
-  - name: log_timestamp
-    type: TIMESTAMP
-    description: log_date + log_time combined with format YYYY-MM-DD HH:MM:SS.
-  - name: pid
-    type: INT
-    description: Process ID that emitted the line.
-  - name: pid_text
-    type: VARCHAR
-    description: >
-      Text mirror of pid, present only so type-ahead search can suggest process
-      IDs. Filter and aggregate on pid; this column is not for queries.
-  - name: category
-    type: VARCHAR(50)
-    description: Log level or type (INFO, WARNING, ERROR).
-  - name: service
-    type: TEXT
-    description: Service or module that produced the line.
-  - name: addr
-    type: TEXT
-    description: Source address. May be NULL or empty.
-  - name: content
-    type: TEXT
-    description: Free-text log message without the header fields.
-  - name: event_id
-    type: VARCHAR(50)
-    description: >
-      ID of the log template this line matches. Same event_id means same
-      kind of event.
-  - name: event_template
-    type: TEXT
-    description: >
-      Generalized message pattern for event_id, with variable parts replaced
-      by placeholders. One template per event_id.
+tables:
+  - name: openstack
+    primary_key: LineId
+    columns:
+      - name: LineId
+        type: BIGINT
+        description: >
+          Unique ID of the log line, in load order (the three runs in sequence).
+          Use it to fetch one line.
+      - name: Logrecord
+        type: VARCHAR
+        description: The nova log file the line came from (for example nova-api.log.1.2017-05-16_13:53:08).
+      - name: Date
+        type: DATE
+        description: Calendar date of the event (no time part).
+      - name: Time
+        type: TIME
+        description: Clock time of day of the event (no date part).
+      - name: Pid
+        type: BIGINT
+        description: Process ID that emitted the line.
+      - name: Level
+        type: VARCHAR
+        description: >
+          Log level: INFO, WARNING, ERROR, or CRITICAL. Tools filter on it
+          through their ``category`` parameter.
+      - name: Component
+        type: VARCHAR
+        description: >
+          Component (service or module) that produced the line, for example
+          nova.compute.manager. Tools refer to it as ``service``.
+      - name: ADDR
+        type: VARCHAR
+        description: >
+          Request context from the line's bracketed header token (brackets
+          stripped): the request ID (``req-<uuid>``), then the user ID and
+          project/tenant ID, with ``-`` for absent fields. A bare ``-`` means no
+          request context; NULL when the line has no bracketed token (for
+          example traceback lines). Not a network address: for API lines the
+          client IP is at the start of ``Content``.
+      - name: Content
+        type: VARCHAR
+        description: Free-text log message without the header fields.
+      - name: EventTemplate
+        type: VARCHAR
+        description: >
+          The message with its variable parts (numbers, hex ids, node names)
+          replaced by ``<*>``, derived at load time. Lines that differ only in
+          those values share one template, so it identifies the kind of event.
+      - name: Timestamp
+        type: TIMESTAMPTZ
+        description: The event's Date and Time combined into one timestamp, in UTC.
 
-relationships:
-  - content is event_template with its variables filled in
+  - name: bgl
+    primary_key: LineId
+    columns:
+      - name: LineId
+        type: BIGINT
+        description: Unique ID of the log line, in file order. Use it to fetch one line.
+      - name: Label
+        type: VARCHAR
+        description: >
+          Anomaly ground truth: ``-`` for a normal line, otherwise the alert
+          category the line was tagged with (for example APPREAD, KERNDTLB).
+      - name: EpochSeconds
+        type: BIGINT
+        description: The event time as Unix epoch seconds, as recorded in the log.
+      - name: Date
+        type: VARCHAR
+        description: Calendar date as written in the log (for example 2005.06.03).
+      - name: Node
+        type: VARCHAR
+        description: >
+          The hardware location that reported the event (for example
+          R02-M1-N0-C:J12-U11). High cardinality: it behaves like an identifier,
+          not a category.
+      - name: RawTime
+        type: VARCHAR
+        description: >
+          The full date and time as written in the log
+          (2005-06-03-15.42.50.675872). Not parseable as a timestamp; use
+          Timestamp instead.
+      - name: NodeRepeat
+        type: VARCHAR
+        description: >
+          The reporting node repeated, as the log writes it. NULL on the lines
+          where the log omits it.
+      - name: Type
+        type: VARCHAR
+        description: Record type, RAS or NULL.
+      - name: Component
+        type: VARCHAR
+        description: >
+          Subsystem that produced the line (for example KERNEL, APP, MMCS).
+          Tools refer to it as ``service``.
+      - name: Level
+        type: VARCHAR
+        description: >
+          Severity: INFO, WARNING, ERROR, SEVERE, FATAL, or FAILURE. Tools
+          filter on it through their ``category`` parameter.
+      - name: Content
+        type: VARCHAR
+        description: Free-text log message without the header fields. May be empty.
+      - name: EventTemplate
+        type: VARCHAR
+        description: >
+          The message with its variable parts (numbers, hex ids, node names)
+          replaced by ``<*>``, derived at load time. Lines that differ only in
+          those values share one template, so it identifies the kind of event.
+      - name: Timestamp
+        type: TIMESTAMPTZ
+        description: The event time, converted from EpochSeconds, in UTC.
 
 agent_guidelines:
   - Use this document only to understand the meaning of the fields.
+  - Choose the dataset the request concerns and pass its id as ``dataset`` to each tool.
   - Retrieve log data only through the tools you have been given.
   - Only refer to the columns listed above.
+  - Time windows are interpreted in UTC.

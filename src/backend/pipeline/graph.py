@@ -136,10 +136,8 @@ def general_node(state: PipelineState) -> PipelineState:
 
 
 def _last_agent_summary(messages) -> str:
-    """The investigator's final summary: the last non-empty assistant text.
-
-    Walk the transcript backwards and return the last ``AIMessage`` text (empty
-    string when there is none).
+    """The investigator's final summary: the last non-empty ``AIMessage`` text
+    walking the transcript backwards (empty string when there is none).
     """
     for message in reversed(messages):
         if getattr(message, "type", "") != "ai":
@@ -159,19 +157,14 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
         }
     )
 
-    # Raw rows stay on the agent's own transcript — the database tools now run
-    # on the main agent, so the records are collected from its messages. Each
-    # record carries its canonical inline `R{n}` id and `row_count`, and the same
-    # records feed both the report's catalog and the answer tables, so the ids
-    # the report cites and the ids rendered are guaranteed identical. The
-    # {id, tool_name, arguments, row_count, rows} display contract is consumed by
-    # `serialize_answer`/`ui/rendering.py`.
+    # Raw rows stay on the agent's transcript (DB tools run on the main agent),
+    # collected from its messages. Each record's inline `R{n}` id/`row_count`
+    # feeds both the report catalog and answer tables, so the ids stay identical.
     records = collect_tool_results(result["messages"])
 
-    # The report builder (``generate_evidence_report``) makes a direct DeepSeek
-    # call, with no structured-output wrapper, from the agent's summary plus the
-    # captured results. A provider or validation failure propagates rather than
-    # being swallowed.
+    # ``generate_evidence_report`` makes a direct DeepSeek call (no structured
+    # output) from the agent's summary plus captured results; provider/validation
+    # failures propagate rather than being swallowed.
     role = state["role"]
     evidence_report = generate_evidence_report(
         request=json.dumps(state["normalized"], default=str),
@@ -311,15 +304,9 @@ graph.add_conditional_edges(
 
 
 def build_checkpointer():
-    """Checkpointer backend, selected by ``CHECKPOINT_BACKEND``.
-
-    - ``sqlite`` (default): durable, single-process/multi-thread. The saver
-      serializes access with an internal lock, so it is safe for the sync
-      endpoint's worker threads.
-    - ``memory``: a run-local, in-memory saver; nothing survives a restart.
-    - ``postgres``: durable and shareable across worker processes/replicas.
-      Requires ``langgraph-checkpoint-postgres`` and ``CHECKPOINT_POSTGRES_URL``.
-    """
+    """Checkpointer backend, selected by ``CHECKPOINT_BACKEND``: ``sqlite``
+    (default; durable, lock-serialized, thread-safe), ``memory`` (run-local, not
+    durable), ``postgres`` (durable, shareable; needs dep + POSTGRES_URL)."""
     backend = os.getenv("CHECKPOINT_BACKEND", "sqlite").lower()
 
     if backend == "memory":

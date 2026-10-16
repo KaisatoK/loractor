@@ -149,7 +149,12 @@ def test_fetch_by_id_is_refused_because_the_corpus_has_no_primary_key():
 
 
 def test_auto_complete_never_reaches_object_storage():
-    assert db.auto_complete("@frontend", "otel_s3") == []
+    from backend.db.auto_complete import _auto_complete_dataset, local_datasets
+
+    # The per-corpus lookup refuses the remote tier, and the public merged
+    # lookup never asks it.
+    assert list(_auto_complete_dataset("@frontend", "otel_s3")) == []
+    assert "otel_s3" not in {ds.id for ds in local_datasets()}
 
 
 # --- The in-place index replaced the materialized slice ----------------------

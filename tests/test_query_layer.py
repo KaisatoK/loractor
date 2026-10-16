@@ -185,7 +185,8 @@ def test_the_same_builder_renders_each_corpus_own_columns():
     )
 
     rendered_os, rendered_otel = normalized(openstack), normalized(otel)
-    assert '"log_timestamp"' in rendered_os and '"category"' in rendered_os
+    assert '"Timestamp"' in rendered_os and '"Level"' in rendered_os
+    assert '"Component"' in rendered_os
     assert '"Timestamp"' in rendered_otel and '"SeverityText"' in rendered_otel
     assert '"ServiceName"' in rendered_otel
 
@@ -224,10 +225,24 @@ def test_several_sources_are_passed_as_a_list():
 
 
 def test_timestamp_cast_follows_the_dataset():
+    from dataclasses import replace
+
+    from backend.db.datasets import resolve
+
     openstack, _, _ = build(db.count_by_field, OS_LO, OS_HI, dataset="openstack")
     otel, _, _ = build(db.count_by_field, OTEL_LO, OTEL_HI, dataset="otel_s3")
-    assert "::timestamp " in normalized(openstack) + " "
+    # Both corpora store TIMESTAMPTZ now; the cast is read from the registry.
+    assert resolve("openstack").ts_cast == "timestamptz"
+    assert "::timestamptz" in normalized(openstack)
     assert "::timestamptz" in normalized(otel)
+
+    # A corpus declaring a naive timestamp gets the naive cast.
+    from backend.db import predicates as pred
+    from backend.db.windows import build_window
+
+    naive = replace(resolve("openstack"), ts_cast="timestamp")
+    clause, _ = pred.ts_filter(naive, build_window(naive, OS_LO, OS_HI))
+    assert "::timestamp " in normalized(clause) + " "
 
 
 def test_trend_buckets_with_date_trunc_not_extract_minute():
@@ -288,11 +303,12 @@ def test_search_shape_follows_the_corpus_not_its_name(monkeypatch):
 
     templates.clear_vector_cache()
 
-    # Per-row embeddings: OpenStack, unchanged.
-    hybrid, params, _ = build(db.search_logs, "oom", dataset="openstack")
-    assert "ai_embed" in normalized(hybrid)
-    assert "openstack_templates" not in normalized(hybrid)
-    assert params == ["oom", "oom"]
+    # No per-row embeddings and no template vectors: OpenStack is lexical.
+    templates.set_vector_cache("openstack", False)
+    lexical_os, _, _ = build(db.search_logs, "oom", dataset="openstack")
+    assert "ai_embed" not in normalized(lexical_os)
+    assert "BM25" in normalized(lexical_os)
+    assert "openstack_idx" in normalized(lexical_os)
 
     # No template vectors built yet: lexical only.
     templates.set_vector_cache("bgl", False)
@@ -327,14 +343,17 @@ def test_search_never_composes_a_remote_scan():
     from backend.db import templates
 
     templates.clear_vector_cache()
+    templates.set_vector_cache("bgl", False)
+    templates.set_vector_cache("openstack", False)
     for dataset, relation in (
         ("otel_slice", "otel_ext_idx"),
         ("bgl", "bgl_idx"),
-        ("openstack", "log_idx"),
+        ("openstack", "openstack_idx"),
     ):
         rendered = normalized(build(db.search_logs, "oom", dataset=dataset)[0])
         assert "read_parquet" not in rendered, dataset
         assert relation in rendered, dataset
+    templates.clear_vector_cache()
 
 
 def test_high_cardinality_field_listing_is_refused():
@@ -495,9 +514,11 @@ def test_where_with_no_clauses_renders_nothing():
 
 # --- Per-dataset auto-complete ----------------------------------------------
 def render_auto_complete(query: str, dataset: str | None = None) -> str:
-    from backend.db.auto_complete import auto_complete
+    # The per-dataset SQL builder is private; the public ``auto_complete``
+    # merges it across the local corpora (see ``test_auto_complete.py``).
+    from backend.db.auto_complete import _auto_complete_dataset
 
-    statement, _ = auto_complete.__wrapped__(query, dataset)
+    statement, _ = _auto_complete_dataset.__wrapped__(query, dataset)
     return normalized(statement)
 
 
@@ -505,15 +526,25 @@ NO_MATCH = "WHERE false"
 
 
 def test_auto_complete_resolves_selectors_per_dataset():
-    assert '"service"' in render_auto_complete("@nova", "openstack")
+    assert '"Component"' in render_auto_complete("@nova", "openstack")
     assert '"Component"' in render_auto_complete("@KERN", "bgl")
 
 
-def test_auto_complete_uses_the_text_mirror_for_an_integer_field():
-    """Only text columns get a term dictionary, so pid is matched via pid_text."""
-    rendered = render_auto_complete("!257", "openstack")
-    assert '"pid_text"' in rendered
-    assert '"pid"' not in rendered
+def test_auto_complete_template_selector_reads_event_template_on_both():
+    assert '"EventTemplate"' in render_auto_complete("^Took", "openstack")
+    assert '"EventTemplate"' in render_auto_complete("^parity", "bgl")
+
+
+def test_auto_complete_has_no_pid_or_node_selector():
+    """'!' is only the case modifier; on its own it selects nothing."""
+    for dataset in ("openstack", "bgl"):
+        assert NO_MATCH in render_auto_complete("!257", dataset), dataset
+
+
+def test_auto_complete_bang_after_a_selector_is_the_case_modifier():
+    rendered = render_auto_complete("@!nova", "openstack")
+    assert NO_MATCH not in rendered
+    assert '"Component"' in rendered
 
 
 def test_auto_complete_suppresses_a_selector_the_corpus_lacks():
@@ -536,8 +567,8 @@ def test_auto_complete_requires_a_selector():
 def test_auto_complete_content_branch_returns_record_ids():
     """The '$' branch suggests whole lines keyed by record id, not words."""
     rendered = render_auto_complete("$timeout", "openstack")
-    assert "line_id" in rendered
-    assert '"content"' in rendered
+    assert '"LineId"' in rendered
+    assert '"Content"' in rendered
     assert "ts_dict_agg" not in rendered
 
 
@@ -560,4 +591,4 @@ def test_auto_complete_content_branch_works_on_a_local_corpus():
 
 def test_auto_complete_queries_the_index_not_the_table():
     rendered = render_auto_complete("@nova", "openstack")
-    assert '"log_idx"' in rendered or '"log_token_idx"' in rendered
+    assert '"openstack_idx"' in rendered or '"openstack_token_idx"' in rendered

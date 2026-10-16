@@ -1,26 +1,9 @@
 """Type-ahead chat box, a no-build Streamlit custom component.
-
-The frontend (``index.html`` + ``chat_box.css`` + ``chat_box.js``, no npm build)
-reports the draft and the *current word* -- the run of non-space characters the
-caret sits in -- as they are typed; this module looks that word up through the
-backend's ``/auto-complete`` endpoint and hands the suggestions back for the
-dropdown, which opens only while the box is focused. Choosing a suggestion
-replaces the words it spans -- a suggestion for a multi-word field value such as
-``Removable base files: <*>`` replaces every word of the draft it lines up with,
-so the shared words are not duplicated.
-
-A leading selector in the current word scopes the lookup to one indexed column:
-``@`` for ``service``, ``#`` for ``event_id``, ``^`` for ``event_template``, ``!``
-for ``pid`` and ``$`` for ``content``. A selector is required -- a word without one
-is not looked up and suggests nothing (see :func:`_suggestions`). The selector is
-stripped before matching and echoed as a prefix on each suggestion in the dropdown
-(a display-only reminder of the column); picking a suggestion inserts the bare
-value without it. A ``$`` suggestion is a whole log line, so it inserts a
-``Line ID: n`` reference instead of the message.
-
-:func:`chat_box` is the whole widget: as a Streamlit fragment it renders the
-component and, on submit, starts the backend investigation via
-:func:`start_message`.
+The frontend reports the draft and the caret's *current word*; this looks it up
+via ``/auto-complete`` (required selector ``@`` component, ``^`` event template,
+``$`` content; a ``!`` right after the selector means case-sensitive ranking).
+Suggestions are merged across the local corpora, so a ``$`` pick inserts a
+``Line ID: n (dataset)`` reference.
 """
 
 from pathlib import Path
@@ -35,18 +18,14 @@ _component = components.declare_component("chat_box", path=str(_DIR))
 
 _KEY = "chat_box"
 _SUBMIT_SEQ_KEY = "chat_box_submit_seq"
-_SELECTORS = "@#$!^"
+_SELECTORS = "@^$"
 
 
 def _suggestions(token: str, word: str) -> list[dict]:
     """Best-effort suggestions -- a lookup failure must never break the chat.
-
-    Auto-complete is opt-in through a selector: the word must start with ``@``,
-    ``#``, ``^``, ``!`` or ``$`` to scope the lookup to ``service``, ``event_id``,
-    ``event_template``, ``pid`` or ``content`` on the backend (a bare selector
-    lists that column's most popular values). A word with no leading selector
-    suggests nothing, so the endpoint is not called.
-    """
+    Opt-in via a selector: the word must start with ``@``/``^``/``$`` to scope to
+    component/template/content; any other word (including ``!word``) suggests
+    nothing."""
     word = word.strip()
 
     if not word or word[0] not in _SELECTORS:
@@ -59,11 +38,8 @@ def _suggestions(token: str, word: str) -> list[dict]:
 
 def _take_submission() -> str | None:
     """Consume and return a submission the component has posted, else ``None``.
-
-    Reading it before the component re-renders lets a refusal be drawn *above*
-    the box instead of below it. The sequence guard means each Enter is taken
-    exactly once, mirroring ``st.chat_input``.
-    """
+    Reading it before the component re-renders lets a refusal draw *above* the
+    box; the sequence guard takes each Enter once (like ``st.chat_input``)."""
     state = st.session_state.get(_KEY) or {}
     submit_seq = state.get("submitSeq", 0) if isinstance(state, dict) else 0
     if submit_seq > st.session_state.get(_SUBMIT_SEQ_KEY, 0):
@@ -79,17 +55,8 @@ def _render_component(
     placeholder: str = "Type your message here...",
 ) -> None:
     """Render the type-ahead component (the draft plus its suggestions).
-
-    Suggestions match the *current word* of the draft -- the run of non-space
-    characters the caret sits in -- which the frontend reports alongside the
-    text. ``suggest=False`` skips the auto-complete lookup -- used while an
-    investigation is already running.
-
-    The frontend's submit counter is seeded from the backend's watermark
-    (``submit_seq_base``): the box remounts when a new chat is started (it is
-    unmounted on the role picker), so without the seed it would restart at zero
-    and the backend would drop the new chat's first submits as replays.
-    """
+    ``suggest=False`` skips the lookup during a run. The submit counter is seeded
+    from ``submit_seq_base`` so a remounted box's first submits are not dropped."""
     state = st.session_state.get(_KEY) or {}
 
     if not isinstance(state, dict):
@@ -110,13 +77,8 @@ def _render_component(
 
 def start_message(current_chat, text, effort, token: str, chat_id: str) -> None:
     """Hand the user turn off to the backend as a background investigation.
-
-    The backend owns the investigation from here on and persists both messages;
-    the UI only watches the run, so switching conversations or deleting the chat
-    no longer truncates the answer or erases the thinking. Local history is only
-    updated once the backend has accepted the run, so a failed start leaves the
-    chat unchanged.
-    """
+    The backend owns the run and persists both messages; the UI only watches.
+    Local history updates only once accepted, so a failed start changes nothing."""
     request_history = [
         {"role": item["role"], "content": item["content"]}
         for item in current_chat["history"]
@@ -143,11 +105,8 @@ def start_message(current_chat, text, effort, token: str, chat_id: str) -> None:
 @st.fragment
 def chat_box(token: str, current_chat: dict, chat_id: str, effort: str) -> None:
     """Type-ahead chat box, mounted as a fragment.
-
-    Keystrokes rerun only this fragment and no auto-complete lookup is made while
-    an investigation is already running. A submit during a run is refused, with
-    the warning drawn above the box.
-    """
+    Keystrokes rerun only this fragment and no lookup runs during an investigation.
+    A submit during a run is refused, with the warning above the box."""
     running = chat_id in st.session_state.active_runs
     submitted = _take_submission()
 

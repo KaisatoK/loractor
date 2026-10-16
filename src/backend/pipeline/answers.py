@@ -1,10 +1,6 @@
-"""Serialize structured answer blocks into the marker text the UI renders.
-
-The answer agent returns an :class:`~backend.pipeline.contracts.AnswerOutput`
-(ordered prose and table blocks). The UI's rendering protocol, however, consumes
-a plain string in which a table is a ``[[RESULT:Rx]]`` marker alone on its own
-line. This module is the single place that turns the one into the other, so the
-marker text is always machine-generated and well formed.
+"""Serialize structured answer blocks into the marker text the UI renders:
+turns an ``AnswerOutput`` into a plain string where each table is a
+``[[RESULT:Rx]]`` marker alone on its line (the single generator of that text).
 """
 
 from __future__ import annotations

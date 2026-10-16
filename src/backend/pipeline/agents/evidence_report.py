@@ -1,29 +1,6 @@
-"""Evidence report call: prompt contract and entry point.
-
-The ``find_evidence`` deep agent investigates and finishes with a free-text
-summary; it does not emit structured data itself. This module maps that summary
-plus the compact catalog of captured ``R``-ids onto a validated
-:class:`EvidenceReport`, using a direct ``deepseek.invoke`` call.
-
-It owns the prompt/JSON contract that shapes the model's output
-(``JSON_OUTPUT_SPEC``) and the single public entry point
-``generate_evidence_report``. Callers (``graph.py``'s ``find_evidence_node``)
-use that entry point and nothing else. This module does not catch errors —
-provider or pydantic validation failures propagate to the caller — and it
-performs no citation filtering: the authoritative ``result_id`` validation
-happens downstream in ``pipeline/answers.py`` and ``ui/rendering.py``.
-
-The call deliberately passes no ``response_format`` — neither
-``with_structured_output`` nor a ``response_format`` kwarg. Any structured-output
-guarantee collapses the streamed reply to a single delta, so the live progress
-panel could not render the model's reasoning token-by-token; without it the
-projection streams incrementally. The JSON contract therefore rides in the
-prompt text (``JSON_OUTPUT_SPEC``) instead of a transmitted schema — json mode
-transmits no schema either, so the contract must enumerate every closed
-vocabulary the model cannot otherwise see (for example ``tool_used[].status`` is
-exactly ``"success"`` or ``"failure"``). The returned message's text is validated
-here with ``model_validate_json``; ``message.text`` is the text blocks only, so
-the reasoning the model emits alongside the report is excluded from the payload.
+"""Evidence report call: ``generate_evidence_report`` maps the agent summary +
+captured ``R``-ids onto a validated ``EvidenceReport`` via direct
+``deepseek.invoke`` (no ``response_format``; contract/vocab in ``JSON_OUTPUT_SPEC``).
 """
 
 from collections.abc import Sequence
@@ -34,12 +11,9 @@ from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import EVIDENCE_REPORT_SYSTEM_PROMPT
 
-# The json output contract. It lives in the user message so the
-# ``EVIDENCE_REPORT_SYSTEM_PROMPT`` can stay the system message; no schema is
-# transmitted, so the prompt must carry the word "json" and an explicit example
-# of the shape. The system prompt already carries the grounding/fidelity rules,
-# so this spec keeps the shape example and only the two rules the example
-# cannot convey.
+# The json output contract, placed in the user message so the system prompt can
+# stay ``EVIDENCE_REPORT_SYSTEM_PROMPT``. No schema is transmitted, so it carries
+# the word "json", a shape example, and only the rules the example cannot convey.
 JSON_OUTPUT_SPEC = (
     "Return ONLY one json object and no other text, markdown, or commentary. "
     "The json object MUST match exactly this shape:\n"
@@ -120,9 +94,8 @@ PROMPT_TEMPLATE = (
 
 
 def _catalog_lines(results: Sequence[dict]) -> str:
-    """Compact ``- R{n}: tool_name(arguments)`` lines for the captured results.
-
-    Non-dict records are skipped; each record carries its own canonical ``id``.
+    """Compact ``- R{n}: tool_name(arguments)`` lines; non-dicts skipped, each
+    record carries its own canonical ``id``.
     """
     return "\n".join(
         f"- {record['id']}: {record.get('tool_name')}({record.get('arguments')})"
@@ -153,20 +126,9 @@ def _messages(
 def generate_evidence_report(
     *, request: str, role: str, investigation: str, results: Sequence[dict]
 ) -> EvidenceReport:
-    """Build and return the validated evidence report for one investigation.
-
-    Args:
-        request: The normalized user request (the question being answered).
-        role: The user's role (name and objective) for tailoring.
-        investigation: The investigator's free-text summary of the findings and
-            the tools it used.
-        results: The captured tool-result records, each carrying its canonical
-            ``id``; those ids are the only ones the report may cite.
-
-    Returns the :class:`EvidenceReport` parsed from the model's text. A provider
-    failure or a pydantic validation error is not caught and propagates to the
-    caller.
-    """
+    """Build the validated evidence report from the normalized ``request``, the
+    ``role``, the investigator's ``investigation`` summary, and ``results`` (the
+    only citable ids). Provider/validation failures propagate uncaught."""
     message = deepseek.invoke(
         _messages(
             request=request,

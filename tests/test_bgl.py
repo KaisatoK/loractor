@@ -253,14 +253,49 @@ def test_the_raw_loader_computes_its_timestamp_while_parsing():
     spec = loghub.spec_for("bgl")
     assert spec.source_kind is loghub.SourceKind.RAW_LINES
     assert "Timestamp" in [name for name, _ in spec.columns]
+    assert spec.line_parser is loghub.parse_bgl_line
 
-    parsed = loghub.parse_raw_line(
-        spec,
+    parsed = loghub.parse_bgl_line(
         "- 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 "
         "2005-06-03-15.42.50.675872 R02-M1-N0-C:J12-U11 RAS KERNEL INFO "
         "instruction cache parity error corrected",
     )
     assert parsed["EpochSeconds"] == "1117838570"
+    assert parsed["Timestamp"] == "2005-06-03 22:42:50+00:00"
+
+
+def test_the_bgl_parser_skips_a_line_with_a_non_integer_epoch():
+    assert (
+        loghub.parse_bgl_line(
+            "- notanepoch 2005.06.03 R02-M1-N0-C:J12-U11 "
+            "2005-06-03-15.42.50.675872 R02-M1-N0-C:J12-U11 RAS KERNEL INFO x"
+        )
+        is None
+    )
+
+
+def test_the_bgl_parser_anchors_on_level_when_node_repeat_is_missing():
+    parsed = loghub.parse_bgl_line(
+        "- 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 "
+        "2005-06-03-15.42.50.675872 RAS KERNEL FATAL data TLB error interrupt"
+    )
+    assert parsed["NodeRepeat"] is None
+    assert (parsed["Type"], parsed["Component"], parsed["Level"]) == (
+        "RAS",
+        "KERNEL",
+        "FATAL",
+    )
+    assert parsed["Content"] == "data TLB error interrupt"
+
+
+def test_only_the_bgl_sample_renames_csv_headers():
+    """BGL's ``Timestamp``/``Time`` headers clash with physical names; the
+    OpenStack sample's ``Time`` is a real column and must keep its name."""
+    assert loghub.spec_for("bgl_2k").header_renames == {
+        "Timestamp": "EpochSeconds",
+        "Time": "RawTime",
+    }
+    assert dict(loghub.spec_for("openstack_2k").header_renames) == {}
 
 
 def test_the_structured_sample_loader_quotes_its_derived_identifiers():

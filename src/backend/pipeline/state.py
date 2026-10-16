@@ -29,12 +29,9 @@ class PipelineState(TypedDict):
     latest_answer: str
     role: Role
     effort: EffortLevel
-    # Routing decisions produced by the scope/confidence TypeSafe classifiers
-    # (see decision.py and graph.py). The scope node picks one of four
-    # action-oriented routes:
-    #   clarify = ask the user first; general = conversational/not about logs;
-    #   direct_answer = answer from evidence already in the conversation;
-    #   find_evidence = retrieve new log evidence.
+    # Routing route from the scope classifier (decision.py/graph.py): clarify =
+    # ask first; general = conversational/not logs; direct_answer = answer from
+    # evidence already present; find_evidence = retrieve new log evidence.
     scope: Literal["clarify", "general", "direct_answer", "find_evidence"]
     confidence: PipelineRoute
     evidence_report_history: list[EvidenceReport]

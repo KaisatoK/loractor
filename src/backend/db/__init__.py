@@ -14,7 +14,6 @@ from backend.db.config import (
     LOG_SCHEMA,
     MODEL_BASE_URL,
     SERENEDB_PORT,
-    TABLE_NAME,
 )
 from backend.db.connection import bulk_query, db_cursor, get_conn, query_runner
 from backend.db.count_query import (
@@ -54,7 +53,6 @@ __all__ = [
     "QueryStats",
     "Refusal",
     "SERENEDB_PORT",
-    "TABLE_NAME",
     "all_datasets",
     "auto_complete",
     "bulk_query",

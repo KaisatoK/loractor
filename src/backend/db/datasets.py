@@ -42,7 +42,7 @@ from typing import Mapping
 
 from psycopg2 import sql
 
-from backend.db.config import EMBEDDING_DIMENSION, TABLE_NAME
+from backend.db.config import EMBEDDING_DIMENSION
 
 # --- Canonical field names ---------------------------------------------------
 TS = "ts"
@@ -145,8 +145,8 @@ class Field:
     """Column the type-ahead reads instead of ``column``, when they differ.
 
     Only text columns get a term dictionary in an inverted index, so an integer
-    field needs a text mirror to be suggestable: OpenStack's ``pid`` is matched
-    through ``pid_text``.
+    field needs a text mirror to be suggestable. No current corpus uses one:
+    OpenStack's integer ``Pid`` is simply not offered by the type-ahead.
     """
 
     def __post_init__(self) -> None:
@@ -364,59 +364,63 @@ class UnsupportedFieldError(KeyError):
 
 # --- Registrations -----------------------------------------------------------
 
-# The original OpenStack demo corpus. This registration must reproduce the
-# pre-registry behaviour exactly -- same table, same index names, same columns --
-# and ``tests/test_datasets.py`` asserts it against the hardcoded constants.
+# OpenStack: three nova runs (``openstack_normal1``, ``openstack_normal2``,
+# ``openstack_abnormal``) loaded one after another into a single table by the
+# loghub loader. Columns follow the loghub/BGL naming (``Level``, ``Component``);
+# ``LineId`` runs on across the three files, so it is unique in the table, and
+# nothing records which file a row came from. ``EventTemplate`` is derived at
+# load, exactly as for BGL.
+OPENSTACK_TABLE = "openstack"
+
 OPENSTACK = Dataset(
     id="openstack",
     kind=DatasetKind.NATIVE_TABLE,
     description=(
-        "OpenStack sample log (2k rows) with per-row embeddings. Small, exact, "
-        "fully indexed; the default for demos and regression tests."
+        "OpenStack nova logs (loghub, 207,820 rows) from three runs -- two normal "
+        "and one with failures -- in one table. Local, exact, fully indexed, "
+        "with derived event templates; no embeddings. The default corpus."
     ),
-    sources=(TABLE_NAME,),
+    sources=(OPENSTACK_TABLE,),
     fields=MappingProxyType(
         {
-            TS: Field(column="log_timestamp"),
-            SEVERITY: Field(column="category"),
-            SERVICE: Field(column="service", text_indexed=True, token_indexed=True),
-            MESSAGE: Field(column="content", text_indexed=True),
-            ENTITY_ID: Field(
-                column="pid", autocomplete_column="pid_text", token_indexed=True
+            TS: Field(column="Timestamp"),
+            SEVERITY: Field(column="Level", text_indexed=True),
+            SERVICE: Field(
+                column="Component", text_indexed=True, token_indexed=True
             ),
+            MESSAGE: Field(column="Content", text_indexed=True),
+            # Not indexed and not suggestable: ``Pid`` is an integer and has no
+            # text mirror, so the type-ahead offers no pid selector.
+            ENTITY_ID: Field(column="Pid"),
             TEMPLATE: Field(
-                column="event_template", text_indexed=True, token_indexed=True
+                column="EventTemplate", text_indexed=True, token_indexed=True
             ),
-            EVENT_ID: Field(column="event_id", text_indexed=True, token_indexed=True),
-            RECORD_ID: Field(column="line_id"),
+            RECORD_ID: Field(column="LineId"),
         }
     ),
     capabilities=frozenset(
         {
             Capability.BM25,
-            Capability.VECTOR,
             Capability.RECORD_ID,
             Capability.EXACT_COUNTS,
             Capability.TEMPLATES,
             Capability.AUTO_COMPLETE,
         }
     ),
-    severity_values=("INFO", "WARNING", "ERROR"),
-    ts_cast="timestamp",
-    index_name=f"{TABLE_NAME}_idx",
-    token_index_name=f"{TABLE_NAME}_token_idx",
+    severity_values=("INFO", "WARNING", "ERROR", "CRITICAL"),
+    ts_cast="timestamptz",
+    index_name=f"{OPENSTACK_TABLE}_idx",
+    token_index_name=f"{OPENSTACK_TABLE}_token_idx",
     selectors=MappingProxyType(
         {
             "@": SERVICE,
-            "#": EVENT_ID,
             "^": TEMPLATE,
-            "!": ENTITY_ID,
             "$": MESSAGE,
         }
     ),
     default_window_seconds=86_400,
     max_rows=1_000,
-    row_estimate=2_000,
+    row_estimate=207_820,
 )
 
 
@@ -660,9 +664,9 @@ BGL = Dataset(
     kind=DatasetKind.NATIVE_TABLE,
     description=(
         "Blue Gene/L supercomputer RAS log (loghub, 4.7M rows). Local, exact, "
-        "fully indexed, with template-level embeddings over all 20,352 "
-        "templates. Spans seven months of 2005-2006, so it is the corpus for "
-        "long-range questions."
+        "fully indexed, with derived event templates; no embeddings for now. "
+        "Spans seven months of 2005-2006, so it is the corpus for long-range "
+        "questions."
     ),
     sources=(BGL_TABLE,),
     fields=MappingProxyType(
@@ -706,12 +710,12 @@ BGL = Dataset(
     ts_cast="timestamptz",
     index_name=f"{BGL_TABLE}_idx",
     token_index_name=f"{BGL_TABLE}_token_idx",
-    # Four selectors, not five: no event id to scope to.
+    # Three selectors: no event id to scope to, and no entity-id selector --
+    # the type-ahead offers no pid/node lookup on any local corpus.
     selectors=MappingProxyType(
         {
             "@": SERVICE,
             "^": TEMPLATE,
-            "!": ENTITY_ID,
             "$": MESSAGE,
         }
     ),

@@ -53,7 +53,7 @@ from backend.db.budget import (
     estimate_index_bytes,
     max_buildable_rows,
 )
-from backend.db.connection import db_cursor, get_conn
+from backend.db.connection import db_cursor, get_conn, set_session_time_zone
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ def probe_cursor() -> Iterator[RealDictCursor]:
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
+        set_session_time_zone(cur)
         cur.execute(sql.SQL("SET threads = {n}").format(n=sql.Literal(BUILD_THREADS)))
         yield cur
     finally:

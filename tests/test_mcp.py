@@ -13,7 +13,11 @@ def test_mcp_server_lists_tools_and_skills():
     async def run():
         async with Client(server.mcp) as client:
             names = {tool.name for tool in await client.list_tools()}
-            assert {"search_logs_tool", "auto_complete", "read_skill", "list_skills"} <= names
+            assert {"search_logs_tool", "read_skill", "list_skills"} <= names
+            assert "get_log_templates_tool" not in names
+            # Auto-complete is a chat-box feature served in-process, not an
+            # evidence tool, so the MCP service does not offer it.
+            assert "auto_complete" not in names
             resource = await client.read_resource("skill://log-investigation")
             assert resource[0].text.startswith("# Log Investigation")
             result = await client.call_tool("read_skill", {"name": "log-investigation"})
@@ -26,17 +30,43 @@ def test_mcp_server_lists_tools_and_skills():
 def test_mcp_server_validates_inputs():
     async def run():
         async with Client(server.mcp) as client:
-            result = await client.call_tool("search_logs_tool", {"query_text": "x", "limit": 0}, raise_on_error=False)
+            result = await client.call_tool(
+                "search_logs_tool",
+                {"query_text": "x", "limit": 0, "dataset": "openstack"},
+                raise_on_error=False,
+            )
             assert result.is_error
             result = await client.call_tool(
                 "get_trend_tool",
-                {"start_time": "2020-01-02 00:00:00", "end_time": "2020-01-01 00:00:00", "type": ["service", "nova"]},
+                {"start_time": "2020-01-02 00:00:00", "end_time": "2020-01-01 00:00:00",
+                 "type": ["service", "nova"], "dataset": "openstack"},
                 raise_on_error=False,
             )
             assert result.is_error
 
     asyncio.run(run())
 
+
+def test_mcp_server_rejects_unknown_datasets():
+    """The model selects a corpus id, never a table: an unregistered id -- such
+    as one of the old per-file table names -- is rejected by validation."""
+    async def run():
+        async with Client(server.mcp) as client:
+            result = await client.call_tool(
+                "search_logs_tool",
+                {"query_text": "timeout", "dataset": "openstack_normal1"},
+                raise_on_error=False,
+            )
+            assert result.is_error
+            result = await client.call_tool(
+                "count_by_category_tool",
+                {"start_time": "2020-01-01 00:00:00", "end_time": "2020-01-02 00:00:00",
+                 "dataset": "t"},
+                raise_on_error=False,
+            )
+            assert result.is_error
+
+    asyncio.run(run())
 
 def test_sync_bridge_uses_one_loop_and_preserves_skill_result(monkeypatch):
     monkeypatch.setattr(server, "_SKILLS_ROOT", server._SKILLS_ROOT)

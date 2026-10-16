@@ -16,7 +16,6 @@ from backend import jobs
 from backend.appdb import auth, chats
 from backend.appdb.auth import require_user
 from backend.db.auto_complete import auto_complete
-from backend.db.datasets import UnknownDatasetError
 from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import generate_answer
 from backend.pipeline.answers import serialize_answer
@@ -28,9 +27,8 @@ from backend.pipeline.state import PipelineState, RoleName
 logger = logging.getLogger(__name__)
 
 # --- Concurrency limits -------------------------------------------------------
-# The sync endpoints below run their blocking graph/LLM/DB work on the anyio
-# worker pool, so the event loop stays free and requests are served in parallel.
-# These caps bound how many investigations run at once.
+# Sync endpoints run blocking graph/LLM/DB work on the anyio worker pool, keeping
+# the event loop free. These caps bound how many investigations run at once.
 MAX_THREADS = int(os.getenv("MAX_THREADS", "100"))
 MAX_GLOBAL_INFLIGHT = int(os.getenv("MAX_GLOBAL_INFLIGHT", "32"))
 MAX_INFLIGHT_PER_USER = int(os.getenv("MAX_INFLIGHT_PER_USER", "2"))
@@ -152,10 +150,8 @@ def _thread_id(user_id: str, chat_id: str) -> str:
 
 def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
     """Run the pipeline and yield newline-delimited JSON events.
-
-    This is a *synchronous* generator by design: FastAPI/Starlette iterate it on
-    the worker pool, so the blocking graph execution never blocks the event loop.
-    """
+    A *synchronous* generator by design: FastAPI iterates it on the worker pool,
+    so the blocking graph execution never blocks the event loop."""
     history = req["history"]
 
     initial_state = cast(
@@ -197,21 +193,16 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
     last_tool_results_json = None
     for name, item in run.interleave("messages", "values", "subgraphs", "custom"):
         if name == "messages":
-            # Under langgraph's v3 protocol a root-scope LLM call surfaces here
-            # as a single ``ChatModelStream`` object, not a list of messages, so
-            # blind indexing (``item[-1]``) would raise
-            # ``TypeError: 'ChatModelStream' object is not subscriptable`` and
-            # tear the stream. Subgraph-scoped calls never reach this branch.
-            # Debug-only (no ``yield``): the answer comes from ``values`` below.
+            # Under langgraph v3 a root-scope LLM call surfaces here as a single
+            # ``ChatModelStream``, not a list, so blind ``item[-1]`` indexing
+            # would raise TypeError and tear the stream. Debug-only (no yield).
             if isinstance(item, (list, tuple)) and item:
                 logger.debug("stream message: %s", getattr(item[-1], "text", None))
             else:
                 logger.debug("stream message item: %s", type(item).__name__)
-            # Forward the root-scope call's reasoning (mirrors the subgraphs
-            # branch below). The projection is iterable deltas, not a list. A
-            # root-scope call need not emit reasoning at all, so only a
-            # non-empty consolidated message is sent — an empty one would
-            # append a bare "Thinking: " line to the persisted progress.
+            # Forward the root-scope call's reasoning (iterable deltas, not a
+            # list). Only a non-empty consolidated message is sent — an empty one
+            # would append a bare "Thinking: " line to persisted progress.
             reasoning = getattr(item, "reasoning", None)
             if reasoning is not None:
                 thought = ""
@@ -227,11 +218,9 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
                 if thought:
                     yield emit({"type": "subgraph_message", "content": thought})
         elif name == "values":
-            # Change detection (not a once-per-request flag): a follow-up turn
-            # re-emits the *previous* turn's persisted payloads in its first
-            # values event, then the fresh payload once find_evidence completes.
-            # Sending on every change means the UI's final payload is always the
-            # current turn's; the transient stale one is replaced before render.
+            # Change detection: a follow-up turn re-emits the previous turn's
+            # payloads first, then the fresh one once find_evidence completes.
+            # Sending on every change means the UI's final payload is current.
             tool_results = item.get("tool_results")
             if tool_results:
                 payload = json.dumps(tool_results)
@@ -300,12 +289,8 @@ def start_investigation(
     chat_id: str, req: InvestigateRequest, user: dict = Depends(require_user)
 ) -> dict:
     """Start a background investigation and return its run id.
-
     Generation and persistence are owned by a worker thread, independent of this
-    request and of the Streamlit script run that made it. Clients watch progress
-    via ``GET /chats/{chat_id}/run/{run_id}``; disconnecting no longer truncates
-    the work.
-    """
+    request. Watch via ``GET /chats/{chat_id}/run/{run_id}``."""
     user_id = user["id"]
 
     with _investigation_start_lock:
@@ -417,44 +402,30 @@ async def chat_test(
 
 
 @app.get("/auto-complete", dependencies=[Depends(require_user)])
-def get_auto_complete(query: str, dataset: str | None = None) -> dict:
-    """Type-ahead suggestions from a corpus' indexed field values.
+def get_auto_complete(query: str) -> dict:
+    """Type-ahead suggestions merged across every local corpus.
 
-    ``query`` must start with a selector scoping it to one field; a query with
-    no leading selector returns no suggestions. Which selectors are available
-    depends on the corpus, because the selector map lives in the dataset
-    registry: ``@`` service, ``#`` event id, ``^`` template, ``!`` entity id,
-    ``$`` message text.
+    ``query`` must start with a selector scoping it to one field (``@``
+    service, ``^`` template, ``$`` message text; a ``!`` right after the
+    selector switches to case-sensitive ranking); a query with no leading
+    selector returns no suggestions. Every local corpus loaded from a ``.log``
+    file (``openstack``, ``bgl``) is searched and the suggestions are merged; a
+    ``$`` suggestion carries the ``dataset`` its ``line_id`` belongs to. Only
+    inverted indexes are read -- a keystroke must never trigger a scan of
+    object storage.
 
-    ``dataset`` selects the corpus and defaults to the registry's default. An
-    unknown id, or a corpus with no inverted index, yields no suggestions rather
-    than an error -- a keystroke must never trigger a scan of object storage.
+    Always served in-process, whatever ``TOOLS_TRANSPORT`` is: auto-complete is
+    a chat-box feature, not an evidence tool, so the MCP service does not offer
+    it and a keystroke never pays for a network hop.
     """
-    if os.getenv("TOOLS_TRANSPORT", "local").lower() == "mcp":
-        try:
-            from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
-            payload = get_mcp_bridge().call_tool(
-                "auto_complete", {"query": query, "dataset": dataset}
-            )
-            return {"suggestions": payload.get("data", payload)}
-        except Exception:
-            metrics.inc("mcp_failures_total")
-            logger.warning("MCP auto-complete failed; using local query", exc_info=True)
-    try:
-        return {"suggestions": list(auto_complete(query, dataset))}
-    except UnknownDatasetError:
-        return {"suggestions": []}
+    return {"suggestions": auto_complete(query)}
 
 
 @app.post("/chat/reframe")
 def chat_reframe(req: ReframeRequest, user: dict = Depends(require_user)) -> dict:
     """Re-explain an already-completed investigation for another role.
-
-    Stateless one-shot: builds a synthetic prompt state from the supplied
-    evidence and invokes the answer agent once. No graph, no tools, no thread
-    or checkpointer involvement. Defined as a sync endpoint so the blocking
-    model call runs on the worker pool rather than the event loop.
-    """
+    Stateless one-shot: builds a synthetic prompt state and invokes the answer
+    agent once (no graph/tools/thread). Sync so the model call runs off-loop."""
     state = cast(
         PipelineState,
         {

@@ -36,9 +36,10 @@ def ts_filter(dataset: Dataset, window: TimeWindow) -> tuple[sql.Composable, lis
     """``ts >= start AND ts < end``, cast the way the dataset needs.
 
     Half-open so adjacent windows tile without double-counting a boundary row.
-    The cast comes from the registry: the OpenStack column is a naive
-    ``timestamp`` and the OTel column is a ``timestamptz``, and using the wrong
-    one either errors or silently compares against a shifted instant.
+    The cast comes from the registry: the local corpora (OpenStack, BGL) and the
+    OTel column are all ``timestamptz``, but a corpus may declare a naive
+    ``timestamp``, and using the wrong one either errors or silently compares
+    against a shifted instant.
     """
     cast = sql.SQL(dataset.ts_cast)
     clause = sql.SQL("{ts} >= %s::{cast} AND {ts} < %s::{cast}").format(

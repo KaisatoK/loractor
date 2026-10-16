@@ -1,16 +1,6 @@
 """In-process registry for background chat investigations.
-
-Generation is decoupled from the HTTP request (and from the Streamlit script run
-that started it): the worker thread consumes the pipeline event stream, buffers
-every event for re-attachment, and hands the finished result to a caller-supplied
-``on_finish`` hook that persists the assistant message. A client may therefore
-disconnect — switch conversation, delete, refresh — while the investigation keeps
-running and its result still lands in the chat store.
-
-The registry is intentionally in-memory and single-process: it matches the
-current deployment (one uvicorn process, one Streamlit process). Durable,
-cross-process job state would be a separate upgrade.
-"""
+A worker thread consumes the pipeline stream, buffers events for re-attachment,
+and persists the result via ``on_finish``, so a client may disconnect mid-run."""
 
 from __future__ import annotations
 
@@ -86,11 +76,8 @@ class RunRegistry:
         on_finish: Callable[[RunState], None],
     ) -> RunState:
         """Start an investigation, or return the existing one for this chat.
-
-        ``produce`` yields the pipeline's newline-delimited JSON event strings;
-        ``on_finish`` runs once the run reaches a terminal state (always, in a
-        ``finally``) so the caller can persist results and release capacity.
-        """
+        ``produce`` yields the pipeline's JSON event strings; ``on_finish`` runs
+        on any terminal state (in a ``finally``) to persist and release."""
         with self._lock:
             existing = self._active.get((user_id, chat_id))
             if existing is not None:

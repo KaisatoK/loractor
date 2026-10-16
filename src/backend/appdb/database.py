@@ -1,9 +1,6 @@
 """Application-data store (users, sessions, chats, messages).
-
-Kept separate from the SereneDB log store. SQLite is used by default so the
-backend is durable without extra infrastructure; a single connection guarded by a
-lock is comfortable for the few-dozen concurrent users this app targets.
-"""
+Separate from the SereneDB log store. SQLite by default (durable, no extra
+infra); a lock-guarded single connection suits the few-dozen concurrent users."""
 
 import os
 import sqlite3

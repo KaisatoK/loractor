@@ -1,8 +1,5 @@
 """TEMPORARY: provisions the demo account the UI auto-logs in as.
-
-Delete together with ``src/ui/login/demo.py`` (see its docstring for the full
-removal steps). Idempotent: re-running reports the account already exists.
-"""
+Delete together with ``src/ui/login/demo.py`` (see its docstring). Idempotent."""
 
 import os
 

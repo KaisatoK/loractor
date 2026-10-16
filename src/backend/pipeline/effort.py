@@ -35,11 +35,11 @@ class EffortSpec:
 
 EFFORT_SPECS: dict[str, EffortSpec] = {
     # max_tool_calls, max_hypotheses, max_iterations, max_rows_scanned, max_promotions
-    "Low": EffortSpec(4, 1, 0, 25_000_000, 0),
-    "Medium": EffortSpec(8, 2, 1, 100_000_000, 0),
-    "High": EffortSpec(10, 3, 2, 250_000_000, 0),
-    "Extreme": EffortSpec(16, 3, 3, 1_000_000_000, 2),
-    "Brutal": EffortSpec(20, 3, 3, 5_000_000_000, 4),
+    "Low": EffortSpec(5, 1, 0, 25_000_000, 0),
+    "Medium": EffortSpec(9, 2, 1, 100_000_000, 0),
+    "High": EffortSpec(11, 3, 2, 250_000_000, 0),
+    "Extreme": EffortSpec(17, 3, 3, 1_000_000_000, 2),
+    "Brutal": EffortSpec(21, 3, 3, 5_000_000_000, 4),
 }
 
 

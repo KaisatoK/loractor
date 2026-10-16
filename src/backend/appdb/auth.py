@@ -1,9 +1,6 @@
 """User accounts, password hashing, and bearer-session authentication.
-
-Passwords are hashed with scrypt (stdlib only). Sessions are opaque random
-tokens; only their SHA-256 digest is stored, so a database leak does not expose
-usable tokens.
-"""
+Passwords are hashed with scrypt (stdlib only). Sessions are opaque tokens;
+only their SHA-256 digest is stored, so a leak does not expose usable tokens."""
 
 import hashlib
 import hmac
@@ -145,13 +142,8 @@ def _delete_session(token_hash: str) -> None:
 
 def resolve_session(token: str) -> dict | None:
     """Resolve a bearer token to its user.
-
-    An expired session is deleted opportunistically here (cheap, and keeps the
-    table from accumulating dead rows); ``purge_expired_sessions`` sweeps the
-    rest at startup. Expiry is compared in Python rather than SQL because
-    ``expires_at`` is ISO text and a lexicographic comparison is not
-    order-correct across the microsecond boundary.
-    """
+    Expired sessions are deleted opportunistically here (startup sweep handles
+    the rest). Expiry is compared in Python since ``expires_at`` is ISO text."""
     token_hash = _hash_token(token)
     with db() as cur:
         row = cur.execute(

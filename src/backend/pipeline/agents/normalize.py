@@ -1,26 +1,6 @@
-"""Normalization call: prompt contract and entry point.
-
-``graph.normalize_node`` turns the raw conversation into a validated
-:class:`NormalizedOutput` that the rest of the pipeline consumes. This module
-maps the supplied normalization prompt onto that contract with a direct
-``deepseek.invoke`` call.
-
-It owns exactly two things: the prompt/JSON contract that shapes the model's
-output (``NORMALIZE_JSON_SPEC``) and the single public entry point
-``generate_normalized``. Callers (``graph.py``'s ``normalize_node``) use that
-entry point and nothing else. This module does not catch errors — provider or
-pydantic validation failures propagate to the caller. The merge/rewrite
-semantics live in ``NORMALIZE_SYSTEM_PROMPT``; the spec here only pins the json
-shape and the field types the model cannot otherwise see.
-
-The call deliberately passes no ``response_format`` — neither
-``with_structured_output`` nor a ``response_format`` kwarg. Any structured-output
-guarantee collapses the streamed reply to a single delta, so the live progress
-panel could not render the model's reasoning token-by-token; without it the
-projection streams incrementally. The prompt therefore carries the json shape
-and ``NORMALIZE_JSON_SPEC``, and the returned message's text is validated here
-with ``model_validate_json``. ``message.text`` is the text blocks only, so the
-reasoning the model emits alongside the answer is excluded from the payload.
+"""Normalization call: ``generate_normalized`` maps the prompt onto a validated
+``NormalizedOutput`` via direct ``deepseek.invoke`` (no ``response_format`` so
+reasoning streams; shape in ``NORMALIZE_JSON_SPEC``; errors propagate).
 """
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -29,11 +9,9 @@ from backend.pipeline.contracts import NormalizedOutput
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import NORMALIZE_SYSTEM_PROMPT
 
-# The json output contract. It lives in the user message so the
-# ``NORMALIZE_SYSTEM_PROMPT`` can stay the system message; no schema is
-# transmitted, so the prompt must carry the word "json" and an explicit example
-# of the shape. The system prompt already carries the merge/rewrite semantics,
-# so this spec pins the shape and the rules the example cannot convey.
+# The json output contract, placed in the user message so the system prompt can
+# stay ``NORMALIZE_SYSTEM_PROMPT``. No schema is transmitted, so it carries the
+# word "json", a shape example, and the rules the example cannot convey.
 NORMALIZE_JSON_SPEC = (
     "Return ONLY one json object and no other text, markdown, or commentary. "
     "The json object MUST match exactly this shape:\n"
@@ -62,16 +40,9 @@ NORMALIZE_JSON_SPEC = (
 
 
 def generate_normalized(prompt: str) -> NormalizedOutput:
-    """Build and return the validated normalization for one normalization prompt.
-
-    Args:
-        prompt: The normalization prompt built by ``prompts.normalize`` (the raw
-            conversation or the previous-context/new-message blocks).
-
-    Returns the :class:`NormalizedOutput` parsed from the model's text. A
-    provider failure or a pydantic validation error is not caught and propagates
-    to the caller.
-    """
+    """Build and return the validated normalization for one prompt (built by
+    ``prompts.normalize``). Provider or pydantic validation failures are not
+    caught and propagate to the caller."""
     message = deepseek.invoke(
         [
             SystemMessage(content=NORMALIZE_SYSTEM_PROMPT),

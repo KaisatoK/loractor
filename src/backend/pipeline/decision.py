@@ -4,9 +4,10 @@ from langchain_typesafe import ClassifierResponse, TypeSafeClassifier
 
 from backend.pipeline.effort import get_effort_spec
 
-# A target is cheap to clarify, while investigating a vague request can produce a
-# misleading answer. This threshold therefore favors asking when the judgment is
-# uncertain. Thresholds are starting points and must be checked against live data.
+# The "is a target named?" boundary for the scope gate. Below it no queryable
+# target (dataset, service, entity id, event template or error/message text,
+# severity, time window -- see ``QUERYABLE_TARGETS``) was found, so the
+# product asks — biased toward asking (clarification is cheap; a vague run isn't).
 QUERYABLE_SCOPE_THRESHOLD = 0.6
 
 # When a log request is ambiguous about whether retrieval is needed, favor retrieval:
@@ -17,6 +18,14 @@ NEW_EVIDENCE_THRESHOLD = 0.4
 # Noul probabilities are probabilities of yes, not separate confidence values.
 FOLLOW_UP_THRESHOLD = 0.75
 PROCEED_THRESHOLD = 0.5
+
+# Consecutive clarification turns before the pipeline stops asking and instead
+# investigates best-effort so the user still gets an answer.
+MAX_CLARIFY_ROUNDS = 2
+
+# Below this the newest message is judged not a log request, so ``general``
+# answers it conversationally. A false ``true`` costs one recoverable nudge; a
+# false ``false`` misroutes a real run, so the middle band falls to the gate.
 LOG_REQUEST_THRESHOLD = 0.3
 
 # Confidence revision thresholds. A revision is worthwhile only when both the
@@ -24,10 +33,9 @@ LOG_REQUEST_THRESHOLD = 0.3
 EVIDENCE_REVISION_THRESHOLD = 0.6
 ANSWER_OK_THRESHOLD = 0.45
 
-MAX_CLARIFY_ROUNDS = 2
-
-# One long-lived classifier. No model is passed intentionally: the SDK default
-# selects the current release (currently exposed by the SDK as jev-latest).
+# One long-lived classifier; like models.py it reads TYPESAFE_API_KEY at import.
+# No model is passed, so the SDK default selects the release — the gate
+# thresholds above were tuned against it, so a model release can move them.
 classifier = TypeSafeClassifier()
 
 

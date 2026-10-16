@@ -10,6 +10,5 @@
 if command -v uv &> /dev/null; then
     RUN_LIVE_ROUTES=1 uv run pytest tests/test_live_scope_routes.py "$@"
 else
-    echo "uv is required to run the route tests: https://docs.astral.sh/uv/" >&2
-    exit 1
+    RUN_LIVE_ROUTES=1 python -m pytest tests/test_live_scope_routes.py "$@"
 fi

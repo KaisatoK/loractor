@@ -11,7 +11,10 @@ let debounce = null;
 let active = -1; // suggestion the arrow keys have selected (Enter accepts it)
 
 const SPACE = /\s/;
-const SELECTORS = "@#$!^";
+// ``@`` component/service, ``^`` event template, ``$`` message content. ``!`` is
+// not a selector: typed right after one (``@!nova``) it only switches the
+// backend to case-sensitive ranking, so it stays part of the queried word.
+const SELECTORS = "@^$";
 
 // The selector that scoped the lookup behind the suggestions on screen, if the
 // queried word started with one. It is shown in the dropdown as a prefix but is
@@ -111,20 +114,26 @@ function submit() {
 }
 
 // A ``$`` content suggestion is a whole log line: it is shown with its line id
-// and inserts a "Line ID: n" reference rather than the message. Every other
-// suggestion is a field value carrying a result count.
+// and inserts a "Line ID: n (dataset)" reference rather than the message. The
+// suggestions are merged across corpora and a line id is only unique within
+// one, so the dataset rides along (omitted only if the backend sent none).
+// Every other suggestion is a field value carrying a result count.
 function isLineRef(s) {
   return s != null && s.line_id != null;
 }
 
+function lineRef(s) {
+  return s.dataset ? `Line ID: ${s.line_id} (${s.dataset})` : `Line ID: ${s.line_id}`;
+}
+
 // The right-hand meta text for a suggestion.
 function metaLabel(s) {
-  return isLineRef(s) ? `Line ID: ${s.line_id}` : `Count: ${s.count}`;
+  return isLineRef(s) ? lineRef(s) : `Count: ${s.count}`;
 }
 
 // The text a suggestion inserts into the box when it is accepted.
 function insertText(s) {
-  return isLineRef(s) ? `Line ID: ${s.line_id}` : String(s.suggestion);
+  return isLineRef(s) ? lineRef(s) : String(s.suggestion);
 }
 
 // Paint the arrow-key selection so Enter knows which suggestion it would accept.
@@ -215,8 +224,8 @@ function pick(index) {
   const draft = words(value);
   const suggested = words(picked);
 
-  // A suggestion is a whole field value and can span several words -- an
-  // event_template such as ``Removable base files: <*>`` -- while the caret only
+  // A suggestion is a whole field value and can span several words -- a
+  // content line such as ``Removable base files: <*>`` -- while the caret only
   // marks one of them. Line the two up on the word under the caret and replace
   // every draft word the suggestion covers, so accepting it does not duplicate
   // the surrounding words the draft already shares with it.

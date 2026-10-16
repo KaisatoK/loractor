@@ -80,13 +80,16 @@ table name supplied by the model.
 
 | Dataset | Kind | Rows | Capabilities | Role |
 | --- | --- | --- | --- | --- |
-| `openstack` | local table | 2,000 | BM25, per-row vectors, exact counts, templates, auto-complete, record id | default; demos and regression tests |
-| `bgl` | local table | 4,747,963 | BM25, template vectors, exact counts, templates, auto-complete, record id | Blue Gene/L RAS log; spans seven months, so it answers long-range questions |
+| `openstack` | local table | 207,820 | BM25, exact counts, templates, auto-complete, record id | default; three OpenStack nova runs (two normal, one with failures) in one table |
+| `bgl` | local table | 4,747,963 | BM25, exact counts, templates, auto-complete, record id | Blue Gene/L RAS log; spans seven months, so it answers long-range questions |
 | `otel_s3` | remote Parquet | 1,000,000,000 | approximate aggregates, chunk sweep, templates | the corpus itself, read in place |
 | `otel_slice` | **in-place index** | — | BM25, exact counts | text search over the remote corpus |
 
-Because builders read the registry rather than hard-coded SQL, adding BGL as a
-fourth corpus required **no new SQL in any builder**.
+Because builders read the registry rather than hard-coded SQL, adding BGL and the
+loghub-loaded OpenStack corpus required **no new SQL in any builder**. Both local
+corpora are loaded by one loader (`src/backend/db/loghub.py`) with one parser
+each (`parse_bgl_line`, `parse_openstack_line`) and share loghub's column naming
+(`LineId`, `Level`, `Component`, `Content`, `EventTemplate`, `Timestamp`).
 
 Capabilities are declared, not assumed, and a missing one is refused at
 registration rather than failing at query time. `otel_slice` deliberately
@@ -96,11 +99,13 @@ copy step no longer exists.
 
 ### Three tiers
 
-**Tier A — local, indexed, exact.** `openstack` and `bgl`. Millisecond searches,
-exact counts, embeddings for semantic reach. BGL's embeddings are
-**template-level**: 20,352 distinct templates stand in for 4.7M rows, which is
-what makes semantic search affordable at that size (embedding every row would
-take days; embedding the templates took 36 minutes).
+**Tier A — local, indexed, exact.** `openstack` and `bgl`. Millisecond searches
+and exact counts. Both carry an `EventTemplate` derived at load time, and both are
+loaded with `--no-embed`, so search is lexical (BM25) for now. Template-level
+embeddings remain available as an opt-in step (`backend.db.templates`): for BGL,
+about 20,352 distinct templates stand in for 4.7M rows, which is what makes
+semantic search affordable at that size (embedding every row would take days;
+embedding the templates took 36 minutes).
 
 **Tier B — remote, metered, approximate.** `otel_s3`, read via `read_parquet`.
 Every query must carry a time window of at most 300 seconds. Before running,
@@ -158,19 +163,19 @@ the sweep (`sweep_chunks_tool`, `investigate_chunk_tool`).
 
 The sweep tools are **withheld entirely below Extreme effort** rather than
 offered and refused — a visible tool gets tried eventually, and a refusal still
-consumes one of the 4–20 calls the effort level permits. `max_promotions` is the
+consumes one of the 5–21 calls the effort level permits. `max_promotions` is the
 existing per-effort dial, so it governs this too:
 
 | Effort | Tool calls | Rows scanned | Promotions |
 | --- | --- | --- | --- |
-| Low | 4 | 25M | 0 |
-| Medium | 8 | 100M | 0 |
-| High | 10 | 250M | 0 |
-| Extreme | 16 | 1B | 2 |
-| Brutal | 20 | 5B | 4 |
+| Low | 5 | 25M | 0 |
+| Medium | 9 | 100M | 0 |
+| High | 11 | 250M | 0 |
+| Extreme | 17 | 1B | 2 |
+| Brutal | 21 | 5B | 4 |
 
 The whole sweep runs **inside a single tool call**, because 1,624 chunks cannot
-be 1,624 calls when the ceiling is 20. The agent decides *whether* to sweep and,
+be 1,624 calls when the ceiling is 21. The agent decides *whether* to sweep and,
 afterwards, which single chunk deserves a full text read. Calling
 `sweep_chunks_tool` with `confirm_cost=false` returns a cost estimate instead of
 running, so the user can agree to the spend first — four promotions is about
@@ -245,8 +250,10 @@ Disk is budgeted per dataset and checked before anything is built:
 | `openstack` | 64 MiB |
 | `otel_s3` | **0 B** — nothing may be built from the remote corpus |
 
-Current usage is **380.5 MiB of the 3 GiB budget**, holding the full 4.7M-row BGL
-corpus (281 MiB) with all 20,352 of its template embeddings (64 MB).
+Measured before this change: **380.5 MiB of the 3 GiB budget**, holding the full
+4.7M-row BGL corpus (281 MiB) with all 20,352 of its template embeddings (64 MB).
+The OpenStack corpus is estimated at ~32 MB (207,820 rows); the loader checks the
+budget before building and reports the real size afterwards.
 
 The memory limit matters more than it looks: it was originally left at 5.7 GiB on
 a machine with ~1 GB free, and the result was three crashes caused by the kernel
@@ -267,10 +274,13 @@ what was searched" rather than "not present".
 - A SereneDB instance on `localhost:7890` (default credentials
   `postgres`/`postgres`, database `postgres`)
 - An Ollama server reachable at `host.docker.internal:11434` serving
-  `nomic-embed-text:v1.5` for the embedding index
+  `nomic-embed-text:v1.5` -- only for the optional template embeddings;
+  `bash ./setup.sh` loads with `--no-embed` and needs no embedding model
+- The raw loghub logs in `src/backend/data/` (gitignored): the three OpenStack
+  nova runs `openstack_normal1.log`, `openstack_normal2.log`,
+  `openstack_abnormal.log`, and `BGL.log` (743 MB; `BGL_LOG_PATH` may point
+  elsewhere). See Setup.
 - Nothing extra for the remote OTel corpus: it is read from public S3 in place.
-  The BGL corpus is optional and loaded from a local loghub file (`BGL_LOG_PATH`,
-  743 MB); the chatbot runs without it, minus the long-range questions.
 
 ## Environment
 
@@ -362,40 +372,44 @@ Supporting pieces:
 The chat box suggests indexed log-field values as you type a **selector**. The
 *current word* (the run of non-space characters the caret sits in) is looked up
 through `GET /auto-complete`; the dropdown opens only while the box is focused,
-and picking a suggestion replaces the draft words it spans (a multi-word
-`event_template` such as `Removable base files: <*>` replaces every word it lines
-up with, so nothing is duplicated).
+and picking a suggestion replaces the draft words it spans (a multi-word event
+template such as `Removable base files: <*>` replaces every word it lines up with,
+so nothing is duplicated).
 
-A leading **selector** scopes the lookup to one column. One character is assigned
-per column, chosen so that it occurs in *no* indexed value and can therefore
+The chat box sends no dataset, so every local corpus loaded from a `.log` file
+(`openstack` and `bgl`) is searched and the results are merged: a value found in
+both appears once with its counts summed. The remote OTel tiers are never
+queried, so a keystroke cannot reach object storage.
+
+A leading **selector** scopes the lookup to one field. One character is assigned
+per field, chosen so that it occurs in *no* indexed value and can therefore
 never collide with real text:
 
-| Selector | Column |
-| --- | --- |
-| `@` | `service` |
-| `#` | `event_id` |
-| `^` | `event_template` |
-| `!` | `pid` |
-| `$` | `content` |
+| Selector | Field | Column (both corpora) |
+| --- | --- | --- |
+| `@` | service | `Component` |
+| `^` | event template | `EventTemplate` |
+| `$` | message content | `Content` |
 
-So `@nova` suggests services, `#E25` suggests event ids, `^Removable` suggests
-event templates, `!257` suggests pids, and `$timeout` suggests log lines whose
-content contains `timeout`. (`pid` is an integer column, so it is suggested
-through its indexed text mirror `pid_text`; `content` is word-indexed, so it is
-matched as whole lines rather than single words.)
+So `@nova` suggests OpenStack components (and `@KERN` BGL ones), `^Took` suggests
+event templates, and `$timeout` suggests log lines whose content contains
+`timeout`. (`Content` is word-indexed, so it is matched as whole lines rather
+than single words.) There is no pid/node or event-id selector.
 
 Each dropdown entry shows its **count** as `Count: n`. A `$` content entry instead
-shows `Line ID: n`, and picking it inserts that `Line ID: n` reference into the
-box rather than pasting the whole message. A bare selector lists that column's most
-popular values. A selector is **required**: a word without one is not looked up and
+shows `Line ID: n (dataset)`, and picking it inserts that reference into the box
+rather than pasting the whole message; the dataset is included because a line id
+is only unique within one corpus, and the agent passes both to
+`get_log_by_line_id_tool`. A bare selector lists that field's most popular
+values. A selector is **required**: a word without one is not looked up and
 suggests nothing. The selector is stripped before matching and is shown as a prefix
-on each dropdown entry (a display-only reminder of the column in scope); it is
+on each dropdown entry (a display-only reminder of the field in scope); it is
 consumed when a suggestion is picked, so the bare value is inserted.
 
 Matching is always case-insensitive, and by default ranking is too — a value is
 never preferred just for matching the case you typed. Typing `!` immediately after
 the selector (`@!nova`) switches to a case-sensitive ranking, putting values whose
-case matches what you typed first.
+case matches what you typed first. `!` is only this modifier, never a selector.
 
 ## Authentication
 
@@ -453,13 +467,37 @@ uv run python -m backend.appdb.manage <username> <password>
 ## Setup
 
 ```bash
-uv sync                       # install dependencies and the project itself
-uv run python -m backend.db.setup   # create the AI secret and import the sample log CSV
+uv sync           # install dependencies and the project itself
+bash ./setup.sh   # load the local log corpora (no arguments)
 ```
 
-`backend.db.setup` drops and recreates the `log` table from
-`src/backend/data/OpenStack_2k.log_structured.csv`, generates embeddings, and
-builds the inverted index. It is safe to re-run, but it discards existing rows.
+`setup.sh` loads both local corpora through the loghub loader
+(`backend.db.loghub`), in this order, each with `--no-embed`:
+
+1. `openstack` -- one table from the three nova logs, read one after another:
+   `src/backend/data/openstack_normal1.log`, `openstack_normal2.log`,
+   `openstack_abnormal.log` (207,820 lines). `LineId` runs on across the files,
+   so it is unique in the table; nothing records which run a row came from.
+2. `bgl` -- `src/backend/data/BGL.log` (or the file named by `BGL_LOG_PATH`),
+   4,747,963 lines. This takes a long time.
+
+Each run drops and rebuilds the table, and the disk budget is checked before
+anything is built. The script stops at the first failure, including a missing
+source file, with the loader's message naming what to add. Timestamps are stored
+as `TIMESTAMPTZ` in UTC and every database session is pinned to UTC, so a time
+window means the same thing on every machine.
+
+To load one corpus, or loghub's 2,000-line structured samples instead (these
+replace the same table):
+
+```bash
+uv run python -m backend.db.loghub openstack --no-embed
+uv run python -m backend.db.loghub openstack_2k --no-embed   # src/backend/data/OpenStack_2k.log_structured.csv
+uv run python -m backend.db.loghub bgl_2k --no-embed         # src/backend/data/BGL_2k.log_structured.csv
+```
+
+Dropping `--no-embed` also builds template-level embeddings, which needs the
+Ollama embedding model from Prerequisites.
 
 ## Running
 
@@ -478,12 +516,8 @@ used when unset. The scripts are not executable — invoke them with `bash`.
 uv run pytest
 ```
 
-The suite in `tests/test_db_queries.py` runs the database query layer against a
-**live SereneDB**. It requires the DB to be running on `localhost:7890` and
-seeded (see Setup); if SereneDB is unreachable or empty the tests **fail
-loudly** rather than skip.
-
-Everything else runs without external services (the gated live route tests below are skipped unless enabled):
+The suite runs without external services; the gated live corpus, route and
+confidence tests below are skipped unless enabled.
 
 | File | Covers |
 | --- | --- |
@@ -499,32 +533,38 @@ Everything else runs without external services (the gated live route tests below
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
+| `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
+| `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
+| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (nine tools), MCP server validation (no auto-complete tool) |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
-| `test_bgl.py` / `test_bgl_live.py` | loghub parsing; gated live checks against the full 4.7M-row corpus |
+| `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
+| `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
 | `test_sampling_and_external.py` / `test_promotion.py` | cluster-sample uncertainty, in-place index plans, promote/digest/teardown |
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `3 failed, 578 passed, 42 skipped`. The three
+> The offline suite reports `3 failed, 612 passed, 53 skipped`. The three
 > failures are known and pre-existing, all in `tests/test_rendering.py`
 > (inline-marker rendering edge cases); the skips are the gated live cases
-> below. The suite passes identically under `TOOLS_TRANSPORT=local` and
-> `TOOLS_TRANSPORT=mcp`.
+> below.
 
 ### Live corpus tests
 
-Two suites run against the real corpora and are skipped unless gated, because
+Three suites run against the real corpora and are skipped unless gated, because
 each costs real queries against a live database (and, for OTel, public S3):
 
 ```bash
-RUN_BGL_LIVE=1  uv run pytest tests/test_bgl_live.py     # full 4.7M-row BGL
-RUN_OTEL_LIVE=1 uv run pytest tests/test_otel_live.py    # remote corpus + index
+RUN_OPENSTACK_LIVE=1 uv run pytest tests/test_openstack_live.py   # 207,820-row OpenStack
+RUN_BGL_LIVE=1       uv run pytest tests/test_bgl_live.py         # full 4.7M-row BGL
+RUN_OTEL_LIVE=1      uv run pytest tests/test_otel_live.py        # remote corpus + index
 ```
 
-`RUN_BGL_LIVE` needs BGL loaded (`uv run python -m backend.db.loghub bgl`, which
-reads `BGL_LOG_PATH`). `RUN_OTEL_LIVE` needs only network access; the tests that
-require the in-place index skip themselves with a message when it has not been
-built, rather than failing.
+`RUN_OPENSTACK_LIVE` and `RUN_BGL_LIVE` need the corpus loaded (`bash ./setup.sh`;
+BGL reads `BGL_LOG_PATH` when set); each skips with a message when its table is
+absent. The template-embedding checks in `test_bgl_live.py` skip until templates
+are embedded. `RUN_OTEL_LIVE` needs only network access; the tests that require
+the in-place index skip themselves with a message when it has not been built,
+rather than failing.
 
 ### Live route tests
 
@@ -536,6 +576,13 @@ sets it) and must be run alone — never inside the full suite, because
 `tests/conftest.py` installs dummy provider keys before the backend's
 import-time clients are built. Each gated run writes
 `.data/scope_routes_report.html` (gitignored; override with
+`RUN_LIVE_ROUTES_REPORT`) and prints its path once; the per-turn numbers appear in
+the assertion failure. Offline, only a case-data sanity check runs. Costs two
+live API calls per asserted turn, and the classifier is stochastic — re-run
+before treating a flipped route as a regression. The scope prompt's
+`QUERYABLE_TARGETS` no longer lists an event id, so re-run this after pulling
+that change.
+
 ### Live confidence checks
 
 `bash ./confidence.sh` replays representative evidence and answer states through
@@ -545,11 +592,6 @@ gated by `RUN_LIVE_CONFIDENCE=1`, must run alone, and writes
 report includes each atomic Noul signal and the selected policy route. Thresholds
 are starting values validated against these cases; the cases are stochastic and
 must not be re-baselined to match a flipped result.
-
-`RUN_LIVE_ROUTES_REPORT`) and prints its path once; the per-turn numbers appear in
-the assertion failure. Offline, only a case-data sanity check runs. Costs two
-live API calls per asserted turn, and the classifier is stochastic — re-run
-before treating a flipped route as a regression.
 
 To see tool calls and their parameters (and, at `DEBUG`, the SQL and query
 params) in the backend terminal:
@@ -615,12 +657,14 @@ Static event stream used to exercise the UI without running the pipeline.
 ### `GET /auto-complete`
 
 Type-ahead suggestions from the indexed log-field values. `query` is required and
-must start with a selector scoping it to one column (`@` service, `#` event_id,
-`^` event_template, `!` pid, `$` content); a bare selector lists that column's
-most popular values, while a query with no leading selector returns no
-suggestions.
+must start with a selector scoping it to one field (`@` service/component, `^`
+event template, `$` content; a `!` right after the selector ranks
+case-sensitively); a bare selector lists that field's most popular values, while
+a query with no leading selector returns no suggestions. Every local `.log`
+corpus (`openstack`, `bgl`) is always searched and the suggestions merged; there
+is no `dataset` parameter.
 Returns `{"suggestions": [{"suggestion", "count"}, ...]}`; a `$` content
-suggestion carries `line_id` in place of `count`.
+suggestion carries `line_id` and `dataset` in place of `count`.
 
 ### Chats
 
@@ -668,13 +712,14 @@ backend.sh    uvicorn backend.api:app (demo account provisioned on start)
 frontend.sh   streamlit run src/ui/streamlit_app.py
 routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
-setup.sh      legacy DB seeding script (prefer: uv run python -m backend.db.setup)
+setup.sh      load the local corpora via loghub: openstack, then bgl (--no-embed; no arguments)
 src/
 ├── backend/
 │   ├── api.py            FastAPI endpoints, streaming, and admission control
 │   ├── jobs.py           in-process background investigation registry
 │   ├── observability.py  request-correlation middleware and metrics registry
 │   ├── appdb/            users, sessions, chats, messages (SQLite)
+│   ├── data/             raw loghub .log files (gitignored) + the 2k structured CSV samples
 │   ├── db/               pooled SereneDB connection, config, and log queries
 │   │   ├── datasets.py     the corpus registry: columns + declared capabilities
 │   │   ├── budget.py       disk/memory budget, per-dataset allowances, findings
@@ -685,7 +730,7 @@ src/
 │   │   ├── promotion.py    index a chunk, digest it, drop it (teardown always)
 │   │   ├── external.py     the in-place inverted index over remote Parquet
 │   │   ├── templates.py    template extraction and template-level embeddings
-│   │   └── loghub.py       loghub loaders (BGL), raw-line and structured-CSV
+│   │   └── loghub.py       loghub loaders: BGL and OpenStack parsers, raw-line and structured-CSV
 │   └── pipeline/
 │       ├── graph.py      LangGraph nodes, wiring, and checkpointer selection
 │       ├── state.py      pipeline state schema
@@ -717,8 +762,8 @@ skills/
 
 ## MCP tool service
 
-The optional standalone MCP service owns SereneDB access, auto-complete, and the
-investigation skills. Start it separately from the backend:
+The optional standalone MCP service owns SereneDB access for the evidence tools
+and the investigation skills. Start it separately from the backend:
 
 ```bash
 bash ./mcp_server.sh                 # Streamable HTTP, default 127.0.0.1:8010/mcp
@@ -726,9 +771,10 @@ TOOLS_TRANSPORT=mcp bash ./backend.sh
 ```
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
-seven evidence tools and `/auto-complete` through MCP; if the service is
+seven bounded query tools and the two sweep tools through MCP; if the service is
 unreachable, the backend logs the failure and falls back to the in-process DB
-implementation. MCP mode also exposes `list_skills` and `read_skill`, while
+implementation. `/auto-complete` is not an MCP tool: it is a chat-box feature and
+is always answered in-process, whatever the transport. MCP mode also exposes `list_skills` and `read_skill`, while
 local mode keeps the sandboxed `skills/` filesystem backend. The server exposes
 skills both as MCP resources (`skill://log-investigation`) and tools for clients
 such as MCP Inspector, Kiro, or Claude Desktop.
@@ -786,15 +832,18 @@ unsupported log facts:
 1. Use `list_skills` and then `read_skill("log-investigation")` when the request
    asks why a failure occurs, asks for root-cause analysis, or requires testable
    hypotheses.
-2. Use `search_logs_tool` for semantic or message-content searches. Use
-   `get_log_by_line_id_tool` when the user supplies a `Line ID: n` reference.
-3. Use `get_data_tool` to discover known services, pids, or event ids before
-   requesting a trend for an exact target with `get_trend_tool`.
+2. Pass a `dataset` id (`openstack` is the default; `bgl`, `otel_s3`,
+   `otel_slice`) to every log tool; there are no table names. Use
+   `search_logs_tool` for message-content searches on an indexed corpus. Use
+   `get_log_by_line_id_tool` when the user supplies a `Line ID: n (dataset)`
+   reference, passing both `line_id` and `dataset`.
+3. Use `get_data_tool` to discover a field's real values (services, entity ids,
+   templates) before requesting a trend for an exact target with `get_trend_tool`.
 4. Use `count_by_category_tool`, `top_in_category_by_service_tool`, and
-   `compare_periods_tool` for computed counts, rankings, and period comparisons.
-5. Use `auto_complete` only for selector-prefixed suggestions (`@` service, `#`
-   event id, `^` event template, `!` pid, `$` content).
-6. Ground the final answer in returned rows and aggregates. Preserve the tool
+   `compare_periods_tool` for computed counts, rankings, and period comparisons;
+   `sweep_chunks_tool` and `investigate_chunk_tool` cover the remote corpus at
+   high effort (price a sweep first with `confirm_cost=false`).
+5. Ground the final answer in returned rows and aggregates. Preserve the tool
    result identifiers and distinguish an empty result from a failed tool call.
 
 The external agent connects directly to the MCP service, so the backend does

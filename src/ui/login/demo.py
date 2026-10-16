@@ -1,20 +1,6 @@
 """TEMPORARY demo auto-login.
-
-Everything here exists only so the hackathon demo skips the sign-in step. To remove
-the demo:
-
-1. Delete ``src/ui/login/demo.py`` and ``src/backend/appdb/demo.py``.
-2. Delete ``tests/test_demo.py``.
-3. Delete the demo provisioning comment and the
-   ``uv run python -m backend.appdb.demo`` line from ``backend.sh``.
-4. In ``src/ui/streamlit_app.py``: delete the ``from ui.login import demo``
-   import, delete the demo comment lines above the gate, delete the
-   ``demo.mark_logged_out()`` line from ``_logout()``, and reduce the gate to
-   ``login_page(); st.stop()``.
-5. Delete the "Demo auto-login (temporary)" section from
-   ``src/ui/login/README.md`` (the file itself stays — it also documents the
-   permanent auth flow).
-6. Delete the "Demo auto-login" section from ``README.md``.
+Exists only so the hackathon demo skips sign-in. Removal steps are documented in
+``README.md`` / ``src/ui/login/README.md`` (delete this file + ``appdb/demo.py``).
 """
 
 import os
@@ -59,8 +45,6 @@ def password() -> str:
 
 def auto_login() -> None:
     """Sign in the demo account.
-
     Returns only on failure: a successful sign-in calls ``st.rerun()``, which
-    raises and restarts the script with the session authenticated.
-    """
+    raises and restarts the script authenticated."""
     sign_in(lambda: chat_client.login(username(), password()))

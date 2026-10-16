@@ -1,11 +1,6 @@
 """Create a user from the command line.
-
-Usage:
-    uv run python -m backend.appdb.manage <username> <password>
-
-Useful for bootstrapping the first account while ``AUTH_REGISTRATION_OPEN`` is
-false (or to provision accounts directly).
-"""
+Usage: ``uv run python -m backend.appdb.manage <username> <password>``.
+Bootstraps the first account while ``AUTH_REGISTRATION_OPEN`` is false."""
 
 import sys
 
@@ -20,8 +15,7 @@ from backend.appdb.auth import (
 
 def provision(username: str, password: str) -> tuple[int, str]:
     """Create a user under the shared credential policy.
-
-    Returns ``(exit_code, message)``: 0 created, 1 already taken, 2 policy violation.
+    Returns ``(exit_code, message)``: 0 created, 1 taken, 2 policy violation.
     """
     if len(username) < USERNAME_MIN_LENGTH:
         return 2, f"Username must be at least {USERNAME_MIN_LENGTH} characters."

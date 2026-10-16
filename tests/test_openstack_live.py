@@ -1,0 +1,137 @@
+"""Live OpenStack checks against a loaded corpus.
+
+Gated by ``RUN_OPENSTACK_LIVE=1`` because they need the corpus loaded:
+
+    bash ./setup.sh     # or: uv run python -m backend.db.loghub openstack --no-embed
+    RUN_OPENSTACK_LIVE=1 uv run pytest tests/test_openstack_live.py
+
+Kept out of the default suite so a fresh checkout does not fail for want of a
+corpus nobody loaded. The offline proof that the registry and the loader handle
+OpenStack lives in ``test_openstack.py``; this file confirms the queries
+actually return data.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+import backend.db as db
+from backend.db.datasets import resolve
+from backend.db.loghub import status
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_OPENSTACK_LIVE") != "1",
+    reason="set RUN_OPENSTACK_LIVE=1 and load OpenStack to run these",
+)
+
+# Covers the whole corpus with margin; measured span below.
+WINDOW = ("2017-05-14 00:00:00+00", "2017-05-18 00:00:00+00")
+
+
+@pytest.fixture(scope="module")
+def loaded():
+    state = status("openstack")
+    if not state.get("exists") or not state.get("rows"):
+        pytest.skip("OpenStack is not loaded")
+    return state
+
+
+# Every line of the three raw nova logs (52,312 + 137,074 + 18,434), all of which
+# the parser accepts. Asserted exactly: a loader that silently drops rows is
+# the failure mode that matters, and it is invisible in every aggregate.
+OPENSTACK_ROWS = 207_820
+
+# Measured by scanning the three raw files.
+SEVERITY_COUNTS = {"INFO": 204_506, "WARNING": 3_118, "ERROR": 194, "CRITICAL": 2}
+
+
+def test_the_corpus_loaded_completely(loaded):
+    assert loaded["rows"] == OPENSTACK_ROWS
+
+
+def test_the_corpus_spans_the_three_runs(loaded):
+    """First line 2017-05-14 19:39:01.445, last 2017-05-17 12:02:35.320 (UTC)."""
+    assert loaded["covered_start"].startswith("2017-05-14 19:39:01")
+    assert loaded["covered_end"].startswith("2017-05-17 12:02:35")
+
+
+def test_severity_counts_are_exact_and_uppercase(loaded):
+    rows = db.count_by_field(*WINDOW, dataset="openstack")
+    assert not rows.refused
+    assert rows.stats.approximate is False
+
+    counts = {r["severity"]: r["count"] for r in rows}
+    assert all(sev.isupper() for sev in counts)
+    assert sum(counts.values()) == OPENSTACK_ROWS
+    assert counts == SEVERITY_COUNTS
+
+
+def test_components_rank_by_volume(loaded):
+    rows = db.top_by_field(*WINDOW, dataset="openstack", field="service")
+    assert not rows.refused
+    services = [r["service"] for r in rows]
+    # Third by volume (24,784 rows) behind the two wsgi/imagecache components.
+    assert "nova.compute.manager" in services
+
+
+def test_an_hour_bucketed_trend_covers_the_whole_corpus(loaded):
+    """About 65 hours: hour buckets fit under the cap, minute buckets do not."""
+    rows = db.get_trend(
+        *WINDOW, "service", "nova.compute.manager", dataset="openstack", bucket="hour"
+    )
+    assert not rows.refused
+    assert 1 < len(rows) <= 96
+
+
+def test_a_minute_bucketed_full_range_trend_is_refused(loaded):
+    rows = db.get_trend(
+        *WINDOW, "service", "nova.compute.manager", dataset="openstack", bucket="minute"
+    )
+    assert rows.refused
+    assert rows.refusal.code == "too_many_buckets"
+
+
+def test_lexical_search_finds_an_exact_phrase(loaded):
+    rows = db.search_logs("Instance spawned successfully", dataset="openstack", limit=5)
+    assert len(rows) > 0
+    assert any("spawned" in str(r["message"]).lower() for r in rows)
+
+
+def test_fetch_by_record_id_returns_one_row(loaded):
+    rows = db.get_log_by_record_id(1, dataset="openstack")
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == 1
+
+
+def test_every_selector_returns_suggestions(loaded):
+    """Every offered selector, since a column missing from the token index fails
+    only at query time. No '#' (no event ids) and no '!' (only the case
+    modifier, never a selector). Checked per corpus through the private
+    lookup, since the merged one hides which corpus answered."""
+    from backend.db.auto_complete import _auto_complete_dataset
+
+    for query in ("@nova", "^Took", "$spawned"):
+        suggestions = _auto_complete_dataset(query, dataset="openstack")
+        assert suggestions, query
+
+    assert "#" not in resolve("openstack").selectors
+    assert "!" not in resolve("openstack").selectors
+
+
+def test_the_merged_type_ahead_includes_openstack(loaded):
+    suggestions = db.auto_complete("@nova")
+    assert suggestions
+    assert any(str(s["suggestion"]).startswith("nova.") for s in suggestions)
+
+
+def test_the_corpus_stays_well_inside_its_allowance(loaded):
+    from backend.db.budget import ALLOWANCES
+    from backend.db.probe import probe_cursor
+
+    with probe_cursor() as cur:
+        cur.execute("SELECT pg_total_relation_size('openstack') AS b")
+        size = int(cur.fetchone()["b"])
+
+    assert size < ALLOWANCES["openstack"]

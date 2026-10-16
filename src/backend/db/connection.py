@@ -1,9 +1,6 @@
 """SereneDB connection handling and the query-runner decorator.
-
-Connections are served from a process-wide, thread-safe pool so that many
-concurrent investigations share a bounded number of sockets instead of opening
-(and tearing down) one connection per query.
-"""
+Connections are served from a process-wide, thread-safe pool so concurrent
+investigations share a bounded number of sockets, not one per query."""
 
 import functools
 import logging
@@ -124,11 +121,29 @@ def _get_pool() -> ThreadedConnectionPool:
 
 def get_conn():
     """Open a standalone connection.
-
-    Used by one-off tooling (schema setup, migrations) rather than the request
-    path, which borrows from the shared pool via ``db_cursor``.
-    """
+    Used by one-off tooling (schema setup, migrations), not the request path,
+    which borrows from the shared pool via ``db_cursor``."""
     return psycopg2.connect(**_connect_kwargs())
+
+
+# Every session reads and writes timestamps in UTC.
+#
+# The local corpora store TIMESTAMPTZ, and a naive window bound such as
+# '2017-05-16 00:00:00' is interpreted in the *session* time zone when it is cast
+# to timestamptz. Left to the server default (the TZ of whatever host runs it),
+# the same question would select a different window on a different machine.
+#
+# Measured on SereneDB: ``SET TimeZone`` is session-scoped -- unlike
+# ``memory_limit`` it does not reach other clients, and a fresh connection still
+# reads the server default -- so it is safe to issue on every connection.
+SESSION_TIME_ZONE = "UTC"
+
+
+def set_session_time_zone(cur) -> None:
+    """Pin ``cur``'s session to :data:`SESSION_TIME_ZONE`."""
+    cur.execute(
+        sql.SQL("SET TimeZone = {tz}").format(tz=sql.Literal(SESSION_TIME_ZONE))
+    )
 
 
 @contextmanager
@@ -156,6 +171,7 @@ def db_cursor() -> Iterator[RealDictCursor]:
 
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        set_session_time_zone(cur)
         yield cur
         conn.commit()
     except Exception:

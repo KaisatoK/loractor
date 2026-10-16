@@ -1,9 +1,6 @@
 """Request correlation and lightweight in-process metrics.
-
-No external dependency: counters live in memory and are exposed as JSON at
-``/metrics``. A pure-ASGI middleware attaches a request id to every log line and
-response header without buffering streaming bodies.
-"""
+No external dependency: counters live in memory, exposed as JSON at
+``/metrics``; a pure-ASGI middleware attaches a request id to logs and headers."""
 
 import contextvars
 import logging
@@ -57,10 +54,8 @@ metrics = Metrics()
 
 class RequestContextMiddleware:
     """Pure-ASGI middleware: request id + structured access log.
-
-    Implemented as raw ASGI (not ``BaseHTTPMiddleware``) so streamed response
-    bodies pass through untouched.
-    """
+    Raw ASGI (not ``BaseHTTPMiddleware``) so streamed response bodies pass
+    through untouched."""
 
     def __init__(self, app) -> None:
         self.app = app
