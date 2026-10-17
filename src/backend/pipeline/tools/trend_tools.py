@@ -35,7 +35,8 @@ def get_trend_tool(
 
     Pick the bucket to suit the window: 'second' for a short incident, 'hour' or
     'day' for a long one. A window that would produce too many points is refused
-    with a coarser bucket suggested.
+    with a coarser bucket suggested. Returns kind=trend rows (bucket, count):
+    measured counts for every bucket in the window.
     """
     field, value = type[0], type[1]
     operation = f"get the {_LABELS.get(field, field)} trend for '{value}' on {dataset}"
@@ -48,4 +49,14 @@ def get_trend_tool(
         function=lambda: get_trend(
             start_time, end_time, field, value, dataset, bucket, category
         ),
+        kind="trend",
+        dataset=dataset,
+        complete=True,
+        filters={
+            "start_time": start_time,
+            "end_time": end_time,
+            field: value,
+            "category": category,
+            "bucket": bucket,
+        },
     )

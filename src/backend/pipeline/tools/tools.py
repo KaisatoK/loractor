@@ -36,7 +36,9 @@ def search_logs_tool(
     """Search message text on an indexed corpus; put severity in category.
 
     Reads the inverted index, so it never scans the remote files. On the OTel
-    corpus use the indexed slice -- the raw remote tier has no index.
+    corpus use the indexed slice -- the raw remote tier has no index. Returns
+    kind=search: at most ``limit`` example rows ranked by relevance, plus
+    ``truncated``. Examples never measure frequency; use count_by_category_tool.
     """
     operation = f"search {dataset} messages for '{query_text}'"
     if category:
@@ -46,6 +48,10 @@ def search_logs_tool(
         runtime=runtime,
         operation=operation,
         function=lambda: search_logs(query_text, dataset, category, limit),
+        kind="search",
+        dataset=dataset,
+        limit=limit,
+        filters={"query_text": query_text, "category": category},
     )
 
 
@@ -66,6 +72,10 @@ def get_log_by_line_id_tool(
         runtime=runtime,
         operation=f"fetch {dataset} row with id {line_id}",
         function=lambda: get_log_by_record_id(line_id, dataset),
+        kind="lookup",
+        dataset=dataset,
+        complete=True,
+        filters={"line_id": line_id},
     )
 
 
@@ -79,7 +89,11 @@ def top_in_category_by_service_tool(
     category: str | None = None,
     limit: int = 5,
 ) -> dict:
-    """Rank services (or another field) by log volume in a time window."""
+    """Rank services (or another field) by log volume in a time window.
+
+    Returns kind=aggregate rows (value, count), the top ``limit`` by count: a
+    measured ranking over every matching row.
+    """
     operation = f"rank {dataset} {field} by log volume"
     if category:
         operation += f" for '{category}' severity"
@@ -89,6 +103,15 @@ def top_in_category_by_service_tool(
         function=lambda: top_by_field(
             start_time, end_time, field, dataset, category, limit
         ),
+        kind="aggregate",
+        dataset=dataset,
+        limit=limit,
+        filters={
+            "start_time": start_time,
+            "end_time": end_time,
+            "category": category,
+            "group_by": field,
+        },
     )
 
 
@@ -103,7 +126,11 @@ def compare_periods_tool(
     dataset: str = DEFAULT_DATASET_ID,
     limit: int = 5,
 ) -> dict:
-    """Compare counts between a baseline and a recent window."""
+    """Compare counts between a baseline and a recent window.
+
+    Returns kind=aggregate rows (value, baseline_count, recent_count): measured
+    counts for the top ``limit`` values in both windows.
+    """
     return execute_database_tool(
         runtime=runtime,
         operation=f"compare {dataset} log volume across two time windows",
@@ -116,4 +143,14 @@ def compare_periods_tool(
             field,
             limit,
         ),
+        kind="aggregate",
+        dataset=dataset,
+        limit=limit,
+        filters={
+            "baseline_start": baseline_start,
+            "baseline_end": baseline_end,
+            "recent_start": recent_start,
+            "recent_end": recent_end,
+            "group_by": field,
+        },
     )

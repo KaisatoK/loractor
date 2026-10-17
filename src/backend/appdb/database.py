@@ -52,6 +52,23 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (user_id, chat_id, seq),
     FOREIGN KEY (user_id, chat_id) REFERENCES chats(user_id, id) ON DELETE CASCADE
 );
+
+-- Per-role answers for one assistant message (role switch). Each row is the
+-- result of a separate investigation for that role, so switching back and
+-- forth between roles reuses it instead of running again.
+CREATE TABLE IF NOT EXISTS role_answers (
+    user_id      TEXT NOT NULL,
+    chat_id      TEXT NOT NULL,
+    message_seq  INTEGER NOT NULL,
+    role         TEXT NOT NULL,
+    effort       TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    tool_results TEXT,
+    progress     TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (user_id, chat_id, message_seq, role),
+    FOREIGN KEY (user_id, chat_id) REFERENCES chats(user_id, id) ON DELETE CASCADE
+);
 """
 
 

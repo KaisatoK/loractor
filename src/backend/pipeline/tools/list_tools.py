@@ -26,7 +26,8 @@ def get_data_tool(
 
     Use it to discover valid filter values before requesting a trend. Fields
     whose distinct set is effectively unbounded (trace ids on the OTel corpus)
-    are refused with an alternative rather than attempted.
+    are refused with an alternative rather than attempted. Returns kind=catalog
+    rows (value, count); they are for discovery, not a frequency analysis.
     """
     return execute_database_tool(
         runtime=runtime,
@@ -34,4 +35,8 @@ def get_data_tool(
         function=lambda: get_field_values(
             start_time, end_time, type, dataset, limit
         ),
+        kind="catalog",
+        dataset=dataset,
+        limit=limit,
+        filters={"start_time": start_time, "end_time": end_time, "field": type},
     )

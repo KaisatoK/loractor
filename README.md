@@ -27,18 +27,81 @@ SereneDB log queries (src/backend/db)   ← pooled connections
   openstack · bgl (4.7M) · otel_s3 (1e9, in place) · otel_slice (in-place index)
 ```
 
-The `scope` stage uses four independent TypeSafe (Jev) Noul judgments: whether
+The `scope` stage uses five independent TypeSafe (Jev) Noul judgments: whether
 `latest_message` is a log request, whether the raw message transcript names a
 queryable target, whether the user authorized proceeding without clarification,
-and whether new log evidence is needed. Code owns the policy: non-log requests go
-to a general reply; vague log requests are clarified unless authorized or out of
-clarification budget; otherwise `needs_new_evidence` selects a direct answer or
+whether new log evidence is needed, and whether the request is a dataset-wide
+overview. Code owns the policy: non-log requests go to a general reply; vague log
+requests are clarified unless authorized, out of clarification budget, or (for
+the team lead and manager only) an overview of the whole dataset; otherwise `needs_new_evidence` selects a direct answer or
 investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
 investigation and calls the database tools itself, then submits a free-text summary
 of its findings. The report of `summary` plus `evidence` (and optional
 `hypotheses`) is built off-agent from that summary and the captured results, which
 are renumbered `R1..Rn` for the answer tables. A bundled `log-investigation` skill
 decides when hypotheses apply.
+
+## One question, three roles
+
+The same agent and corpus answer every role, but each role gets different
+**questions, evidence and next steps** (not just a different length):
+
+| Role | Asks | Evidence collected | Answer ends with |
+| --- | --- | --- | --- |
+| Engineer | What failed, where, and what happened just before and after? | full-text search → nearby events (approximated until the nearby-events tool exists) → an isolated-or-recurring count | a possible cause, labelled a hypothesis, and one next diagnostic check |
+| Team lead | Which problems recur, how often, which components/teams? | counts by event and component over a stated period, a trend for the top patterns, owning teams from the ownership table | what the team should investigate first, and why |
+| Manager | What deserves attention first, and what happens next? | measured frequency, severity share, trend direction and breadth, combined by a deterministic priority score | at most three ranked priorities, each with an action and owning team; no invented cost, downtime or customer impact |
+
+The evidence plan for each role is a skill (`skills/engineer-investigation`,
+`skills/recurring-patterns`, `skills/risk-prioritization`) that is injected into
+the evidence agent's prompt and also served over MCP, so Claude connected to the
+MCP server follows the same plans. The role never reaches the TypeSafe
+classifiers: code decides, for example, that a dataset-wide overview is a valid
+starting point for the team lead and manager but not for the engineer.
+
+Every answer shows its work. Code (not the model) appends:
+
+- **Findings** labelled *Measured* (cited to query results), *Hypotheses* and
+  *Limitations*; a "measured" claim without a valid cited result is downgraded to
+  a hypothesis, and claims backed only by example search hits are flagged as not
+  a frequency.
+- **Recommended next steps** with their reason and owning team.
+- **Data scope and queries**: datasets, time window, filters, which results are
+  measured counts and which are examples, whether each result was truncated, and
+  the executed SQL for every result.
+
+Counts are log entries, never "incidents". The priority score is computed from
+the measured counts (never by a model) and shown with its formula:
+`0.4·volume_share + 0.3·error_share + 0.2·trend_up + 0.1·breadth`.
+
+### Tool results
+
+Every evidence tool returns one envelope: `status`, `operation`, `kind`
+(`search | context | aggregate | trend | lookup | catalog | test`), `dataset`,
+the executed `query`, `filters`, `limit`, `returned`, `total_matches`,
+`truncated` and `data`. Only `aggregate`/`trend` results are frequencies;
+`search` results are examples. The same envelope is returned by the in-process
+tools and by the MCP server (`src/backend/pipeline/tools/envelope.py`). A tool
+that omits a field is reported as "unknown", never guessed.
+
+### Answering as another role
+
+Under each answer, the "As <role>" buttons run a **new investigation** for that
+role (its own evidence plan, not a rewording) in the background and cache it per
+message and role: switching manager → engineer → manager never runs the same
+investigation twice. A request at a higher effort than the cached run re-runs.
+`POST /chats/{id}/messages/{seq}/role-answer` and `GET /chats/{id}/role-answers`
+back the buttons; `/chat/reframe` remains for compatibility.
+
+### Worked investigation
+
+`bash ./worked_investigation.sh --topic "<issue or pattern>"` asks the same topic
+as engineer, team lead and manager against the live database and writes
+`docs/worked_investigation.md`: per role the question, route, tool calls,
+executed queries, key rows, evidence report, answer and recommended action, plus
+what the data does and does not establish. It needs a seeded SereneDB and real
+provider keys, and it also writes the raw runs to
+`.data/worked_investigation_runs.json`.
 
 ## Log corpora and how they are queried
 
@@ -314,7 +377,7 @@ a few dozen concurrent investigations.
 | `MAX_INFLIGHT_PER_USER` | `2` | Per-user investigations; excess get `429` |
 | `SERENEDB_POOL_MIN` / `SERENEDB_POOL_MAX` | `2` / `32` | Shared SereneDB connection pool |
 | `SERENEDB_STATEMENT_TIMEOUT_MS` | `30000` | Server-side per-query timeout |
-| `SERENEDB_HOST` / `SERENEDB_PORT` / `SERENEDB_DB` / `SERENEDB_USER` / `SERENEDB_PASSWORD` | `localhost` / `7890` / `postgres` / `postgres` / `postgres` | SereneDB target |
+| `SERENEDB_HOST` / `SERENEDB_PORT` / `SERENEDB_DB` / `SERENEDB_USER` / `SERENEDB_PASSWORD` | `localhost` / `7890` / `postgres` / `postgres` / `postgres` | SereneDB target (with Docker the host port is the mapped one, see `docker ps`, and can change when the container is recreated) |
 | `CHECKPOINT_BACKEND` | `sqlite` | Graph state store: `sqlite`, `memory`, or `postgres` |
 | `CHECKPOINT_SQLITE_PATH` | `./.data/checkpoints.sqlite` | SQLite checkpoint file |
 | `CHECKPOINT_POSTGRES_URL` | – | Required when `CHECKPOINT_BACKEND=postgres` |
@@ -499,6 +562,37 @@ uv run python -m backend.db.loghub bgl_2k --no-embed         # src/backend/data/
 Dropping `--no-embed` also builds template-level embeddings, which needs the
 Ollama embedding model from Prerequisites.
 
+### Team ownership (fictional)
+
+`src/backend/data/team_ownership.csv` is a small, **invented** mapping from log
+components to the teams that "own" them, used so team-lead and manager answers
+can group counts by team. It is not real organisational data. Columns:
+
+| Column | Meaning |
+| --- | --- |
+| `dataset` | Base-corpus dataset (`OpenStack` or `BGL`) |
+| `component` | Exact value of the corpus's `Component` column (the registry's `service` field) |
+| `team` | Owning team |
+
+| Team | Owns |
+| --- | --- |
+| API Gateway | `nova.osapi_compute.wsgi.server`, `nova.api.openstack.*`, `nova.metadata.wsgi.server` |
+| Compute Platform | `nova.compute.manager`, `nova.compute.claims`, `nova.compute.resource_tracker` |
+| Virtualization | `nova.virt.libvirt.driver`, `nova.virt.libvirt.imagecache` |
+| Scheduling | `nova.scheduler.*` |
+| BG/L Kernel | BGL `KERNEL`, `APP` |
+| BG/L Control System | BGL `MMCS`, `BGLMASTER`, `CMCS` |
+| Hardware Ops | BGL `MONITOR`, `HARDWARE`, `LINKCARD`, `DISCOVERY` |
+| Network Ops | BGL `SERV_NET` |
+
+Components that are not listed count as team `unowned`, so a team total never
+silently drops rows. `backend.db.ownership` validates the file (header, no empty
+fields, no component mapped twice); `uv run python -m backend.db.ownership`
+loads it into SereneDB as `team_ownership` (no log table is touched). Today the
+prompts read the CSV directly to name teams; a team-count tool would join
+`Component = team_ownership.component`. Replace the CSV if
+the organisers' ownership table becomes available; keep the three columns.
+
 ## Running
 
 ```bash
@@ -532,6 +626,9 @@ confidence tests below are skipped unless enabled.
 | `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
+| `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
+| `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
+| `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
@@ -580,8 +677,9 @@ import-time clients are built. Each gated run writes
 the assertion failure. Offline, only a case-data sanity check runs. Costs two
 live API calls per asserted turn, and the classifier is stochastic — re-run
 before treating a flipped route as a regression. The scope prompt's
-`QUERYABLE_TARGETS` no longer lists an event id, so re-run this after pulling
-that change.
+`QUERYABLE_TARGETS` no longer lists an event id. Each scripted conversation sets
+the user's role: an overview such as "what recurring problem do we have" is
+scoped for team lead and manager but still clarified for the engineer.
 
 ### Live confidence checks
 
@@ -693,6 +791,13 @@ from accepting the question to finishing (the UI shows it under the answer).
 investigation for a chat that already has one returns the existing `run_id`.
 `DELETE /chats/{chat_id}` cancels and discards any active run.
 
+### Role switch
+
+| Endpoint | Result |
+| --- | --- |
+| `POST /chats/{chat_id}/messages/{seq}/role-answer` | `{role, effort}` → `{status: "cached", answer}` or `{status: "running", run_id}` (poll the run endpoint) |
+| `GET /chats/{chat_id}/role-answers` | `{answers: [{message_seq, role, effort, content, tool_results, progress}]}` |
+
 ### Operations
 
 | Endpoint | Result |
@@ -711,6 +816,7 @@ include streams started/completed/rejected, logins, chats, and messages.
 backend.sh    uvicorn backend.api:app (demo account provisioned on start)
 frontend.sh   streamlit run src/ui/streamlit_app.py
 routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
+worked_investigation.sh  one topic as all three roles -> docs/worked_investigation.md
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 setup.sh      load the local corpora via loghub: openstack, then bgl (--no-embed; no arguments)
 src/
@@ -736,7 +842,10 @@ src/
 │       ├── state.py      pipeline state schema
 │       ├── contracts.py  Pydantic agent response models
 │       ├── answers.py    structured-answer → marker text serialization
-│       ├── roles.py      role objectives
+│       ├── roles.py      role objectives and role -> playbook skill map
+│       ├── playbooks.py  playbook text and ownership mapping injected into prompts
+│       ├── priority.py   deterministic priority score from measured counts
+│       ├── data_scope.py data scope derived from tool results
 │       ├── effort.py     per-effort budgets
 │       ├── middleware.py model/tool error handling and retry/backoff
 │       ├── models.py     chat model instances
@@ -757,7 +866,10 @@ src/
     ├── chat_box/         type-ahead chat input (custom component, no build)
     └── new_chat/         role-selection page
 skills/
-└── log-investigation/SKILL.md  hypothesis workflow for the evidence stage
+├── log-investigation/SKILL.md      hypothesis workflow for the evidence stage
+├── engineer-investigation/SKILL.md role playbook: error lines, nearby events, next check
+├── recurring-patterns/SKILL.md     role playbook: counts, trends, teams
+└── risk-prioritization/SKILL.md    role playbook: ranked priorities and actions
 ```
 
 ## MCP tool service

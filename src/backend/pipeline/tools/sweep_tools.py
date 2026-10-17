@@ -68,6 +68,10 @@ def sweep_chunks_tool(
             runtime=runtime,
             operation=f"estimate the cost of sweeping {dataset}",
             function=lambda: _as_estimate(dataset, budget),
+            kind="search",
+            dataset=dataset,
+            complete=True,
+            filters={"question": question, "confirm_cost": False},
         )
 
     return execute_database_tool(
@@ -89,6 +93,14 @@ def sweep_chunks_tool(
                 progress=_relay(reporter),
             )
         ),
+        kind="search",
+        dataset=dataset,
+        complete=True,
+        filters={
+            "question": question,
+            "max_promotions": max_promotions,
+            "start_at": start_at,
+        },
     )
 
 
@@ -115,6 +127,10 @@ def investigate_chunk_tool(
         function=lambda: _single_row(
             investigate_chunk(chunk_id, question=question, dataset=dataset)
         ),
+        kind="search",
+        dataset=dataset,
+        complete=True,
+        filters={"chunk_id": chunk_id, "question": question},
     )
 
 

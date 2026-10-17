@@ -9,6 +9,7 @@ from langchain_typesafe import ClassifierRequest, Noul, NoulCriteria
 
 from backend.db.config import LOG_SCHEMA
 from backend.pipeline.effort import get_effort_spec
+from backend.pipeline.playbooks import ownership_context, role_playbook
 from backend.pipeline.state import PipelineState, Role
 
 ANSWER_EFFORT_NOTES = {
@@ -156,6 +157,52 @@ QUERYABLE_TARGETS = [
 ]
 
 
+# What each role's answer must DO with the evidence (distinct questions, evidence
+# and next steps per role; length alone is not personalization). The narrative
+# goes in `blocks`; claims go in `findings`; next steps in `recommendations`.
+ROLE_ANSWER_CONTRACTS = {
+    "engineer": (
+        "Narrative: what failed (component, event, the exact error message with "
+        "its line id and timestamp), then the before/after timeline from the "
+        "retrieved rows, then the possible cause. Show the search/nearby-event "
+        "table. Recommendations: ONE to TWO concrete diagnostic checks (what to "
+        "inspect, where, and what result would confirm or refute the cause). Do not "
+        "write hypotheses or next checks in the narrative; the findings and "
+        "recommendations carry them."
+    ),
+    "team_lead": (
+        "Narrative: the period and scope first, then the recurring patterns ranked "
+        "by their database counts, their trend, and the components and owning "
+        "teams involved. Show the count/trend table (and the priority_score table "
+        "when present). Recommendations: what the team should investigate first "
+        "and why (highest measured count or clearest rising trend), each with the "
+        "owning team."
+    ),
+    "manager": (
+        "Narrative: a short prioritized list (at most three) with the measured "
+        "basis of each (row count, error share, trend, components/teams affected). "
+        "When a priority_score result exists, follow its ranking and say it was "
+        "computed from the counts. Show at most one table. Recommendations: one "
+        "action per priority with the owning team. Never estimate cost, downtime, "
+        "customer impact or effort; the data does not contain them."
+    ),
+}
+
+
+PREVIEW_CHARS = 240
+
+
+def _clip(value: object, limit: int = PREVIEW_CHARS) -> str:
+    """A cell value for the result catalog, with an explicit marker when cut.
+
+    A silent cut made the answer quote a shortened hash as if it were the real
+    value; the ``…[cut]`` marker tells the model the text is incomplete. The
+    answer's own tables always show the full stored row.
+    """
+    text = str(value)
+    return text if len(text) <= limit else text[:limit] + "…[cut]"
+
+
 def dataset_catalog() -> dict:
     """What corpora exist, how big they are, and what each supports.
 
@@ -204,8 +251,11 @@ class PipelinePrompts:
         "contains hypotheses, treat supported hypotheses as findings, contradicted "
         "hypotheses as excluded, and unresolved hypotheses as limitations; when it "
         "does not, ground the answer directly in the report's summary and evidence "
-        "instead. Include relevant time ranges, filters, calculations, evidence "
-        "references, and confidence."
+        "instead. Results of kind `aggregate`, `trend` or `derived` are measured "
+        "numbers; results of kind `search`, `context` or `lookup` are examples and "
+        "never establish frequency. Count log entries, never 'incidents'. When a "
+        "result is truncated, say that more matching rows exist. Include relevant "
+        "time ranges, filters, calculations and evidence references."
     )
 
     REFRAME_INSTRUCTION = (
@@ -241,8 +291,31 @@ class PipelinePrompts:
                     self.proceed_without_clarification_question()
                 ),
                 "needs_new_evidence": self.needs_new_evidence_question(),
+                "is_overview_request": self.is_overview_request_question(),
             },
         }
+
+    def is_overview_request_question(self) -> Noul:
+        # Role-independent on purpose: the role never enters the classifier.
+        # ``decide_scope`` decides in code that an overview counts as scoped for
+        # the team lead and manager (whose default scope is the whole dataset).
+        return Noul(
+            instructions={
+                "question": "Does `latest_message` ask for an overview across all the logs, such as which problems recur most, what is most frequent, or what to prioritize?",
+                "inspect": ["`latest_message`", "`transcript`"],
+                "focus": "Judge whether the request is about the logs as a whole, not whether it names a specific target.",
+            },
+            criteria=NoulCriteria(
+                true={
+                    "what": "The request asks about recurring, most frequent or most important problems across the whole log data.",
+                    "examples": ["what recurring problems do we have?", "what should we prioritize?", "which errors happen most often?", "give me an overview of the issues"],
+                },
+                false={
+                    "what": "The request is about one specific failure, event or record, or it is not about the logs.",
+                    "not_for": ["why did this request fail?", "what happened at 10:05?", "show me line 42", "greetings or small talk"],
+                },
+            ),
+        )
 
     def is_log_request_question(self) -> Noul:
         return Noul(
@@ -480,11 +553,20 @@ class PipelinePrompts:
             "revision_feedback", "No previous attempt exists."
         )
         spec = get_effort_spec(state.get("effort"))
+        role_name = state["role"]["name"]
 
         return (
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
+            "<role playbook>\n"
+            "Follow this evidence plan for the user's role. It decides WHICH "
+            "evidence to collect; the effort budget decides how much.\n\n"
+            f"{role_playbook(role_name)}\n"
+            "</role playbook>\n"
+            "<team ownership>\n"
+            f"{ownership_context()}\n"
+            "</team ownership>\n"
             "<effort guidance>\n"
             f"Effort level: {state.get('effort', 'Medium')}.\n"
             f"Tool-call budget: at most {spec.max_tool_calls} tool calls in this investigation (hard limit; to-do updates count).\n"
@@ -527,18 +609,27 @@ class PipelinePrompts:
             rows = record.get("rows") or []
             columns = ", ".join(rows[0].keys()) if rows else ""
             preview = " ; ".join(
-                "{" + ", ".join(f"{k}: {str(v)[:60]}" for k, v in row.items()) + "}"
+                "{" + ", ".join(f"{k}: {_clip(v)}" for k, v in row.items()) + "}"
                 for row in rows[:2]
             )
-            catalog_lines.append(
+            truncated = record.get("truncated")
+            entry = (
                 f"- id: {record.get('id')}\n"
                 f"  tool: {record.get('tool_name')}\n"
+                f"  kind: {record.get('kind') or 'unknown'}\n"
+                f"  dataset: {record.get('dataset') or 'unknown'}\n"
                 f"  args: {record.get('arguments')}\n"
                 f"  rows: {record.get('row_count')}\n"
+                f"  truncated: {'unknown' if truncated is None else truncated}\n"
                 f"  columns: {columns}\n"
                 f"  preview: {preview}"
             )
+            if record.get("kind") == "derived":
+                # The computed ranking is small; show it whole.
+                entry += f"\n  formula: {record.get('formula')}\n  all rows: {rows}"
+            catalog_lines.append(entry)
         tool_result_catalog = "\n".join(catalog_lines)
+        role_name = state["role"]["name"]
 
         return (
             "<grounding rules>\n"
@@ -547,6 +638,12 @@ class PipelinePrompts:
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
+            "<role answer contract>\n"
+            f"{ROLE_ANSWER_CONTRACTS.get(role_name, '')}\n"
+            "</role answer contract>\n"
+            "<team ownership>\n"
+            f"{ownership_context()}\n"
+            "</team ownership>\n"
             "<effort guidance>\n"
             f"Depth guidance: {ANSWER_EFFORT_NOTES.get(state.get('effort', 'Medium'), ANSWER_EFFORT_NOTES['Medium'])}\n"
             "</effort guidance>\n"

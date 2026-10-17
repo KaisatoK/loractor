@@ -18,7 +18,7 @@ from backend.appdb.auth import require_user
 from backend.db.auto_complete import auto_complete
 from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import generate_answer
-from backend.pipeline.answers import serialize_answer
+from backend.pipeline.answers import serialize_answer, strip_appendix
 from backend.pipeline.cost import investigation_cost
 from backend.pipeline.graph import chatbot, prompts
 from backend.pipeline.roles import ROLE_OBJECTIVES
@@ -134,12 +134,19 @@ app.add_middleware(RequestContextMiddleware)
 
 def _render_conversation(history: list[ChatMessage]) -> str:
     """Flatten the chat history into the role-prefixed transcript the agents read."""
-    return "\n".join(f"{item['role']}: {item['content']}" for item in history)
+    return "\n".join(f"{item['role']}: {_context_text(item)}" for item in history)
+
+
+def _context_text(item: ChatMessage) -> str:
+    """Message text as conversation context: assistant answers lose their
+    code-built data-scope/SQL appendix, which only bloats classifier state."""
+    content = item["content"]
+    return strip_appendix(content) if item["role"] == "assistant" else content
 
 
 def _latest(history: list[ChatMessage], role: str) -> str:
     return next(
-        (item["content"] for item in reversed(history) if item["role"] == role), ""
+        (_context_text(item) for item in reversed(history) if item["role"] == role), ""
     )
 
 
@@ -148,10 +155,21 @@ def _thread_id(user_id: str, chat_id: str) -> str:
     return f"{user_id}:{chat_id}"
 
 
-def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
+def stream_events(
+    req: ChatRequest,
+    user_id: str,
+    *,
+    thread_id: str | None = None,
+    extra_state: dict | None = None,
+) -> Iterator[str]:
     """Run the pipeline and yield newline-delimited JSON events.
-    A *synchronous* generator by design: FastAPI iterates it on the worker pool,
-    so the blocking graph execution never blocks the event loop."""
+
+    This is a *synchronous* generator by design: FastAPI/Starlette iterate it on
+    the worker pool, so the blocking graph execution never blocks the event loop.
+    ``thread_id`` overrides the chat's graph thread (a role switch runs on its
+    own thread so the chat's state is untouched); ``extra_state`` is merged into
+    the initial state (for example ``forced_scope``).
+    """
     history = req["history"]
 
     initial_state = cast(
@@ -159,7 +177,7 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
         {
             "conversation": _render_conversation(history),
             "messages": [
-                {"role": item["role"], "content": item["content"]}
+                {"role": item["role"], "content": _context_text(item)}
                 for item in history
             ],
             "latest_message": _latest(history, "user"),
@@ -170,13 +188,14 @@ def stream_events(req: ChatRequest, user_id: str) -> Iterator[str]:
             },
             "effort": req["effort"],
             "answer": "",
+            **(extra_state or {}),
         },
     )
     run = chatbot.stream_events(
         initial_state,
         config={
             "configurable": {
-                "thread_id": _thread_id(user_id, req["chat_id"]),
+                "thread_id": thread_id or _thread_id(user_id, req["chat_id"]),
             }
         },
         version="v3",
@@ -390,6 +409,108 @@ def cancel_run(chat_id: str, run_id: str, user: dict = Depends(require_user)) ->
     return {"cancelled": jobs.registry.cancel(run_id)}
 
 
+# --- Role switch (per-role answers, cached) -------------------------------------
+
+
+class RoleAnswerRequest(BaseModel):
+    role: RoleName
+    effort: Literal["Low", "Medium", "High", "Extreme", "Brutal"] = "Medium"
+
+
+def _role_slot(chat_id: str, message_seq: int, role: str) -> str:
+    return f"{chat_id}#role:{message_seq}:{role}"
+
+
+@app.get("/chats/{chat_id}/role-answers")
+def get_role_answers(chat_id: str, user: dict = Depends(require_user)) -> dict:
+    """Every cached per-role answer of this chat (for rendering on open)."""
+    return {"answers": chats.list_role_answers(user["id"], chat_id)}
+
+
+@app.post("/chats/{chat_id}/messages/{message_seq}/role-answer")
+def request_role_answer(
+    chat_id: str,
+    message_seq: int,
+    req: RoleAnswerRequest,
+    user: dict = Depends(require_user),
+) -> dict:
+    """Answer an earlier question again for another role.
+
+    Each role needs different evidence, so this runs a NEW investigation for
+    ``role`` (same question and conversation up to it), not a rewording of the
+    other role's evidence. The result is cached per (message, role): a request
+    at the same or a lower effort than the cached run returns it immediately
+    (``status="cached"``), so switching manager -> engineer -> manager runs at
+    most one investigation per role. Otherwise a background run starts
+    (``status="running"``, poll ``GET /chats/{chat_id}/run/{run_id}``) and its
+    answer is cached when it finishes.
+    """
+    user_id = user["id"]
+    messages = chats.get_messages(user_id, chat_id)
+    target = next((m for m in messages if m["seq"] == message_seq), None)
+    if target is None or target["role"] != "assistant":
+        raise HTTPException(status_code=404, detail="Assistant message not found.")
+
+    cached = chats.get_role_answer(user_id, chat_id, message_seq, req.role)
+    if cached and chats.effort_rank(cached["effort"]) >= chats.effort_rank(req.effort):
+        metrics.inc("role_answers_cached")
+        return {"status": "cached", "answer": cached}
+
+    slot = _role_slot(chat_id, message_seq, req.role)
+    with _investigation_start_lock:
+        existing = jobs.registry.active_run(user_id, chat_id, slot=slot)
+        if existing is not None:
+            return {"status": jobs.RUNNING, "run_id": existing}
+
+        # The conversation up to (not including) the answer being switched.
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if m["seq"] < message_seq and not m.get("reframed_for")
+        ]
+        if not any(item["role"] == "user" for item in history):
+            raise HTTPException(status_code=400, detail="No question precedes this answer.")
+
+        acquire_slot(user_id)
+        metrics.inc("role_answers_started")
+        request = cast(
+            ChatRequest,
+            {"chat_id": chat_id, "role": req.role, "effort": req.effort, "history": history},
+        )
+        thread = f"{_thread_id(user_id, chat_id)}:role:{message_seq}:{req.role}:{req.effort}"
+
+        def produce(_run: jobs.RunState) -> Iterator[str]:
+            return stream_events(
+                request,
+                user_id,
+                thread_id=thread,
+                extra_state={"forced_scope": "find_evidence"},
+            )
+
+        def on_finish(finished: jobs.RunState) -> None:
+            try:
+                if finished.status == jobs.DONE and finished.answer:
+                    chats.save_role_answer(
+                        user_id,
+                        chat_id,
+                        message_seq,
+                        req.role,
+                        req.effort,
+                        finished.answer,
+                        tool_results=finished.tool_results,
+                        progress=finished.progress,
+                    )
+            except KeyError:
+                pass  # chat deleted mid-run
+            finally:
+                release_slot(user_id)
+
+        run = jobs.registry.start(
+            user_id=user_id, chat_id=chat_id, produce=produce, on_finish=on_finish, slot=slot
+        )
+        return {"status": run.status, "run_id": run.run_id}
+
+
 @app.post("/chat/test")
 async def chat_test(
     req: ChatRequest, user: dict = Depends(require_user)
@@ -442,9 +563,12 @@ def chat_reframe(req: ReframeRequest, user: dict = Depends(require_user)) -> dic
         },
     )
     structured = generate_answer(prompts.reframe(state))
-    valid_ids = {record.get("id") for record in req["tool_results"] or []}
-    cost = investigation_cost(req.get("tool_results") or [])
-    answer = serialize_answer(structured, valid_ids, cost.get("note", ""))
+    records = req["tool_results"] or []
+    valid_ids = {record.get("id") for record in records}
+    cost = investigation_cost(records)
+    answer = serialize_answer(
+        structured, valid_ids, records, cost_note=cost.get("note", "")
+    )
     return {"answer": answer}
 
 
@@ -534,10 +658,9 @@ def post_chat(req: CreateChat, user: dict = Depends(require_user)) -> dict:
 @app.delete("/chats/{chat_id}")
 def remove_chat(chat_id: str, user: dict = Depends(require_user)) -> dict:
     user_id = user["id"]
-    # Cancel (and drop) any in-flight investigation before the chat disappears,
-    # so its worker stops and its persistence attempt is discarded cleanly.
-    active = jobs.registry.active_run(user_id, chat_id)
-    if active is not None:
+    # Cancel (and drop) every in-flight run of the chat (main and role-switch)
+    # before the chat disappears, so workers stop and persistence is discarded.
+    for active in jobs.registry.runs_for_chat(user_id, chat_id):
         jobs.registry.cancel(active)
         jobs.registry.discard(active)
     deleted = chats.delete_chat(user_id, chat_id)

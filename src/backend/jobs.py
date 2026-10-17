@@ -35,6 +35,9 @@ class RunState:
     run_id: str
     user_id: str
     chat_id: str
+    # Concurrency key within the chat: the chat's main investigation uses the
+    # chat id itself; a role switch uses its own slot so both can run.
+    slot: str = ""
     status: str = RUNNING
     events: list[str] = field(default_factory=list)
     error: str | None = None
@@ -62,10 +65,19 @@ class RunRegistry:
 
     # --- lifecycle ------------------------------------------------------------
 
-    def active_run(self, user_id: str, chat_id: str) -> str | None:
-        """The run id currently investigating this chat, if any."""
+    def active_run(self, user_id: str, chat_id: str, slot: str | None = None) -> str | None:
+        """The run id currently active in this chat's slot (default: main run)."""
         with self._lock:
-            return self._active.get((user_id, chat_id))
+            return self._active.get((user_id, slot or chat_id))
+
+    def runs_for_chat(self, user_id: str, chat_id: str) -> list[str]:
+        """Every active run of a chat, main and role-switch slots alike."""
+        with self._lock:
+            return [
+                run_id
+                for (owner, _slot), run_id in self._active.items()
+                if owner == user_id and self._runs[run_id].chat_id == chat_id
+            ]
 
     def start(
         self,
@@ -74,21 +86,27 @@ class RunRegistry:
         chat_id: str,
         produce: Callable[[RunState], Iterator[str]],
         on_finish: Callable[[RunState], None],
+        slot: str | None = None,
     ) -> RunState:
         """Start an investigation, or return the existing one for this chat.
-        ``produce`` yields the pipeline's JSON event strings; ``on_finish`` runs
-        on any terminal state (in a ``finally``) to persist and release."""
+
+        ``produce`` yields the pipeline's newline-delimited JSON event strings;
+        ``on_finish`` runs once the run reaches a terminal state (always, in a
+        ``finally``) so the caller can persist results and release capacity.
+        """
+        slot = slot or chat_id
         with self._lock:
-            existing = self._active.get((user_id, chat_id))
+            existing = self._active.get((user_id, slot))
             if existing is not None:
                 return self._runs[existing]
             run = RunState(
                 run_id=uuid.uuid4().hex,
                 user_id=user_id,
                 chat_id=chat_id,
+                slot=slot,
             )
             self._runs[run.run_id] = run
-            self._active[(user_id, chat_id)] = run.run_id
+            self._active[(user_id, slot)] = run.run_id
 
         thread = threading.Thread(
             target=self._worker,
@@ -114,8 +132,8 @@ class RunRegistry:
         """Drop a run and its buffered events (e.g. after the chat is deleted)."""
         with self._lock:
             run = self._runs.pop(run_id, None)
-            if run is not None:
-                self._active.pop((run.user_id, run.chat_id), None)
+            if run is not None and self._active.get((run.user_id, run.slot)) == run_id:
+                self._active.pop((run.user_id, run.slot), None)
             try:
                 self._finished.remove(run_id)
             except ValueError:
@@ -237,7 +255,8 @@ class RunRegistry:
 
     def _finish(self, run: RunState) -> None:
         with self._lock:
-            self._active.pop((run.user_id, run.chat_id), None)
+            if self._active.get((run.user_id, run.slot)) == run.run_id:
+                self._active.pop((run.user_id, run.slot), None)
             self._finished.append(run.run_id)
             while len(self._finished) > _MAX_FINISHED:
                 stale = self._finished.popleft()

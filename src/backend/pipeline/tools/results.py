@@ -1,15 +1,33 @@
 """Collect successful SQL tool results from an agent transcript for display."""
 
 import json
+import logging
 from typing import Any
+
+from backend.pipeline.tools.envelope import TOOL_KINDS, envelope_metadata
+
+logger = logging.getLogger(__name__)
 
 MAX_RESULT_ROWS = 50
 
 
 def collect_tool_results(messages) -> list[dict[str, Any]]:
-    """Extract successful SQL tool results from one agent's own messages. Pairs
-    each with its ``tool_calls`` (name, args) and assigns canonical ``R{n}`` ids
-    + ``row_count`` inline in order (cited==rendered); ``rows`` capped at 50."""
+    """Extract successful SQL tool results from a single agent's own messages.
+
+    Builds a ``{tool_call_id: (name, args)}`` map from the agent's
+    ``tool_calls`` so each successful tool result can be paired with the call
+    that produced it. Each record is assigned its canonical ``R{n}`` id and
+    ``row_count`` inline, in the order the results appear, so the id the report
+    cites and the id rendered are guaranteed identical. ``row_count`` is the true
+    number of returned rows; ``rows`` itself is capped at ``MAX_RESULT_ROWS``.
+
+    Each record also carries the tool-result contract fields (``kind``,
+    ``dataset``, ``query``, ``filters``, ``limit``, ``returned``,
+    ``total_matches``, ``truncated``; see ``tools/envelope.py``). A legacy
+    envelope that lacks a field yields ``None`` for it, never a guess; only
+    ``kind`` is inferred from the tool name. ``rows_capped`` marks records whose
+    display rows were cut to ``MAX_RESULT_ROWS``.
+    """
     calls: dict[Any, tuple[Any, Any]] = {}
     for m in messages:
         for tc in getattr(m, "tool_calls", None) or []:
@@ -21,6 +39,14 @@ def collect_tool_results(messages) -> list[dict[str, Any]]:
         try:
             payload = json.loads(m.content) if isinstance(m.content, str) else m.content
         except Exception:
+            # Not JSON: a skill read, a todo update, a tool error message, or a
+            # database result LangChain could not serialize. Only the last would
+            # be lost evidence, so only a database tool's message is a warning.
+            name = calls.get(getattr(m, "tool_call_id", None), (None, None))[0]
+            log = logger.warning if name in TOOL_KINDS else logger.debug
+            log(
+                "Skipping non-JSON tool message from %s: %.120s", name, m.content
+            )
             continue
         if not isinstance(payload, dict) or payload.get("status") != "success":
             continue
@@ -34,13 +60,14 @@ def collect_tool_results(messages) -> list[dict[str, Any]]:
             "arguments": args,
             "row_count": len(data),
             "rows": data[:MAX_RESULT_ROWS],
+            "rows_capped": len(data) > MAX_RESULT_ROWS,
+            **envelope_metadata(payload, name),
         }
-        # The cost of producing this result, when the tool reported it. Carried
-        # beside row_count so the answer can state how much data was actually
-        # queried instead of the model estimating it.
-        stats = payload.get("query_stats")
-        if stats:
-            record["query_stats"] = stats
+        # The cost of producing this result, when the query layer measured it,
+        # so the answer can state how much data was read instead of the model
+        # estimating it.
+        if payload.get("query_stats"):
+            record["query_stats"] = payload["query_stats"]
 
         # How a long-running tool reached its result, step by step. Only the
         # sweep produces this, and only it needs to: its single call contains a

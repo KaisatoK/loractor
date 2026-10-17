@@ -82,8 +82,12 @@ def search_terms(query_text: str) -> tuple[str, ...]:
 
 
 def _display_fields(dataset: Dataset) -> list[tuple[str, sql.Composable]]:
-    """The canonical fields a search result should show, in display order."""
-    wanted = ("ts", "severity", "service", "entity_id", "message", "event_id")
+    """The canonical fields a search result should show, in display order.
+
+    ``record_id`` (OpenStack ``line_id``) comes first when the corpus has one: the
+    engineer playbook fetches a hit's neighbours by it.
+    """
+    wanted = ("record_id", "ts", "severity", "service", "entity_id", "message", "event_id")
     return [
         (name, dataset.sql_for(name)) for name in wanted if dataset.has_field(name)
     ]
@@ -303,6 +307,7 @@ def get_log_by_record_id(
     columns = [
         sql.SQL("{col} AS {alias}").format(col=column, alias=sql.Identifier(name))
         for name, column in _display_fields(ds)
+        if name != "record_id"  # selected first, below
     ]
     if ds.has_field("template"):
         columns.append(

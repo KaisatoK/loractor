@@ -70,8 +70,16 @@ def test_scope_request_has_atomic_questions():
         "has_queryable_scope",
         "proceed_without_clarification",
         "needs_new_evidence",
+        "is_overview_request",
     }
     assert "route" not in questions
+
+
+def test_scope_request_never_sends_the_role():
+    # The role is applied in code (decide_scope), never inside a Noul.
+    request = PipelinePrompts().scope_request(_state())
+    assert "role" not in request["state"]
+    assert "engineer" not in str(request["questions"]["is_overview_request"].instructions)
 
 
 def test_scope_request_carries_latest_message_and_answer():

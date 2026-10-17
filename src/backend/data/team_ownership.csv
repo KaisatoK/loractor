@@ -1,0 +1,22 @@
+dataset,component,team
+OpenStack,nova.osapi_compute.wsgi.server,API Gateway
+OpenStack,nova.api.openstack.wsgi,API Gateway
+OpenStack,nova.api.openstack.compute.server_external_events,API Gateway
+OpenStack,nova.metadata.wsgi.server,API Gateway
+OpenStack,nova.compute.manager,Compute Platform
+OpenStack,nova.compute.claims,Compute Platform
+OpenStack,nova.compute.resource_tracker,Compute Platform
+OpenStack,nova.virt.libvirt.driver,Virtualization
+OpenStack,nova.virt.libvirt.imagecache,Virtualization
+OpenStack,nova.scheduler.host_manager,Scheduling
+OpenStack,nova.scheduler.filter_scheduler,Scheduling
+BGL,KERNEL,BG/L Kernel
+BGL,APP,BG/L Kernel
+BGL,MMCS,BG/L Control System
+BGL,BGLMASTER,BG/L Control System
+BGL,CMCS,BG/L Control System
+BGL,MONITOR,Hardware Ops
+BGL,HARDWARE,Hardware Ops
+BGL,LINKCARD,Hardware Ops
+BGL,DISCOVERY,Hardware Ops
+BGL,SERV_NET,Network Ops

@@ -11,6 +11,7 @@ from backend.pipeline.decision import (
     LOG_REQUEST_THRESHOLD,
     MAX_CLARIFY_ROUNDS,
     NEW_EVIDENCE_THRESHOLD,
+    OVERVIEW_THRESHOLD,
     PROCEED_THRESHOLD,
     QUERYABLE_SCOPE_THRESHOLD,
     decide_confidence,
@@ -31,15 +32,17 @@ def _scope_response(
     needs_new_evidence=1.0,
     proceed=0.0,
     is_log_request=1.0,
+    is_overview_request=None,
 ):
-    return _response(
-        {
-            "is_log_request": _noul(is_log_request),
-            "has_queryable_scope": _noul(has_queryable_scope),
-            "proceed_without_clarification": _noul(proceed),
-            "needs_new_evidence": _noul(needs_new_evidence),
-        }
-    )
+    answers = {
+        "is_log_request": _noul(is_log_request),
+        "has_queryable_scope": _noul(has_queryable_scope),
+        "proceed_without_clarification": _noul(proceed),
+        "needs_new_evidence": _noul(needs_new_evidence),
+    }
+    if is_overview_request is not None:
+        answers["is_overview_request"] = _noul(is_overview_request)
+    return _response(answers)
 
 
 def _conf_response(
@@ -142,6 +145,44 @@ def test_scope_not_a_log_request_routes_general_even_when_budget_spent():
 
 def test_queryable_scope_threshold_exceeds_log_request_threshold():
     assert LOG_REQUEST_THRESHOLD < QUERYABLE_SCOPE_THRESHOLD
+
+
+# --- role-aware overview scope -------------------------------------------
+
+
+def test_overview_is_scoped_for_team_lead_and_manager():
+    response = _scope_response(0.0, is_overview_request=0.9)
+    for role in ("team_lead", "manager"):
+        assert decide_scope(response, clarify_count=0, role=role) == "find_evidence"
+
+
+def test_overview_still_clarifies_for_engineer():
+    response = _scope_response(0.0, is_overview_request=0.9)
+    assert decide_scope(response, clarify_count=0, role="engineer") == "clarify"
+    assert decide_scope(response, clarify_count=0) == "clarify"
+
+
+def test_overview_threshold_boundary():
+    at = _scope_response(0.0, is_overview_request=OVERVIEW_THRESHOLD)
+    below = _scope_response(0.0, is_overview_request=OVERVIEW_THRESHOLD - 0.01)
+    assert decide_scope(at, clarify_count=0, role="manager") == "find_evidence"
+    assert decide_scope(below, clarify_count=0, role="manager") == "clarify"
+
+
+def test_specific_unscoped_question_clarifies_for_manager():
+    # "Why did it fail?" with no target is not an overview: manager clarifies too.
+    response = _scope_response(0.0, is_overview_request=0.1)
+    assert decide_scope(response, clarify_count=0, role="manager") == "clarify"
+
+
+def test_overview_never_overrides_general_route():
+    response = _scope_response(0.0, is_log_request=0.0, is_overview_request=0.99)
+    assert decide_scope(response, clarify_count=0, role="team_lead") == "general"
+
+
+def test_missing_overview_noul_falls_back_to_clarify():
+    response = _scope_response(0.0)  # no is_overview_request answer
+    assert decide_scope(response, clarify_count=0, role="team_lead") == "clarify"
 
 
 # --- decide_confidence ----------------------------------------------------

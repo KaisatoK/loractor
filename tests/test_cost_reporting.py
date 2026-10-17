@@ -176,7 +176,7 @@ def test_format_cost_note_is_empty_without_queries():
 # --- Serialization ----------------------------------------------------------
 def test_the_cost_note_is_appended_to_the_answer_text():
     answer = {"blocks": [{"kind": "text", "text": "Payments are failing."}]}
-    text = serialize_answer(answer, set(), "Data queried: ~6,176,768 rows scanned.")
+    text = serialize_answer(answer, set(), cost_note="Data queried: ~6,176,768 rows scanned.")
 
     assert text.startswith("Payments are failing.")
     assert text.endswith("Data queried: ~6,176,768 rows scanned.")
@@ -195,7 +195,7 @@ def test_the_note_does_not_disturb_result_markers():
             {"kind": "table", "result_id": "R1"},
         ]
     }
-    text = serialize_answer(answer, {"R1"}, "Data queried: 1 query.")
+    text = serialize_answer(answer, {"R1"}, cost_note="Data queried: 1 query.")
     lines = [line for line in text.splitlines() if line.strip()]
     assert lines == ["Top services:", "[[RESULT:R1]]", "Data queried: 1 query."]
 

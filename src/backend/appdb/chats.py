@@ -23,6 +23,7 @@ def _row_to_chat(row) -> dict:
 
 def _row_to_message(row) -> dict:
     return {
+        "seq": row["seq"],
         "role": row["role"],
         "content": row["content"],
         "tool_results": json.loads(row["tool_results"]) if row["tool_results"] else None,
@@ -63,6 +64,10 @@ def list_chats(user_id: str) -> list[dict]:
 def delete_chat(user_id: str, chat_id: str) -> bool:
     with db() as cur:
         cur.execute(
+            "DELETE FROM role_answers WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id),
+        )
+        cur.execute(
             "DELETE FROM messages WHERE user_id = ? AND chat_id = ?",
             (user_id, chat_id),
         )
@@ -75,11 +80,113 @@ def delete_chat(user_id: str, chat_id: str) -> bool:
 def get_messages(user_id: str, chat_id: str) -> list[dict]:
     with db() as cur:
         rows = cur.execute(
-            "SELECT role, content, tool_results, progress, reframed_for, created_at "
+            "SELECT seq, role, content, tool_results, progress, reframed_for, created_at "
             "FROM messages WHERE user_id = ? AND chat_id = ? ORDER BY seq",
             (user_id, chat_id),
         ).fetchall()
     return [_row_to_message(r) for r in rows]
+
+
+def get_chat(user_id: str, chat_id: str) -> dict | None:
+    with db() as cur:
+        row = cur.execute(
+            "SELECT id, role, title, created_at, updated_at FROM chats "
+            "WHERE user_id = ? AND id = ?",
+            (user_id, chat_id),
+        ).fetchone()
+    return _row_to_chat(row) if row else None
+
+
+# --- Per-role answers (role switch cache) -----------------------------------
+
+# Effort levels in increasing depth; a cached answer serves any request at the
+# same or a lower effort.
+EFFORT_ORDER = ("Low", "Medium", "High", "Extreme", "Brutal")
+
+
+def effort_rank(effort: str | None) -> int:
+    try:
+        return EFFORT_ORDER.index(effort or "")
+    except ValueError:
+        return EFFORT_ORDER.index("Medium")
+
+
+def _row_to_role_answer(row) -> dict:
+    return {
+        "message_seq": row["message_seq"],
+        "role": row["role"],
+        "effort": row["effort"],
+        "content": row["content"],
+        "tool_results": json.loads(row["tool_results"]) if row["tool_results"] else None,
+        "progress": json.loads(row["progress"]) if row["progress"] else None,
+        "created_at": row["created_at"],
+    }
+
+
+_ROLE_ANSWER_COLUMNS = (
+    "message_seq, role, effort, content, tool_results, progress, created_at"
+)
+
+
+def list_role_answers(user_id: str, chat_id: str) -> list[dict]:
+    with db() as cur:
+        rows = cur.execute(
+            f"SELECT {_ROLE_ANSWER_COLUMNS} FROM role_answers "
+            "WHERE user_id = ? AND chat_id = ? ORDER BY message_seq, created_at",
+            (user_id, chat_id),
+        ).fetchall()
+    return [_row_to_role_answer(r) for r in rows]
+
+
+def get_role_answer(user_id: str, chat_id: str, message_seq: int, role: str) -> dict | None:
+    with db() as cur:
+        row = cur.execute(
+            f"SELECT {_ROLE_ANSWER_COLUMNS} FROM role_answers "
+            "WHERE user_id = ? AND chat_id = ? AND message_seq = ? AND role = ?",
+            (user_id, chat_id, message_seq, role),
+        ).fetchone()
+    return _row_to_role_answer(row) if row else None
+
+
+def save_role_answer(
+    user_id: str,
+    chat_id: str,
+    message_seq: int,
+    role: str,
+    effort: str,
+    content: str,
+    tool_results: list[Any] | None = None,
+    progress: list[Any] | None = None,
+) -> dict:
+    """Store (or replace with a deeper run) the answer for one message and role."""
+    now = _now()
+    with db() as cur:
+        exists = cur.execute(
+            "SELECT 1 FROM chats WHERE user_id = ? AND id = ?", (user_id, chat_id)
+        ).fetchone()
+        if exists is None:
+            raise KeyError("chat not found")
+        cur.execute(
+            "INSERT INTO role_answers(user_id, chat_id, message_seq, role, effort, "
+            "content, tool_results, progress, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, chat_id, message_seq, role) DO UPDATE SET "
+            "effort=excluded.effort, content=excluded.content, "
+            "tool_results=excluded.tool_results, progress=excluded.progress, "
+            "created_at=excluded.created_at",
+            (
+                user_id,
+                chat_id,
+                message_seq,
+                role,
+                effort,
+                content,
+                json.dumps(tool_results) if tool_results is not None else None,
+                json.dumps(progress) if progress is not None else None,
+                now,
+            ),
+        )
+    return get_role_answer(user_id, chat_id, message_seq, role)  # type: ignore[return-value]
 
 
 def append_message(
@@ -125,6 +232,7 @@ def append_message(
             (now, user_id, chat_id),
         )
     return {
+        "seq": next_seq,
         "role": role,
         "content": content,
         "tool_results": tool_results,

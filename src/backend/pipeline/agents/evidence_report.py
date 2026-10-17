@@ -41,7 +41,9 @@ JSON_OUTPUT_SPEC = (
     '      "hypothesis": "specific, testable explanation",\n'
     '      "description": "why it is plausible and relevant",\n'
     '      "status": "supported",\n'
-    '      "evidence_ids": ["E1"]\n'
+    '      "evidence_ids": ["E1"],\n'
+    '      "contradicting_evidence_ids": [],\n'
+    '      "next_check": "the one check that would confirm or refute it"\n'
     "    }\n"
     "  ],\n"
     '  "coverage": "what fraction of the data was actually examined, and how"\n'
@@ -60,6 +62,13 @@ JSON_OUTPUT_SPEC = (
     "use \"inconclusive\" whenever the evidence is missing, insufficient, "
     "ambiguous, or conflicting. Every `evidence_ids` entry must refer to an "
     "evidence item id that exists in the report.\n"
+    "- `hypotheses` holds AT MOST 3 items: keep the 3 most relevant and merge or "
+    "drop the rest. More than 3 is rejected.\n"
+    "- `contradicting_evidence_ids` lists evidence items that speak against the "
+    "hypothesis (for example a counterexample query); use [] when none. "
+    "`next_check` is one concrete diagnostic step that would confirm or refute "
+    "the hypothesis, or null.\n"
+    "- Do NOT include a `data_scope` field; it is computed separately.\n"
     "- `coverage` is REQUIRED whenever a tool reported one. Copy the figures "
     "from the tool results rather than describing them loosely: say how many "
     "chunks were profiled, sampled and read, or what time window a query "
@@ -94,14 +103,23 @@ PROMPT_TEMPLATE = (
 
 
 def _catalog_lines(results: Sequence[dict]) -> str:
-    """Compact ``- R{n}: tool_name(arguments)`` lines; non-dicts skipped, each
-    record carries its own canonical ``id``.
+    """Compact ``- R{n}: tool_name(arguments) [kind]`` lines for the captured results.
+
+    Non-dict records are skipped; each record carries its own canonical ``id``.
+    The kind tells the formatter whether a result is a measured count or a set
+    of examples; ``truncated`` flags results with more matching rows.
     """
-    return "\n".join(
-        f"- {record['id']}: {record.get('tool_name')}({record.get('arguments')})"
-        for record in results
-        if isinstance(record, dict)
-    )
+    lines = []
+    for record in results:
+        if not isinstance(record, dict):
+            continue
+        kind = record.get("kind") or "unknown"
+        flag = " truncated" if record.get("truncated") else ""
+        lines.append(
+            f"- {record['id']}: "
+            f"{record.get('tool_name')}({record.get('arguments')}) [{kind}{flag}]"
+        )
+    return "\n".join(lines)
 
 
 def _messages(

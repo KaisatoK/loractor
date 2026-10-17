@@ -242,6 +242,12 @@ def test_generate_evidence_report_spec_enumerates_tool_status_values(monkeypatch
     assert '"success"' in user.content and '"failure"' in user.content
 
 
+def test_json_spec_states_the_hypothesis_cap():
+    # The contract rejects more than 3 hypotheses, but no schema is transmitted,
+    # so the prompt text must say so (a live run produced 4 and failed validation).
+    assert "AT MOST 3" in evidence_report.JSON_OUTPUT_SPEC
+
+
 def test_generate_evidence_report_propagates_model_errors(monkeypatch):
     # There is no empty-report fallback: a model failure escapes the entry
     # point so the caller sees it.

@@ -224,6 +224,39 @@ def cancel_run(*, token: str, chat_id: str, run_id: str) -> None:
     )
 
 
+# --- Role switch -----------------------------------------------------------------
+
+
+def request_role_answer(
+    *, token: str, chat_id: str, message_seq: int, role: str, effort: str
+) -> dict:
+    """Ask for an earlier answer as another role.
+
+    Returns ``{"status": "cached", "answer": {...}}`` when that role's answer is
+    already stored at this effort or deeper, else ``{"status", "run_id"}`` for a
+    new background investigation (poll it with ``get_run``).
+    """
+    response = requests.post(
+        f"{API_BASE}/chats/{chat_id}/messages/{message_seq}/role-answer",
+        json={"role": role, "effort": effort},
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def list_role_answers(token: str, chat_id: str) -> list[dict]:
+    """Every cached per-role answer of a chat."""
+    response = requests.get(
+        f"{API_BASE}/chats/{chat_id}/role-answers",
+        headers=_auth_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["answers"]
+
+
 def reframe(
     *,
     token: str,

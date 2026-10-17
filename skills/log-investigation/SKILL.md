@@ -6,14 +6,17 @@ description: Investigate a reported failure or recurring problem in the logs usi
 # Log Investigation
 
 ## Overview
-Turn a vague "why is this happening?" into specific, evidence-backed explanations, while leaving direct data questions as plain lookups.
+Turn a vague "why is this happening?" into specific, evidence-backed explanations, while leaving direct data questions as plain lookups. The role playbook (engineer / team lead / manager) decides which evidence the role needs; this skill decides how hypotheses are tested.
 
 ## Instructions
 - Attach hypotheses only when explaining a problem: at most the hypothesis budget stated in the request's effort guidance, non-duplicative, plausible, testable hypotheses, each with the evidence it needs.
 - Call the database tools yourself for each evidence item (one focused query per item). For a simple lookup, just request the data.
+- For each hypothesis, when the budget allows, run one query that could CONTRADICT it (a counterexample: the same error without the suspected trigger, or the trigger without the error). Record what speaks against the hypothesis, not only what supports it.
 - Judge each hypothesis from the summaries returned: supported / unsupported / inconclusive (missing, insufficient, or conflicting evidence => inconclusive).
+- For every hypothesis the logs cannot settle, name the single next check that would confirm or refute it.
+- Frequency comes only from count/trend results (`kind` aggregate or trend), never from the number of search hits.
 - Ground everything in observed results; never fabricate; a failed tool call proves nothing.
-- Finish with a thorough summary of the findings and the tools you used (with their parameters and success/failure): always cover the `summary` and the `evidence` items, and include `hypotheses` only when you followed this workflow.
+- Finish with a thorough summary of the findings and the tools you used (with their parameters and success/failure): always cover the `summary` and the `evidence` items, and include `hypotheses` (with what contradicts each and its next check) only when you followed this workflow.
 
 ## Working at scale
 

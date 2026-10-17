@@ -41,9 +41,10 @@ treating a failure as real.
 
 Notes
 -----
-- Role does not influence scope routing today — the scope request carries no
-  role — but the state is populated exactly as ``api.py`` does so the harness
-  matches production.
+- Role influences scope routing only in code: ``decide_scope`` treats a
+  dataset-wide overview (``is_overview_request``) as scoped for team_lead and
+  manager. The scope request itself carries no role. Each ``Conversation`` sets
+  its ``role`` (default engineer).
 - ``assistant`` lines are authored context standing in for the pipeline's
   replies; they are not generated, and each must be consistent with the route
   asserted on the turn that produced it.
@@ -78,6 +79,7 @@ import pytest
 from backend.pipeline.decision import (
     LOG_REQUEST_THRESHOLD,
     NEW_EVIDENCE_THRESHOLD,
+    OVERVIEW_THRESHOLD,
     PROCEED_THRESHOLD,
     QUERYABLE_SCOPE_THRESHOLD,
     classifier,
@@ -101,6 +103,9 @@ class Conversation:
     # ("user", text, expected_route) -> asserted; ("user", text) -> context only
     # (NOT classified); ("assistant", text) -> context only.
     messages: list[tuple[str, str] | tuple[str, str, str]]
+    # The user's role; ``decide_scope`` applies it in code (overview requests
+    # are scoped for team_lead/manager). The Nouls never see it.
+    role: str = "engineer"
 
 
 CONVERSATIONS = [
@@ -156,6 +161,24 @@ CONVERSATIONS = [
             ),
             ("user", "Wassup?", "general"),
         ],
+    ),
+    # Role-aware scope: the same vague overview is scoped for the team lead and
+    # the manager (default scope = whole dataset) but still clarified for the
+    # engineer (covered by "just-do-it-proceeds" above).
+    Conversation(
+        id="team-lead-overview-is-scoped",
+        role="team_lead",
+        messages=[("user", "What recurring problem do we have", "find_evidence")],
+    ),
+    Conversation(
+        id="manager-priorities-are-scoped",
+        role="manager",
+        messages=[("user", "What should we prioritize first?", "find_evidence")],
+    ),
+    Conversation(
+        id="manager-specific-but-vague-clarifies",
+        role="manager",
+        messages=[("user", "Why did it fail?", "clarify")],
     ),
 ]
 
@@ -220,6 +243,7 @@ def _report_row(row: dict) -> str:
             "",
             "",
             "",
+            "",
         ]
         return '<tr class="context">' + "".join(cell(value) for value in values) + "</tr>"
 
@@ -233,6 +257,7 @@ def _report_row(row: dict) -> str:
         f"{row['is_log_request']:.3f}",
         f"{row['proceed']:.3f}",
         f"{row['needs_new_evidence']:.3f} (thr {NEW_EVIDENCE_THRESHOLD:.2f})",
+        f"{row['is_overview_request']:.3f} (thr {OVERVIEW_THRESHOLD:.2f}, role {row['role']})",
         str(row["clarify_count"]),
         row["normalized"],
         row["transcript"],
@@ -255,6 +280,7 @@ def _render_report_html() -> str:
         f"is_log_request (≥ {LOG_REQUEST_THRESHOLD:.2f})",
         f"proceed_without_clarification (≥ {PROCEED_THRESHOLD:.2f})",
         f"needs_new_evidence (≥ {NEW_EVIDENCE_THRESHOLD:.2f})",
+        f"is_overview_request (≥ {OVERVIEW_THRESHOLD:.2f}, team_lead/manager)",
         "clarify_count",
         "normalized",
         "transcript",
@@ -355,8 +381,8 @@ def run_conversation(conversation: Conversation) -> None:
                     "latest_message": text,
                     "latest_answer": _last_assistant(transcript[:-1]),
                     "role": {
-                        "name": "engineer",
-                        "objective": ROLE_OBJECTIVES["engineer"],
+                        "name": conversation.role,
+                        "objective": ROLE_OBJECTIVES[conversation.role],
                     },
                     "effort": "Medium",
                     "answer": "",
@@ -374,7 +400,8 @@ def run_conversation(conversation: Conversation) -> None:
             is_log_request = response.nouls["is_log_request"].noul
             proceed = response.nouls["proceed_without_clarification"].noul
             needs_new_evidence = response.nouls["needs_new_evidence"].noul
-            route = decide_scope(response, clarify_count)
+            overview = response.nouls["is_overview_request"].noul
+            route = decide_scope(response, clarify_count, conversation.role)
 
             asserted_total += 1
             matched = route == expected
@@ -392,6 +419,8 @@ def run_conversation(conversation: Conversation) -> None:
                     "is_log_request": is_log_request,
                     "proceed": proceed,
                     "needs_new_evidence": needs_new_evidence,
+                    "is_overview_request": overview,
+                    "role": conversation.role,
                     "clarify_count": clarify_count,
                     "normalized": json.dumps(state["normalized"], default=str),
                     "transcript": json.dumps(state["messages"], default=str),
@@ -402,7 +431,8 @@ def run_conversation(conversation: Conversation) -> None:
                 f"[{conversation.id}] turn {index} {text!r}: expected {expected!r}, "
                 f"got {route!r} (has_queryable_scope={has_queryable_scope:.3f}, "
                 f"needs_new_evidence={needs_new_evidence:.3f}, "
-                f"is_log_request={is_log_request:.3f}, proceed={proceed:.3f}). "
+                f"is_log_request={is_log_request:.3f}, proceed={proceed:.3f}, "
+                f"is_overview_request={overview:.3f}, role={conversation.role}). "
                 "Borderline wording can flip run-to-run — re-run before treating "
                 "this as a regression."
             )
@@ -444,6 +474,9 @@ def test_case_data_is_valid():
     assert len(set(ids)) == len(ids), f"duplicate conversation ids: {ids}"
 
     for conversation in CONVERSATIONS:
+        assert conversation.role in ROLE_OBJECTIVES, (
+            f"[{conversation.id}] unknown role {conversation.role!r}"
+        )
         asserted = 0
         for message in conversation.messages:
             assert len(message) in (2, 3), (

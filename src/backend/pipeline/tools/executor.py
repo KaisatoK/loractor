@@ -6,8 +6,7 @@ from typing import Any
 
 from langchain.tools import ToolRuntime
 
-from backend.db.errors import QueryRefused
-from backend.db.stats import QueryResult
+from backend.pipeline.tools.envelope import run_enveloped
 
 logger = logging.getLogger(__name__)
 
@@ -60,15 +59,21 @@ def execute_database_tool(
     runtime: ToolRuntime,
     operation: str,
     function: Callable[[], Any],
+    kind: str | None = None,
+    dataset: str | None = None,
+    filters: dict[str, Any] | None = None,
+    limit: int | None = None,
+    complete: bool = False,
     with_reporter: bool = False,
 ) -> dict:
     """Run a database function and emit tool-progress events around it.
 
     Three result shapes reach the agent, and the distinction matters:
 
-    * **success** -- rows plus a ``query_stats`` record describing what the
-      query cost. The stats ride along so the answer can state how much data was
-      read without the model having to guess.
+    * **success** -- the tool-result envelope (``tools/envelope.py``): rows plus
+      ``kind``, ``dataset``, the executed ``query``, ``filters``, ``limit``,
+      ``truncated`` and, when the query layer measured it, ``query_stats`` (what
+      the query cost). ``complete=True`` marks a query without a row cap.
     * **refused** -- the query was never run because it was unbounded, too wide,
       or asked for a capability the corpus lacks. Carries a concrete suggestion,
       so the agent's next move is to narrow and retry rather than to give up or
@@ -99,21 +104,15 @@ def execute_database_tool(
     logger.info("Executing database tool: %s", operation)
 
     try:
-        data = function(reporter) if with_reporter else function()
-    except QueryRefused as refused:
-        # A refusal is a legitimate, informative outcome, so it is reported as
-        # 'skipped' rather than 'failed': nothing broke, the request was just
-        # too expensive or unsupported as asked.
-        logger.info("Refused %s: %s", operation, refused.refusal.reason)
-        writer(
-            {
-                "type": "tool_progress",
-                "operation": operation,
-                "status": "skipped",
-                "message": f"{operation} refused: {refused.refusal.reason}",
-            }
+        envelope = run_enveloped(
+            operation=operation,
+            function=(lambda: function(reporter)) if with_reporter else function,
+            kind=kind,
+            dataset=dataset,
+            filters=filters,
+            limit=limit,
+            complete=complete,
         )
-        return {"operation": operation, **refused.refusal.as_tool_result()}
     except Exception as e:
         logger.exception("Database tool failed: %s", operation)
         writer(
@@ -126,42 +125,35 @@ def execute_database_tool(
         )
         raise RuntimeError(f"{operation} failed") from e
 
-    # A builder may have refused without raising, when it was run through a
-    # path that converts the exception into a result.
-    if isinstance(data, QueryResult) and data.refused:
-        refusal = data.refusal
+    if envelope.get("status") == "refused":
+        # A refusal is a legitimate, informative outcome, so it is reported as
+        # 'skipped' rather than 'failed': nothing broke, the request was just
+        # too expensive or unsupported as asked.
+        logger.info("Refused %s: %s", operation, envelope.get("reason"))
         writer(
             {
                 "type": "tool_progress",
                 "operation": operation,
                 "status": "skipped",
-                "message": f"{operation} refused: {refusal.reason}",
+                "message": f"{operation} refused: {envelope.get('reason')}",
             }
         )
-        return {"operation": operation, **refusal.as_tool_result()}
+        return envelope
 
-    stats = getattr(data, "stats", None)
+    stats = envelope.get("query_stats")
+    summary = _stats_summary(stats)
     writer(
         {
             "type": "tool_progress",
             "operation": operation,
             "status": "completed",
             "message": (
-                f"Completed {operation} ({stats.summary()})."
-                if stats
-                else f"Completed {operation}."
+                f"Completed {operation} ({summary})." if summary else f"Completed {operation}."
             ),
         }
     )
-    result = {
-        "status": "success",
-        "operation": operation,
-        "data": list(data),
-    }
-    if stats is not None:
-        result["query_stats"] = stats.as_dict()
     if reporter.events:
-        result["progress_trace"] = [
+        envelope["progress_trace"] = [
             {
                 "stage": event["stage"],
                 "message": event["message"],
@@ -169,4 +161,18 @@ def execute_database_tool(
             }
             for event in reporter.events
         ]
-    return result
+    logger.debug("Tool query for %s: %s", operation, envelope.get("query"))
+    return envelope
+
+
+def _stats_summary(stats: dict[str, Any] | None) -> str | None:
+    """The one-line cost summary of a ``query_stats`` dict, or ``None``."""
+    if not stats:
+        return None
+    from backend.db.stats import QueryStats  # lazy: keeps the import graph flat
+
+    fields = {k: v for k, v in stats.items() if k in QueryStats.__dataclass_fields__}
+    try:
+        return QueryStats(**fields).summary()
+    except TypeError:
+        return None

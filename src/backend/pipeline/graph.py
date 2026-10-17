@@ -25,6 +25,9 @@ from backend.pipeline.agents import (
 )
 from backend.pipeline.agents.evidence_report import generate_evidence_report
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.data_scope import build_data_scope
+from backend.pipeline.playbooks import team_for
+from backend.pipeline.priority import with_priority
 from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
@@ -55,6 +58,9 @@ REVISION_FEEDBACK = {
 }
 NO_REVISION = "No revision is required."
 
+# Roles whose answers get the code-computed priority ranking.
+PRIORITY_ROLES = frozenset({"team_lead", "manager"})
+
 
 def _emit_stage(name: str) -> None:
     """Announce a pipeline node's stage to the live progress panel."""
@@ -81,17 +87,27 @@ def normalize_node(state: PipelineState) -> PipelineState:
 
 def scope_node(state: PipelineState) -> PipelineState:
     clarify_count = state.get("clarify_count", 0)
+    forced = state.get("forced_scope")
+    if forced:
+        # A role switch re-investigates an already-answered question for
+        # another role: the user has authorized it, so no clarification.
+        logger.info("scope=%s (forced by role switch)", forced)
+        return {**state, "scope": forced, "clarify_count": 0}
     try:
         response = classifier.invoke(prompts.scope_request(state))
-        scope = decide_scope(response, clarify_count)
+        role_name = (state.get("role") or {}).get("name")
+        scope = decide_scope(response, clarify_count, role_name)
         proceed = response.nouls["proceed_without_clarification"].noul
+        overview = response.nouls.get("is_overview_request")
         logger.info(
-            "scope=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f needs_new_evidence=%.3f clarify_count=%d model=%s",
+            "scope=%s role=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f needs_new_evidence=%.3f is_overview_request=%s clarify_count=%d model=%s",
             scope,
+            role_name,
             response.nouls["has_queryable_scope"].noul,
             response.nouls["is_log_request"].noul,
             proceed,
             response.nouls["needs_new_evidence"].noul,
+            f"{overview.noul:.3f}" if overview is not None else "n/a",
             clarify_count,
             response.model,
         )
@@ -166,11 +182,15 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     # output) from the agent's summary plus captured results; provider/validation
     # failures propagate rather than being swallowed.
     role = state["role"]
-    evidence_report = generate_evidence_report(
+    report = generate_evidence_report(
         request=json.dumps(state["normalized"], default=str),
         role=f"{role['name']}: {role['objective']}",
         investigation=_last_agent_summary(result["messages"]),
         results=records,
+    )
+    # The data scope is derived from the records in code, never by the model.
+    evidence_report = report.model_copy(
+        update={"data_scope": build_data_scope(records)}
     ).model_dump()
     history = [*(state.get("evidence_report_history") or []), evidence_report]
 
@@ -185,13 +205,21 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 
 def answer_node(state: PipelineState) -> PipelineState:
     _emit_stage("answer")
-    structured = generate_answer(prompts.answer(state))
     records = state.get("tool_results") or []
+    # Team leads and managers rank problems: the ranking is arithmetic over the
+    # measured counts, so it is computed here in code (pipeline/priority.py) and
+    # added as a derived result the answer can cite. Idempotent on revisions.
+    if state["role"]["name"] in PRIORITY_ROLES:
+        records = with_priority(records, team_for)
+    state = {**state, "tool_results": records}
+    structured = generate_answer(prompts.answer(state))
     valid_ids = {record.get("id") for record in records}
     # Cost is measured from the tool results' own query_stats, not narrated by
     # the model, so the volume the answer reports cannot be wrong.
     cost = investigation_cost(records)
-    answer = serialize_answer(structured, valid_ids, cost.get("note", ""))
+    answer = serialize_answer(
+        structured, valid_ids, records, cost_note=cost.get("note", "")
+    )
     # The answer agent drafts the optional follow-up; confidence decides whether
     # to show it, so keep the draft in state either way.
     if isinstance(structured, dict):

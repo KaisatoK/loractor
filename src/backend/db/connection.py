@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import ParamSpec
 
+from backend.db.capture import record_query
 from backend.db.config import (
     SERENEDB_BULK_TIMEOUT_MS,
     SERENEDB_DB,
@@ -244,6 +245,9 @@ def query_runner(
                 )
                 cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
                 cur.execute(query, params)
+                # The bound statement (``cursor.query``) is the executed query the
+                # tool-result envelope reports; see ``backend.db.capture``.
+                record_query(getattr(cur, "query", None))
                 rows = [dict(row) for row in cur.fetchall()]
 
             stats.elapsed_ms = int((time.monotonic() - started) * 1000)

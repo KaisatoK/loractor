@@ -47,4 +47,7 @@ class PipelineState(TypedDict):
     clarify_count: int
     # Iterations spent in the confidence revision loop within the current turn.
     revision_count: int
+    # Set only by a role-switch run (its own graph thread): skips the scope
+    # classifier and routes straight to this scope.
+    forced_scope: Literal["find_evidence"] | None
     fail_reason: str | None = None

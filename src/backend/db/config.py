@@ -56,5 +56,16 @@ MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "http://host.docker.internal:11434"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text:v1.5")
 EMBEDDING_DIMENSION = 768
 
+# --- Team ownership ----------------------------------------------------------
+# A small FICTIONAL mapping (dataset, component, team) so team-lead and manager
+# answers can group counts by team. ``component`` matches the registry's
+# ``service`` field (OpenStack/BGL ``Component``) exactly; unmapped components
+# count as ``UNOWNED_TEAM``. Loaded by ``backend.db.ownership``.
+OWNERSHIP_TABLE = "team_ownership"
+OWNERSHIP_CSV_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "team_ownership.csv"
+)
+UNOWNED_TEAM = "unowned"
+
 LOG_SCHEMA_PATH = Path(__file__).resolve().parent / "log_table_schema.yaml"
 LOG_SCHEMA = LOG_SCHEMA_PATH.read_text(encoding="utf-8")

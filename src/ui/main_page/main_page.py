@@ -10,14 +10,6 @@ from ui.rendering import MARKER_RE, render_answer
 from ui.roles import ROLE_LABELS
 
 
-def _persist(*args, **kwargs) -> None:
-    """Persist a message, surfacing (but not crashing on) backend errors."""
-    try:
-        chat_client.append_message(*args, **kwargs)
-    except Exception as err:  # noqa: BLE001
-        st.warning(f"Message could not be saved: {err}")
-
-
 def _parse_ts(value) -> datetime | None:
     """Parse a stored ISO-8601 message timestamp, or ``None`` if unusable."""
     if not isinstance(value, str):
@@ -145,6 +137,9 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
         result = payload.get("result") or {}
         current_chat["history"].append(
             {
+                # Server seq is 1-based and contiguous per chat, and every local
+                # history item mirrors a persisted message.
+                "seq": len(current_chat["history"]) + 1,
                 "role": "assistant",
                 "content": result.get("answer", ""),
                 "progress": result.get("progress") or [],
@@ -232,6 +227,132 @@ def render_active_run(container, current_chat, token: str, chat_id: str) -> None
         _finalize_run(current_chat, chat_id, payload)
 
 
+
+# --- Role switch ---------------------------------------------------------------
+
+
+def _load_role_answers(token: str, chat_id: str) -> dict:
+    """``"seq:role" -> answer`` for every cached per-role answer of a chat."""
+    try:
+        answers = chat_client.list_role_answers(token, chat_id)
+    except Exception:  # noqa: BLE001 - role answers are an optional extra
+        return {}
+    return {f"{a['message_seq']}:{a['role']}": a for a in answers}
+
+
+def _role_run_key(chat_id: str, seq: int, role: str) -> str:
+    return f"{chat_id}|{seq}|{role}"
+
+
+def _role_runs() -> dict:
+    return st.session_state.setdefault("role_runs", {})
+
+
+def _open_roles() -> dict:
+    return st.session_state.setdefault("role_open", {})
+
+
+def render_role_switch(token: str, chat_id: str, current_chat: dict, seq: int) -> None:
+    """Role buttons under an answer, plus that answer's other-role versions.
+
+    A click asks the backend for the answer as that role: a cached answer shows
+    at once; otherwise a new role-specific investigation runs in the background
+    and is cached, so switching back and forth never re-runs it.
+    """
+    answers = current_chat.setdefault("role_answers", {})
+    own_role = current_chat["role"]
+    targets = [t for t in ROLE_LABELS if t != own_role]
+    with st.container(horizontal=True, horizontal_alignment="left"):
+        for target in targets:
+            cached = f"{seq}:{target}" in answers
+            label = f"As {ROLE_LABELS[target]}" + (" ✓" if cached else "")
+            if st.button(label, key=f"role_{chat_id}_{seq}_{target}", width="content"):
+                _request_role(token, chat_id, current_chat, seq, target)
+
+    for target in targets:
+        key = _role_run_key(chat_id, seq, target)
+        if key in _role_runs():
+            render_role_run(token, chat_id, current_chat, seq, target)
+        answer = answers.get(f"{seq}:{target}")
+        if answer:
+            with st.expander(
+                f"Answer for {ROLE_LABELS[target]} — separate investigation "
+                f"({answer.get('effort')} effort)",
+                expanded=_open_roles().get(f"{chat_id}|{seq}") == target,
+            ):
+                render_answer(st, answer["content"], answer.get("tool_results"))
+
+
+def _request_role(token: str, chat_id: str, current_chat: dict, seq: int, role: str) -> None:
+    effort = st.session_state.get("effort", "Medium")
+    try:
+        response = chat_client.request_role_answer(
+            token=token, chat_id=chat_id, message_seq=seq, role=role, effort=effort
+        )
+    except Exception as err:  # noqa: BLE001
+        st.error(f"Could not answer as {ROLE_LABELS[role]}: {err}")
+        return
+    _open_roles()[f"{chat_id}|{seq}"] = role
+    if response.get("status") == "cached":
+        current_chat.setdefault("role_answers", {})[f"{seq}:{role}"] = response["answer"]
+    else:
+        _role_runs()[_role_run_key(chat_id, seq, role)] = {
+            "effort": effort,
+            "run_id": response["run_id"],
+            "since": 0,
+            "answer": "",
+            "progress": [],
+            "tool_results": [],
+        }
+    st.rerun()
+
+
+@st.fragment(run_every="1s")
+def render_role_run(token: str, chat_id: str, current_chat: dict, seq: int, role: str) -> None:
+    """Poll one in-flight role-switch run and fold it into the cache when done."""
+    key = _role_run_key(chat_id, seq, role)
+    run = _role_runs().get(key)
+    if not run:
+        return
+    try:
+        payload = chat_client.get_run(
+            token=token, chat_id=chat_id, run_id=run["run_id"], since=run["since"]
+        )
+    except Exception as err:  # noqa: BLE001
+        if getattr(getattr(err, "response", None), "status_code", None) == 404:
+            _role_runs().pop(key, None)
+            current_chat["role_answers"] = _load_role_answers(token, chat_id)
+            st.rerun(scope="app")
+        return
+    for event in payload["events"]:
+        _apply_event(run, event)
+    run["since"] = payload["next_since"]
+
+    status = payload["status"]
+    if status == "running":
+        stages = [p for p in run["progress"] if p.startswith("Currently at stage")]
+        st.caption(
+            f"Investigating as {ROLE_LABELS[role]}… "
+            + (stages[-1].removeprefix("Currently at stage: ") if stages else "")
+        )
+        return
+    _role_runs().pop(key, None)
+    if status == "done":
+        result = payload.get("result") or {}
+        current_chat.setdefault("role_answers", {})[f"{seq}:{role}"] = {
+            "message_seq": seq,
+            "role": role,
+            "effort": run.get("effort"),
+            "content": result.get("answer", ""),
+            "tool_results": result.get("tool_results") or [],
+            "progress": result.get("progress") or [],
+        }
+    elif status == "error":
+        st.error(f"{ROLE_LABELS[role]} investigation failed: {payload.get('error')}")
+        return
+    st.rerun(scope="app")
+
+
 def main_page():
     st.title("LangChain Chat Agent")
 
@@ -249,6 +370,8 @@ def main_page():
 
         # On a fresh open, re-attach to an investigation started before this
         # session (e.g. after a browser refresh) so its progress is not lost.
+        current_chat["role_answers"] = _load_role_answers(token, chat_id)
+
         if chat_id not in st.session_state.active_runs:
             try:
                 run_id = chat_client.active_run(token=token, chat_id=chat_id)
@@ -289,63 +412,12 @@ def main_page():
                 elapsed = _answer_elapsed(current_chat["history"], idx, item)
                 if elapsed is not None:
                     st.caption(f"Answered in {_format_duration(elapsed)}")
-                if item.get("tool_results"):
-                    # Never offer the role the answer is already written for:
-                    # originals use the chat's role, reframed items their target.
-                    own_role = item.get("reframed_for") or current_chat["role"]
-                    targets = [t for t in ROLE_LABELS if t != own_role]
-                    # Left-aligned, tightly packed buttons (not full-width columns).
-                    with st.container(horizontal=True, horizontal_alignment="left"):
-                        for i, target in enumerate(targets):
-                            if st.button(
-                                ROLE_LABELS[target],
-                                key=f"reframe_{target}_{idx}_{i}",
-                                width="content",
-                            ):
-                                question = next(
-                                    (
-                                        h["content"]
-                                        for h in reversed(current_chat["history"][:idx])
-                                        if h["role"] == "user"
-                                    ),
-                                    "",
-                                )
-                                try:
-                                    with st.spinner(
-                                        f"Reframing for {ROLE_LABELS[target]}…"
-                                    ):
-                                        answer = chat_client.reframe(
-                                            token=token,
-                                            target_role=target,
-                                            effort=st.session_state.get(
-                                                "effort", "Medium"
-                                            ),
-                                            question=question,
-                                            previous_answer=item["content"],
-                                            tool_results=item.get("tool_results") or [],
-                                        )
-                                except Exception as e:
-                                    st.error(f"Reframe failed: {e}")
-                                else:
-                                    _persist(
-                                        token,
-                                        chat_id,
-                                        role="assistant",
-                                        content=answer,
-                                        tool_results=item.get("tool_results") or [],
-                                        reframed_for=target,
-                                    )
-                                    current_chat["history"].append(
-                                        {
-                                            "role": "assistant",
-                                            "content": answer,
-                                            "progress": None,
-                                            "tool_results": item.get("tool_results")
-                                            or [],
-                                            "reframed_for": target,
-                                        }
-                                    )
-                                    st.rerun()
+                if item.get("tool_results") and not item.get("reframed_for"):
+                    # Answer the same question as another role: a separate,
+                    # role-specific investigation, cached per (message, role).
+                    render_role_switch(
+                        token, chat_id, current_chat, item.get("seq") or idx + 1
+                    )
             else:
                 st.markdown(item["content"])
         copy_to_clipboard_button(item["content"], item["role"], idx)

@@ -8,6 +8,7 @@ from __future__ import annotations
 from langchain.tools import ToolRuntime, tool
 
 from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.schemas import (
@@ -19,30 +20,23 @@ from backend.pipeline.tools.schemas import (
 
 
 def _call(runtime: ToolRuntime, name: str, operation: str, arguments: dict) -> dict:
-    """Invoke an MCP tool and re-wrap its envelope for the local contract.
+    """Invoke an MCP tool and keep the server's whole envelope.
 
-    A refusal arriving over MCP is passed straight through rather than being
-    unwrapped as data, so the agent sees the same actionable refusal on both
-    transports. ``query_stats`` is likewise preserved.
+    The executed query, filters, truncation flag and ``query_stats`` survive,
+    and a refusal arriving over MCP is passed through as a refusal (not data),
+    so the agent sees the same actionable result on both transports.
+    ``execute_database_tool`` fills any field an older server omits with ``None``.
     """
     def invoke():
-        payload = get_mcp_bridge().call_tool(name, arguments)
-        if isinstance(payload, dict):
-            if payload.get("status") == "refused":
-                from backend.db.errors import Refusal, QueryRefused
-
-                raise QueryRefused(
-                    Refusal(
-                        reason=payload.get("reason", "refused"),
-                        suggestion=payload.get("suggestion", ""),
-                        code=payload.get("code", "refused"),
-                    )
-                )
-            return payload.get("data", payload)
-        return payload
+        return get_mcp_bridge().call_tool(name, arguments)
 
     return execute_database_tool(
-        runtime=runtime, operation=operation, function=invoke
+        runtime=runtime,
+        operation=operation,
+        function=invoke,
+        kind=TOOL_KINDS.get(name),
+        dataset=arguments.get("dataset"),
+        limit=arguments.get("limit"),
     )
 
 

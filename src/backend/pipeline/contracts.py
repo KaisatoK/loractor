@@ -93,6 +93,37 @@ class Hypothesis(BaseModel):
             "id must refer to an entry in the report's evidence list."
         )
     )
+    contradicting_evidence_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Ids of evidence items that speak AGAINST the hypothesis (for example "
+            "a counterexample query that found the error without the suspected "
+            "trigger). Empty when nothing contradicts it."
+        ),
+    )
+    next_check: str | None = Field(
+        default=None,
+        description=(
+            "The single next diagnostic check that would confirm or refute the "
+            "hypothesis when the collected logs cannot."
+        ),
+    )
+
+
+class DataScope(BaseModel):
+    """What data the evidence covers, built in code from the tool results.
+
+    Never produced by a model: ``data_scope.build_data_scope`` derives it from
+    the captured records so the answer can state its scope and filters exactly.
+    """
+
+    datasets: list[str] = Field(default_factory=list)
+    time_windows: list[dict[str, str]] = Field(default_factory=list)
+    filters: dict[str, list[Any]] = Field(default_factory=dict)
+    measured_result_ids: list[str] = Field(default_factory=list)
+    example_result_ids: list[str] = Field(default_factory=list)
+    truncated_result_ids: list[str] = Field(default_factory=list)
+    unknown_truncation_result_ids: list[str] = Field(default_factory=list)
 
 
 class EvidenceReport(BaseModel):
@@ -117,6 +148,10 @@ class EvidenceReport(BaseModel):
             "Available only when the request required investigation; empty for a direct "
             "data question."
         ),
+    )
+    data_scope: DataScope | None = Field(
+        default=None,
+        description="Code-built data scope of the captured results; never model-written.",
     )
 
     coverage: str = Field(
@@ -158,8 +193,46 @@ class AnswerTable(BaseModel):
 AnswerBlock = Annotated[AnswerText | AnswerTable, Field(discriminator="type")]
 
 
+class Finding(BaseModel):
+    """One atomic claim in the answer, labelled by how it is supported."""
+
+    id: str = Field(description="Finding id, for example 'F1'.")
+    kind: Literal["measured", "hypothesis", "limitation"] = Field(
+        description=(
+            "'measured': directly shown by cited tool results. 'hypothesis': a "
+            "possible explanation the results do not confirm. 'limitation': what "
+            "the data does not establish."
+        )
+    )
+    statement: str = Field(description="The claim in one sentence.")
+    result_ids: list[str] = Field(
+        default_factory=list,
+        description="Tool-result ids (R#) backing the claim; required for 'measured'.",
+    )
+
+
+class Recommendation(BaseModel):
+    """One next step, justified by findings."""
+
+    action: str = Field(description="What to check or fix, concretely.")
+    why: str = Field(description="Why this comes first, based on the findings.")
+    finding_ids: list[str] = Field(
+        default_factory=list, description="Ids of the findings that support it."
+    )
+    owner_team: str | None = Field(
+        default=None, description="Owning team from the ownership mapping, if known."
+    )
+
+
 class AnswerOutput(BaseModel):
-    """The final answer as an ordered sequence of prose and table blocks."""
+    """The final answer: role narrative blocks plus a labelled evidence ledger.
+
+    ``blocks`` carry the role-structured narrative and tables. ``findings`` and
+    ``recommendations`` are rendered by code (``pipeline/answers.py``) into
+    labelled sections, followed by a code-built "Data scope and queries"
+    appendix, so measured facts, hypotheses and limitations are always
+    separated and every number stays checkable.
+    """
 
     blocks: list[AnswerBlock] = Field(
         description=(
@@ -167,6 +240,15 @@ class AnswerOutput(BaseModel):
             "referenced table appears where it belongs. Show only the tables the "
             "reader needs and reference only ids from the tool result catalog."
         )
+    )
+    findings: list[Finding] = Field(
+        default_factory=list,
+        description="Atomic claims, each labelled measured, hypothesis or limitation.",
+    )
+    recommendations: list[Recommendation] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Ordered next steps, each justified by findings.",
     )
     follow_up: str | None = Field(
         default=None,

@@ -33,24 +33,40 @@ LOG_REQUEST_THRESHOLD = 0.3
 EVIDENCE_REVISION_THRESHOLD = 0.6
 ANSWER_OK_THRESHOLD = 0.45
 
+# A dataset-wide overview ("what recurs?", "what should we prioritize?") has a
+# natural starting point for the team lead and manager: counts over the whole
+# dataset. For them an overview counts as scoped; the engineer still needs a
+# target. Starting value; validate with routes.sh.
+OVERVIEW_THRESHOLD = 0.6
+
+# Roles whose default scope is the whole dataset.
+OVERVIEW_ROLES = frozenset({"team_lead", "manager"})
+
 # One long-lived classifier; like models.py it reads TYPESAFE_API_KEY at import.
 # No model is passed, so the SDK default selects the release — the gate
 # thresholds above were tuned against it, so a model release can move them.
 classifier = TypeSafeClassifier()
 
 
-def decide_scope(response: ClassifierResponse, clarify_count: int) -> str:
+def decide_scope(
+    response: ClassifierResponse, clarify_count: int, role: str | None = None
+) -> str:
     """Return the scope route using atomic judgments and code-owned policy.
 
     Non-log requests go to ``general``. Log requests without a queryable target
-    are clarified unless the user authorized proceeding or the clarify budget is
-    spent. Once that gate is passed, ``needs_new_evidence`` selects between a
-    direct answer and evidence retrieval.
+    are clarified unless the user authorized proceeding, the clarify budget is
+    spent, or the request is a dataset-wide overview from a role whose default
+    scope is the whole dataset (``OVERVIEW_ROLES``). Once that gate is passed,
+    ``needs_new_evidence`` selects between a direct answer and evidence
+    retrieval. The role is applied here, in code; the Nouls never see it.
     """
     if response.nouls["is_log_request"].noul < LOG_REQUEST_THRESHOLD:
         return "general"
 
     scoped = response.nouls["has_queryable_scope"].noul >= QUERYABLE_SCOPE_THRESHOLD
+    if not scoped and role in OVERVIEW_ROLES:
+        overview = response.nouls.get("is_overview_request")
+        scoped = overview is not None and overview.noul >= OVERVIEW_THRESHOLD
     if not scoped:
         authorized = (
             response.nouls["proceed_without_clarification"].noul >= PROCEED_THRESHOLD
