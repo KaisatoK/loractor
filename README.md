@@ -658,10 +658,14 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `3 failed, 612 passed, 53 skipped`. The three
-> failures are known and pre-existing, all in `tests/test_rendering.py`
-> (inline-marker rendering edge cases); the skips are the gated live cases
-> below.
+> The offline suite reports `5 failed, 631 passed, 45 skipped`. Three failures
+> are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
+> rendering edge cases). The other two,
+> `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
+> `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, need a
+> reachable SereneDB although they are not gated, and pass when it is. The skips
+> are the gated live cases below. The suite passes identically under `TOOLS_TRANSPORT=local` and
+> `TOOLS_TRANSPORT=mcp`.
 
 ### Live corpus tests
 
