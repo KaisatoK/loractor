@@ -69,7 +69,8 @@ JSON_OUTPUT_SPEC = (
     '      "status": "supported",\n'
     '      "evidence_ids": ["E1"]\n'
     "    }\n"
-    "  ]\n"
+    "  ],\n"
+    '  "coverage": "what fraction of the data was actually examined, and how"\n'
     "}\n\n"
     "Rules for filling the json:\n"
     "- `result_ids` must cite ONLY the `R`-ids that appear in the captured "
@@ -84,7 +85,16 @@ JSON_OUTPUT_SPEC = (
     "hypothesis status is \"supported\", \"unsupported\", or \"inconclusive\"; "
     "use \"inconclusive\" whenever the evidence is missing, insufficient, "
     "ambiguous, or conflicting. Every `evidence_ids` entry must refer to an "
-    "evidence item id that exists in the report."
+    "evidence item id that exists in the report.\n"
+    "- `coverage` is REQUIRED whenever a tool reported one. Copy the figures "
+    "from the tool results rather than describing them loosely: say how many "
+    "chunks were profiled, sampled and read, or what time window a query "
+    "covered. Omit it only when no tool reported coverage.\n"
+    "- A sweep examines the corpus at three different depths and they are not "
+    "interchangeable. A chunk that was profiled was COUNTED, not read; only a "
+    "promoted chunk had its message text examined. Never describe a profiled "
+    "chunk as searched, and never let a bounded sweep's silence read as "
+    "evidence that nothing is there -- say what was not examined."
 )
 
 PROMPT_TEMPLATE = (

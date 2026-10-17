@@ -37,6 +37,10 @@ from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import FIND_EVIDENCE_SYSTEM_PROMPT
 from backend.pipeline.tools.registry import get_db_tools
 
+# Tools that examine the whole corpus. Named here rather than imported from the
+# tool modules so this gate does not depend on the transport in use.
+SWEEP_TOOL_NAMES = frozenset({"sweep_chunks_tool", "investigate_chunk_tool"})
+
 MAX_TOOL_RETRIES = 2
 
 # The repo's skills directory, derived from this module's location. Rooting the
@@ -118,6 +122,16 @@ def get_find_evidence_agent(effort: str) -> CompiledStateGraph:
     _ensure_profile_registered()
     spec = get_effort_spec(effort)
     tools, mcp_enabled = get_db_tools()
+
+    # The sweep is withheld below Extreme rather than offered and refused.
+    #
+    # A tool the model can see, it will eventually try, and a refusal still
+    # costs a call out of a budget of four to twenty. More to the point, a
+    # sweep's cheapest useful configuration takes minutes, which is not a thing
+    # to spend on a question a bounded query answers. `max_promotions` is the
+    # existing per-effort dial, so it decides this too.
+    if not spec.max_promotions:
+        tools = [t for t in tools if t.name not in SWEEP_TOOL_NAMES]
     agent_kwargs = {
         "model": deepseek,
         "tools": tools,

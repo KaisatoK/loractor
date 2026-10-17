@@ -12,7 +12,9 @@ from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.schemas import (
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
+    InvestigateChunk,
     SearchLogs, TopInCategoryByService,
+    SweepChunks,
 )
 
 
@@ -129,7 +131,30 @@ def list_skills() -> str:
     return result.get("data", result) if isinstance(result, dict) else result
 
 
+@tool(args_schema=SweepChunks,
+      description="Graded pass over a whole remote corpus; ranks relevant chunks.")
+def sweep_chunks_tool(runtime: ToolRuntime, question: str, dataset: str = "otel_s3",
+                      max_promotions: int = 0, start_at: int = 0,
+                      confirm_cost: bool = False) -> dict:
+    return _call(runtime, "sweep_chunks_tool",
+                 (f"estimate the cost of sweeping {dataset}" if not confirm_cost
+                  else f"sweep {dataset} for evidence about {question[:60]!r}"),
+                 {"question": question, "dataset": dataset,
+                  "max_promotions": max_promotions, "start_at": start_at,
+                  "confirm_cost": confirm_cost})
+
+
+@tool(args_schema=InvestigateChunk,
+      description="Read one chunk's message text and digest it.")
+def investigate_chunk_tool(runtime: ToolRuntime, chunk_id: str,
+                           dataset: str = "otel_s3", question: str = "") -> dict:
+    return _call(runtime, "investigate_chunk_tool",
+                 f"read message text for chunk {chunk_id}",
+                 {"chunk_id": chunk_id, "dataset": dataset, "question": question})
+
+
 MCP_DB_TOOLS = [
     count_by_category_tool, get_data_tool, get_log_by_line_id_tool, get_trend_tool,
     search_logs_tool, top_in_category_by_service_tool, compare_periods_tool,
+    sweep_chunks_tool, investigate_chunk_tool,
 ]

@@ -213,3 +213,108 @@ class GetTools(_Windowed):
         ),
     ]
     limit: Annotated[int, Field(ge=1, le=200)] = 50
+
+
+class _Sweepable(_DatasetScoped):
+    """Argument set for the sweep tools.
+
+    Defaults to the remote corpus rather than the global default: only a
+    chunk-addressable corpus can be swept, so defaulting to the small local
+    demo table would make the common call an immediate refusal.
+    """
+
+    dataset: Annotated[str, Field(description=_DATASET_DESCRIPTION)] = "otel_s3"
+
+    @field_validator("dataset")
+    @classmethod
+    def _sweepable_dataset(cls, value: str) -> str:
+        from backend.db.datasets import Capability, datasets_with
+
+        allowed = {d.id for d in datasets_with(Capability.CHUNK_SWEEP)}
+        if value not in allowed:
+            raise ValueError(
+                f"Dataset '{value}' cannot be swept. Choose one of: "
+                f"{', '.join(sorted(allowed))}."
+            )
+        return value
+
+
+class SweepChunks(_Sweepable):
+    """Graded pass over a whole remote corpus: map, profile, sample, rank.
+
+    No time window, deliberately. Every other tool is bounded by one because it
+    scans rows directly; this one addresses the corpus by row group and is
+    bounded by its own budgets instead -- so asking it for a window would
+    misrepresent what it does.
+    """
+
+    question: Annotated[
+        str,
+        Field(
+            min_length=3,
+            max_length=500,
+            description=(
+                "What the investigation is trying to establish. Its words are "
+                "matched against sampled message text to rank chunks, so "
+                "concrete terms work better than a restatement of the task."
+            ),
+        ),
+    ]
+    max_promotions: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=4,
+            description=(
+                "Chunks to read message text for. Each costs about eleven "
+                "minutes, so this is the expensive dial; 0 ranks without "
+                "reading any text."
+            ),
+        ),
+    ] = 0
+    start_at: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Chunk index to resume from, taken from a previous sweep's "
+                "cursor. Lets a second call continue through the corpus "
+                "instead of re-examining its beginning."
+            ),
+        ),
+    ] = 0
+    confirm_cost: Annotated[
+        bool,
+        Field(
+            description=(
+                "Must be true to actually run. Called with false it returns a "
+                "cost estimate only, so the user can agree to the spend first."
+            )
+        ),
+    ] = False
+
+
+class InvestigateChunk(_Sweepable):
+    """Read one named chunk's message text and digest it.
+
+    The companion to a sweep: the sweep says which chunks look relevant, this
+    reads one properly. Expensive by nature, so it takes a single explicit id
+    rather than a selection.
+    """
+
+    chunk_id: Annotated[
+        str,
+        Field(
+            min_length=3,
+            max_length=64,
+            pattern=r"^[A-Za-z0-9_.]+:\d+-\d+$",
+            description=(
+                "Chunk identifier from a sweep result, such as "
+                "'part_000:412-412'."
+            ),
+        ),
+    ]
+    question: Annotated[
+        str,
+        Field(max_length=500, description="What the investigation is after."),
+    ] = ""

@@ -33,10 +33,16 @@ def test_every_tool_declares_which_tier_it_reads():
 
 
 def test_the_catalog_names_the_dataset_parameter_not_a_table():
+    """The model picks a corpus by id, and must never be invited to name a table.
+
+    Matched on whole words: an earlier substring check failed on "quotable".
+    """
+    import re
+
     blob = " ".join(TOOL_CATALOG.values())
     assert "dataset" in blob
     assert "table_name" not in blob
-    assert "table" not in blob.replace("TIER", "")
+    assert not re.search(r"\btables?\b", blob)
 
 
 def test_search_is_described_as_index_only():

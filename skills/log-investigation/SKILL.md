@@ -70,3 +70,37 @@ scope, and state the limits of what you examined. On a billion-row corpus you
 will have read a small fraction of it; a finding drawn from one minute of a
 24-hour day is evidence about that minute, and the answer should say so rather
 than generalising silently.
+
+## Sweeping a whole corpus
+
+Available only at Extreme and Brutal effort, and only worth reaching for when
+the user insists on evidence from the entire corpus and a bounded query will not
+satisfy them. It is not a better search — it is a way to spend a lot of time
+deliberately.
+
+The reason it is structured in stages is that the stages differ in cost by
+orders of magnitude:
+
+| Stage | What it reads | Cost |
+| --- | --- | --- |
+| map | Parquet footers | negligible |
+| profile | timestamp and severity columns | ~1s per window, covers everything |
+| sample | ~2,000 rows of message text per chunk | ~35s per chunk |
+| promote | all message text in one chunk | **~11 minutes per chunk** |
+
+So profiling can look at all 1,624 chunks, and promotion can look at two or
+three. Stages 2 and 3 exist to decide where stage 4 goes.
+
+**Always price it first.** Call `sweep_chunks_tool` with `confirm_cost=false`,
+show the user the estimate, and only proceed with `confirm_cost=true` once they
+agree. A sweep with four promotions is three quarters of an hour.
+
+**Report coverage, and respect the difference between the depths.** A chunk that
+was profiled was counted, not read. If a sweep profiled 1,624 chunks, sampled 12
+and promoted 2, say exactly that. Do not write "I searched the corpus" — a
+bounded sweep produces false negatives by construction, and an answer that hides
+its own limits invites the reader to trust it further than the evidence allows.
+
+**Prefer a narrowed query when one exists.** If the question can be answered by
+counting over a five-minute window, do that instead: it costs a second and the
+result is exact.

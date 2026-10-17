@@ -45,6 +45,24 @@ TOOL_CATALOG = {
         "category, limit. Use this FIRST to find where the problem is before "
         "paying to search text."
     ),
+    "sweep_chunks_tool": (
+        "TIER sweep. LAST RESORT, and only when the user insists on evidence "
+        "from the WHOLE corpus and a bounded query will not do; params: "
+        "dataset, question, max_promotions (0-4), start_at, confirm_cost. "
+        "Examines all 1,624 chunks in graded passes -- footers, then aggregates "
+        "that read no message text, then stratified samples -- and ranks them. "
+        "max_promotions>0 reads message text for that many top chunks at about "
+        "ELEVEN MINUTES EACH. ALWAYS call with confirm_cost=false first, show "
+        "the user the estimate, then call again with confirm_cost=true. Report "
+        "the returned coverage: a profiled chunk was counted, not read."
+    ),
+    "investigate_chunk_tool": (
+        "TIER sweep. Reads one named chunk's message text and returns counts, "
+        "templates and verbatim lines; params: dataset, chunk_id, question. "
+        "Use on a chunk a sweep ranked highly when you need quotable evidence. "
+        "Costs about eleven minutes. Reading one chunk says nothing about the "
+        "rest of the corpus, and the returned coverage says so."
+    ),
     "search_logs_tool": (
         "TIER index ONLY. Searches message text and ranks by relevance; "
         "params: dataset, query_text, category, limit. Requires an indexed "

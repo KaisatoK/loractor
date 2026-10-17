@@ -25,7 +25,16 @@ from backend.db import (
 )
 from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.db.errors import QueryRefused
+from backend.db.stats import QueryResult
+from backend.pipeline.sweep import (
+    SweepBudget,
+    estimate_sweep,
+    investigate_chunk,
+    sweep,
+)
 from backend.pipeline.tools.schemas import (
+    InvestigateChunk,
+    SweepChunks,
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
     SearchLogs, TopInCategoryByService,
 )
@@ -180,6 +189,55 @@ def _skill_files() -> dict[str, Path]:
 def _skill_body(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     return re.sub(r"^---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.DOTALL)
+
+
+@mcp.tool(name="sweep_chunks_tool")
+def sweep_chunks_tool(question: str, dataset: str = "otel_s3",
+                      max_promotions: int = 0, start_at: int = 0,
+                      confirm_cost: bool = False) -> dict:
+    """Examine a whole remote corpus in graded passes and rank relevant chunks.
+
+    Call with confirm_cost=false first: it returns a cost estimate rather than
+    running, because a sweep with promotions costs minutes per chunk.
+    """
+    v = _validated(SweepChunks, question=question, dataset=dataset,
+                   max_promotions=max_promotions, start_at=start_at,
+                   confirm_cost=confirm_cost)
+    budget = SweepBudget(max_promotions=v["max_promotions"])
+
+    if not v["confirm_cost"]:
+        estimate = estimate_sweep(v["dataset"], budget=budget)
+        estimate["confirm_required"] = True
+        return _run(f"estimate the cost of sweeping {v['dataset']}",
+                    lambda: QueryResult([estimate], stats=None))
+
+    def run():
+        result = sweep(v["question"], dataset=v["dataset"], budget=budget,
+                       start_at=v["start_at"])
+        payload = result.as_dict()
+        rows = [{"coverage": payload["coverage"], "progress": payload["progress"],
+                 "cursor": payload["cursor"], "notes": payload["notes"]}]
+        rows += [{"ranked_chunk": e} for e in payload["ranked"]]
+        rows += [{"digest": d} for d in payload["digests"]]
+        return QueryResult(rows, stats=result.stats)
+
+    return _run(f"sweep {v['dataset']} for evidence about {v['question'][:60]!r}", run)
+
+
+@mcp.tool(name="investigate_chunk_tool")
+def investigate_chunk_tool(chunk_id: str, dataset: str = "otel_s3",
+                           question: str = "") -> dict:
+    """Read one named chunk's message text and digest it."""
+    v = _validated(InvestigateChunk, chunk_id=chunk_id, dataset=dataset,
+                   question=question)
+    return _run(
+        f"read message text for chunk {v['chunk_id']}",
+        lambda: QueryResult(
+            [investigate_chunk(v["chunk_id"], question=v["question"],
+                               dataset=v["dataset"])],
+            stats=None,
+        ),
+    )
 
 
 @mcp.tool(name="list_skills")

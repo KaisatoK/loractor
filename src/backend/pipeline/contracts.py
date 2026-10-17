@@ -119,6 +119,17 @@ class EvidenceReport(BaseModel):
         ),
     )
 
+    coverage: str = Field(
+        default="",
+        description=(
+            "What fraction of the data was actually examined, and at what "
+            "depth. Required whenever a tool reported coverage: a bounded "
+            "sweep produces false negatives by construction, so an answer "
+            "that omits this invites the reader to assume the whole corpus "
+            "was searched."
+        ),
+    )
+
 
 class AnswerText(BaseModel):
     """A prose section of the final answer, rendered as markdown."""
