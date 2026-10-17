@@ -539,3 +539,19 @@ The external agent connects directly to the MCP service, so the backend does
 not need `TOOLS_TRANSPORT=mcp` for that agent to use the tools. Set
 `TOOLS_TRANSPORT=mcp` only when the chatbot's own LangGraph pipeline should use
 the same MCP service instead of its local fallback implementation.
+
+## License
+
+The code is released under the [MIT License](LICENSE).
+
+The OpenStack sample in `src/backend/data/` (`OpenStack_2k.log_structured*.csv`)
+comes from [Loghub](https://github.com/logpai/loghub) and is not covered by the
+MIT license: it is redistributed under the Loghub license, which permits research
+or academic use and requires attribution. See
+[`src/backend/data/LICENSE-loghub`](src/backend/data/LICENSE-loghub). The BGL
+corpus is not bundled; it is loaded from a local Loghub download
+(`BGL_LOG_PATH`) under the same terms.
+
+If you use the Loghub data, cite: Jieming Zhu, Shilin He, Pinjia He, Jinyang
+Liu, Michael R. Lyu. *Loghub: A Large Collection of System Log Datasets for
+AI-driven Log Analytics*. ISSRE, 2023.

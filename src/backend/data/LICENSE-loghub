@@ -1,0 +1,24 @@
+The following files in this directory are derived from the OpenStack log
+dataset of Loghub (https://github.com/logpai/loghub) and are NOT covered by
+the repository's MIT license:
+
+- OpenStack_2k.log_structured.csv
+- OpenStack_2k.log_structured_embedded.csv (the same rows plus embeddings)
+
+They are redistributed under the Loghub license, reproduced verbatim below.
+
+--------------------------------------------------------------------------
+
+LICENSE OF LOGHUB
+
+The datasets are freely available for research or academic work, subject to
+the following condition: For any usage or distribution of the loghub
+datasets, please refer to the loghub repository URL
+(https://github.com/logpai/loghub) and cite the following loghub paper where
+applicable.
+
+Jieming Zhu, Shilin He, Pinjia He, Jinyang Liu, Michael R. Lyu. Loghub: A
+Large Collection of System Log Datasets for AI-driven Log Analytics. In
+ISSRE, 2023.
+
+The above license notice shall be included in all copies of the datasets.
