@@ -50,6 +50,10 @@ def sweep_chunks_tool(
     The result's `coverage` states what was examined at each depth. Report it:
     a chunk that was profiled was counted, not read, so a sweep can miss
     evidence and the answer must not imply otherwise.
+
+    The result also carries a `trace`: every stage, every chunk's score and the
+    three signals behind it, and the reason any chunk was read in full. Use it
+    to explain *why* the evidence you have is the evidence you have.
     """
     budget = SweepBudget(max_promotions=max_promotions)
 
@@ -66,8 +70,18 @@ def sweep_chunks_tool(
             f"sweep {dataset} for evidence about {question[:60]!r}"
             + (f" with {max_promotions} promotions" if max_promotions else "")
         ),
-        function=lambda: _as_rows(
-            sweep(question, dataset=dataset, budget=budget, start_at=start_at)
+        # The sweep is the one tool that reports from inside itself. Its call
+        # can run for minutes over 1,624 chunks, and a silent minute is
+        # indistinguishable from a hang.
+        with_reporter=True,
+        function=lambda reporter: _as_rows(
+            sweep(
+                question,
+                dataset=dataset,
+                budget=budget,
+                start_at=start_at,
+                progress=_relay(reporter),
+            )
         ),
     )
 
@@ -96,6 +110,19 @@ def investigate_chunk_tool(
             investigate_chunk(chunk_id, question=question, dataset=dataset)
         ),
     )
+
+
+def _relay(reporter):
+    """Forward sweep events to the tool-progress stream.
+
+    A thin adapter on purpose: the sweep should not know what a tool runtime is,
+    and the reporter should not know what a sweep stage is.
+    """
+
+    def relay(event):
+        reporter(event.message, stage=event.stage, detail=event.detail)
+
+    return relay
 
 
 def _as_estimate(dataset: str, budget: SweepBudget):
@@ -127,6 +154,9 @@ def _as_rows(result):
             "progress": payload["progress"],
             "cursor": payload["cursor"],
             "notes": payload["notes"],
+            # How the sweep reached its conclusions, step by step. The model is
+            # told to report coverage; this is what lets a human check it.
+            "trace": payload["trace"],
         }
     ]
     rows += [{"ranked_chunk": entry} for entry in payload["ranked"]]

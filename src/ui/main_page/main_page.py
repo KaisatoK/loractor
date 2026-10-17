@@ -53,6 +53,20 @@ def _apply_event(run: dict, event: dict) -> None:
         action, status = op.get("operation", ""), op.get("status")
         if status == "completed":
             run["progress"].append(f"✓ {action}")
+        elif status == "working":
+            # A long-running tool reporting from inside itself. The sweep
+            # iterates over up to 1,624 chunks in one call, so these are the
+            # only sign it is progressing; the message says which pass it is on
+            # and what it decided, so it is shown instead of the operation name.
+            run["progress"].append(
+                f"  → {op.get('message') or action}"
+            )
+        elif status == "skipped":
+            # A refusal, not a failure: the query was never run because it was
+            # unbounded or unsupported as asked, and it came back with a
+            # suggestion. Labelling it "failed" misreads a useful answer as a
+            # broken tool.
+            run["progress"].append(f"↷ {op.get('message') or action}")
         elif status not in ("started", None):
             run["progress"].append(f"{action} — failed")
     elif etype == "subgraph_name":

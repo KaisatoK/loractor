@@ -47,5 +47,14 @@ def collect_tool_results(messages) -> list[dict[str, Any]]:
         stats = payload.get("query_stats")
         if stats:
             record["query_stats"] = stats
+
+        # How a long-running tool reached its result, step by step. Only the
+        # sweep produces this, and only it needs to: its single call contains a
+        # loop over up to 1,624 chunks, so without the trace the result arrives
+        # with no account of how it was reached. Streamed too, but the stream is
+        # gone once the run ends and these decisions are worth auditing.
+        trace = payload.get("progress_trace")
+        if trace:
+            record["progress_trace"] = trace
         records.append(record)
     return records

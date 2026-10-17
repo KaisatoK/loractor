@@ -104,3 +104,14 @@ its own limits invites the reader to trust it further than the evidence allows.
 **Prefer a narrowed query when one exists.** If the question can be answered by
 counting over a five-minute window, do that instead: it costs a second and the
 result is exact.
+
+### Explaining a sweep
+
+A sweep result carries a `trace` alongside its `coverage`: every stage it ran,
+each sampled chunk's score with the three signals behind it (term hits, error
+density, service overlap), and the reason any chunk was read in full.
+
+Use it. "Chunk 412 was read because 6 of 8 sampled rows matched 'charge card'
+and its error density was 31%" is an explanation; "I searched the corpus" is
+not, and is also false. When a sweep found little, the trace is what
+distinguishes *nothing was there* from *nothing was looked at closely*.

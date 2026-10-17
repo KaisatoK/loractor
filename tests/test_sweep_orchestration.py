@@ -304,12 +304,18 @@ def test_a_refused_profile_is_noted_and_skipped(stub_stages, monkeypatch):
 
 
 def test_progress_is_reported_per_stage(stub_stages):
-    """A sweep can run for minutes, so the UI needs ticks while it does."""
+    """A sweep can run for minutes, so the UI needs ticks while it does.
+
+    The callback takes one structured event rather than a stage and a counter:
+    the detail payload is what makes the evaluation auditable, and it has
+    nowhere to live in a two-argument signature. Covered in depth by
+    ``test_sweep_observability.py``.
+    """
     seen: list[str] = []
     sweep_mod.sweep(
         "charge card failing",
         budget=sweep_mod.SweepBudget(max_promotions=1),
-        progress=lambda stage, state: seen.append(stage),
+        progress=lambda event: seen.append(event.stage),
     )
     assert "profile" in seen
     assert "sample" in seen

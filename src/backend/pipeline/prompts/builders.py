@@ -54,7 +54,9 @@ TOOL_CATALOG = {
         "max_promotions>0 reads message text for that many top chunks at about "
         "ELEVEN MINUTES EACH. ALWAYS call with confirm_cost=false first, show "
         "the user the estimate, then call again with confirm_cost=true. Report "
-        "the returned coverage: a profiled chunk was counted, not read."
+        "the returned coverage: a profiled chunk was counted, not read. The "
+        "result also carries a `trace` of every step and the score behind each "
+        "decision -- cite it when explaining why a particular chunk was read."
     ),
     "investigate_chunk_tool": (
         "TIER sweep. Reads one named chunk's message text and returns counts, "

@@ -108,6 +108,8 @@ def render_answer(container, text: str, results: list | None) -> None:
             hide_index=True,
         )
 
+    # Trace before cost: how the data was reached, then how much it cost.
+    render_sweep_trace(container, results)
     render_cost_panel(container, results)
 
 
@@ -178,6 +180,78 @@ def render_cost_panel(container, results: list | None) -> None:
     # stays consistent with how the rest of the renderer takes its container.
     panel = container.expander(
         f"Data queried — {cost_total(results)}", expanded=False
+    )
+    panel.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
+# Stage labels for the sweep trace, in the order the stages run.
+_STAGE_LABELS = {
+    "map": "Mapped",
+    "profile": "Profiled",
+    "sample": "Sampled",
+    "decide": "Decided",
+    "promote": "Read in full",
+    "done": "Finished",
+}
+
+
+def sweep_trace_rows(results: list | None) -> list[dict]:
+    """Flatten any sweep traces on the results into display rows.
+
+    The sweep's work happens inside one tool call, so its result arrives with no
+    visible account of how it was reached. The trace is that account: which pass
+    examined what, what each chunk scored, and why anything was read in full.
+    """
+    rows: list[dict] = []
+    for result in results or []:
+        if not isinstance(result, dict):
+            continue
+        for event in result.get("progress_trace") or []:
+            if not isinstance(event, dict):
+                continue
+            stage = str(event.get("stage", ""))
+            detail = event.get("detail") or {}
+            rows.append(
+                {
+                    "Result": result.get("id", ""),
+                    "Stage": _STAGE_LABELS.get(stage, stage or "-"),
+                    "What happened": str(event.get("message", "")),
+                    # Whether this step paid to read message text is the single
+                    # most useful thing to see: it separates the cheap passes
+                    # that covered everything from the expensive ones that did
+                    # not.
+                    "Read text": (
+                        "yes" if detail.get("reads_message_text") else "no"
+                    )
+                    if "reads_message_text" in detail
+                    else "-",
+                    "Score": (
+                        f"{float(detail['score']):.2f}"
+                        if isinstance(detail.get("score"), (int, float))
+                        else "-"
+                    ),
+                }
+            )
+    return rows
+
+
+def render_sweep_trace(container, results: list | None) -> None:
+    """Show how a corpus sweep reached its conclusions, collapsed by default.
+
+    Present because the sweep is the one operation whose reasoning is otherwise
+    invisible: a single tool call covering up to 1,624 chunks. Collapsed because
+    most investigations never sweep, and when they do the answer's own coverage
+    statement is the headline.
+    """
+    rows = sweep_trace_rows(results)
+    if not rows:
+        return
+
+    read_steps = sum(1 for row in rows if row["Read text"] == "yes")
+    panel = container.expander(
+        f"How the corpus was swept — {len(rows)} steps, "
+        f"{read_steps} that read message text",
+        expanded=False,
     )
     panel.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 

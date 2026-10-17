@@ -63,6 +63,26 @@ MAX_SAMPLED_CHUNKS = 12
 DEFAULT_TIME_BUDGET_SECONDS = 900
 
 
+@dataclass(frozen=True)
+class SweepEvent:
+    """One observable step of a sweep.
+
+    The sweep's whole cost lives inside a single tool call, so these events are
+    the only window into it. Each carries the stage it came from, a readable
+    message, and a ``detail`` payload with the numbers behind it -- which chunk,
+    what score, which signal drove the decision.
+    """
+
+    stage: str
+    """``map``, ``profile``, ``sample``, ``promote``, ``decide`` or ``done``."""
+
+    message: str
+    detail: dict = field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {"stage": self.stage, "message": self.message, "detail": self.detail}
+
+
 @dataclass
 class SweepBudget:
     """What a sweep may spend. Every field is a hard stop, not a target."""
@@ -123,6 +143,12 @@ class SweepResult:
     coverage: dict = field(default_factory=dict)
     cursor: int = 0
     notes: tuple[str, ...] = field(default=())
+    events: tuple[SweepEvent, ...] = field(default=())
+    """Every step the sweep took, in order.
+
+    Kept on the result as well as streamed, because the stream is gone once the
+    run finishes and the decisions are worth auditing afterwards.
+    """
 
     def as_dict(self) -> dict:
         return {
@@ -136,6 +162,7 @@ class SweepResult:
             "cursor": self.cursor,
             "notes": list(self.notes),
             "query_stats": self.stats.as_dict() if self.stats else None,
+            "trace": [event.as_dict() for event in self.events],
         }
 
 
@@ -255,11 +282,24 @@ def sweep(
     plan = chunk_mod.plan_chunks(ds)
     state = SweepProgress(chunks_total=len(plan))
     started = time.monotonic()
+    rows_addressable = sum(c.num_rows for c in plan)
     collected_stats: list[QueryStats] = []
     notes: list[str] = []
+    trace: list[SweepEvent] = []
 
     def elapsed() -> float:
         return time.monotonic() - started
+
+    def emit(stage: str, message: str, **detail) -> None:
+        """Record a step, and report it if anyone is listening.
+
+        Recorded unconditionally: the trace is part of the result, so a sweep
+        run without a progress listener is still auditable afterwards.
+        """
+        event = SweepEvent(stage=stage, message=message, detail=detail)
+        trace.append(event)
+        if progress is not None:
+            progress(event)
 
     def over_budget() -> str | None:
         if elapsed() > budget.max_seconds:
@@ -274,6 +314,16 @@ def sweep(
     # many of them, and the cursor advances monotonically. That is what makes
     # resume meaningful: a sweep that stops at chunk 600 has genuinely examined
     # chunks 0-599, and the next can start at 600.
+    emit(
+        "map",
+        f"Mapped {len(plan):,} chunks covering {rows_addressable:,} rows "
+        f"from file metadata only.",
+        chunks=len(plan),
+        rows_addressable=rows_addressable,
+        start_at=start_at,
+        target_services=list(target_services),
+    )
+
     scored: list[triage.TriageScore] = []
     profiled_by_id: dict[str, profile_mod.ChunkProfile] = {}
     cursor = start_at
@@ -322,8 +372,21 @@ def sweep(
 
         cursor += len(batch)
         state.elapsed_seconds = elapsed()
-        if progress is not None:
-            progress("profile", state)
+        batch_scores = scored[-len(batch):]
+        kept = [x for x in batch_scores if x.verdict != "discard"]
+        emit(
+            "profile",
+            f"Profiled chunks {batch[0].chunk_id}..{batch[-1].chunk_id} "
+            f"({state.chunks_profiled:,}/{state.chunks_total:,}); "
+            f"kept {len(kept)} of {len(batch)} for sampling.",
+            chunks_profiled=state.chunks_profiled,
+            chunks_total=state.chunks_total,
+            rows_counted=state.rows_scanned,
+            kept=len(kept),
+            discarded=len(batch) - len(kept),
+            best_in_batch=max((x.score for x in batch_scores), default=0.0),
+            reads_message_text=False,
+        )
 
     # --- Stage 3: sample the survivors, which is the first text read --------
     survivors = [s for s in triage.rank(scored) if s.verdict != "discard"]
@@ -352,19 +415,29 @@ def sweep(
         chunk_profile = profiled_by_id.get(score.chunk_id)
         if chunk_profile is None:
             continue
-        sampled_scores.append(
-            triage.score_sample(
-                chunk_profile,
-                list(rows),
-                question,
-                target_services=target_services,
-                problem_severities=severities,
-            )
+        sample_score = triage.score_sample(
+            chunk_profile,
+            list(rows),
+            question,
+            target_services=target_services,
+            problem_severities=severities,
         )
+        sampled_scores.append(sample_score)
         state.chunks_sampled += 1
         state.elapsed_seconds = elapsed()
-        if progress is not None:
-            progress("sample", state)
+
+        # The evaluation itself, not just the outcome: the three weighted
+        # signals and the words that matched, so a surprising verdict can be
+        # understood rather than guessed at.
+        emit(
+            "sample",
+            f"Sampled {chunk.chunk_id}: {len(rows)} rows read, "
+            f"score {sample_score.score:.2f} ({sample_score.verdict}) -- "
+            f"{sample_score.reason}",
+            **sample_score.as_dict(),
+            rows_read=len(rows),
+            reads_message_text=True,
+        )
 
     ranked = triage.rank(sampled_scores or scored)
 
@@ -380,6 +453,15 @@ def sweep(
             chunk = by_id.get(score.chunk_id)
             if chunk is None:
                 continue
+
+            emit(
+                "decide",
+                f"Promoting {score.chunk_id} (score {score.score:.2f}): "
+                f"{score.reason}. Estimated "
+                f"{estimate_promotion_seconds(chunk):.0f}s to read its text.",
+                **score.as_dict(),
+                estimated_seconds=estimate_promotion_seconds(chunk),
+            )
 
             try:
                 digest = promote_chunk(
@@ -397,15 +479,47 @@ def sweep(
             digests.append(digest)
             state.chunks_promoted += 1
             state.elapsed_seconds = elapsed()
-            if progress is not None:
-                progress("promote", state)
+            emit(
+                "promote",
+                f"Read {digest.chunk_id}: {digest.rows_indexed:,} problem rows "
+                f"from {digest.rows_scanned:,} scanned, "
+                f"{len(digest.top_templates)} templates, "
+                f"{len(digest.exemplars)} exemplar lines kept; "
+                f"disk returned after digest.",
+                chunk_id=digest.chunk_id,
+                rows_indexed=digest.rows_indexed,
+                rows_scanned=digest.rows_scanned,
+                build_seconds=round(digest.build_seconds, 1),
+                bytes_used=digest.bytes_used,
+                top_template=(
+                    digest.top_templates[0][0] if digest.top_templates else None
+                ),
+                reads_message_text=True,
+            )
     elif ranked:
         notes.append(
             "No promotions were permitted at this effort level, so no message "
             "text was read from the highest-ranked chunks."
         )
+        emit(
+            "decide",
+            f"Ranked {len(ranked)} chunks but read no message text: this "
+            "effort level permits no promotions.",
+            ranked=len(ranked),
+            best_score=ranked[0].score if ranked else 0.0,
+            promotions_allowed=0,
+        )
 
     state.elapsed_seconds = elapsed()
+    emit(
+        "done",
+        f"Swept {state.chunks_profiled:,} of {state.chunks_total:,} chunks in "
+        f"{state.elapsed_seconds:.0f}s: {state.chunks_sampled} sampled, "
+        f"{state.chunks_promoted} read in full."
+        + (f" Stopped early: {state.stopped_because}." if state.stopped_because else ""),
+        **state.as_dict(),
+    )
+
     coverage = triage.coverage(
         total_chunks=state.chunks_total,
         profiled=state.chunks_profiled,
@@ -427,6 +541,7 @@ def sweep(
         coverage=coverage,
         cursor=cursor,
         notes=tuple(notes),
+        events=tuple(trace),
     )
 
 
