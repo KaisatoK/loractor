@@ -27,6 +27,25 @@ def test_mcp_server_lists_tools_and_skills():
     asyncio.run(run())
 
 
+def test_mcp_server_serves_nearby_events_and_validates_it():
+    async def run():
+        async with Client(server.mcp) as client:
+            listed = {tool.name: tool for tool in await client.list_tools()}
+            tool = listed["get_nearby_events_tool"]
+            assert "offset" in tool.description and "same_request" in tool.description
+            assert {"line_id", "same_entity", "same_request"} <= set(
+                tool.inputSchema["properties"]
+            )
+            for bad in ({"line_id": 0}, {"line_id": 1, "before": 51},
+                        {"line_id": 1, "dataset": "t"}):
+                result = await client.call_tool(
+                    "get_nearby_events_tool", bad, raise_on_error=False
+                )
+                assert result.is_error, bad
+
+    asyncio.run(run())
+
+
 def test_mcp_server_validates_inputs():
     async def run():
         async with Client(server.mcp) as client:

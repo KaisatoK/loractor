@@ -17,6 +17,11 @@ from backend.db.config import (
     SERENEDB_PORT,
 )
 from backend.db.connection import bulk_query, db_cursor, get_conn, query_runner
+from backend.db.context_query import (
+    get_nearby_events,
+    nearby_events,
+    request_context_summary,
+)
 from backend.db.count_query import (
     compare_periods,
     count_by_dataset,
@@ -37,7 +42,7 @@ from backend.db.errors import QueryRefused, Refusal
 from backend.db.list_query import get_field_values
 from backend.db.query import get_log_by_record_id, search_logs
 from backend.db.stats import QueryClass, QueryResult, QueryStats
-from backend.db.trend_query import get_trend
+from backend.db.trend_query import add_burst_summary, get_trend
 
 __all__ = [
     "BUDGET",
@@ -56,6 +61,7 @@ __all__ = [
     "Refusal",
     "SERENEDB_PORT",
     "all_datasets",
+    "add_burst_summary",
     "auto_complete",
     "bulk_query",
     "catalog",
@@ -69,9 +75,12 @@ __all__ = [
     "get_conn",
     "get_field_values",
     "get_log_by_record_id",
+    "get_nearby_events",
     "get_trend",
     "list_datasets",
+    "nearby_events",
     "query_runner",
+    "request_context_summary",
     "resolve",
     "search_logs",
     "top_by_field",

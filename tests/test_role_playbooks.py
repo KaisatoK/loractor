@@ -120,3 +120,18 @@ def test_mcp_server_serves_role_playbooks():
             assert set(ROLE_SKILLS.values()) <= names
 
     asyncio.run(run())
+
+
+def test_engineer_playbook_uses_the_nearby_events_tool():
+    """The before/after timeline comes from get_nearby_events_tool, not from an
+    approximation stitched together out of single-line lookups."""
+    body = playbooks.role_playbook("engineer")
+    evidence = body.split("## Evidence to collect", 1)[1].split("## Answer", 1)[0]
+    assert "get_nearby_events_tool" in evidence
+    assert "same_entity" in evidence and "same_request" in evidence
+    assert 'type="entity_id"' in evidence
+    assert "same short window" in evidence
+    assert "periodic-task context" in evidence
+    assert "thousands of lines" in evidence
+    assert "approximate" not in evidence.lower()
+    assert "record_id - 1" not in evidence

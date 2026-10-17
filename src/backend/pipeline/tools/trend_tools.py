@@ -7,7 +7,7 @@ inside a single hour. Every bucket in the window is returned, empty ones as 0.
 
 from langchain.tools import ToolRuntime, tool
 
-from backend.db import get_trend
+from backend.db import add_burst_summary, get_trend
 from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import GetTrend
@@ -64,13 +64,18 @@ def get_trend_tool(
     suggested. group_by='severity' gives one series per severity level present.
     Returns kind=trend rows (bucket, [severity,] count, prev_count, trend):
     measured counts for EVERY bucket in the window, 0 where nothing was logged.
+    query_stats.notes also summarizes consecutive non-zero bucket runs and their
+    measured totals.
     """
     field, value = type[0], type[1]
     return execute_database_tool(
         runtime=runtime,
         operation=trend_operation(field, value, dataset, category, group_by),
-        function=lambda: get_trend(
-            start_time, end_time, field, value, dataset, bucket, category, group_by
+        function=lambda: add_burst_summary(
+            get_trend(
+                start_time, end_time, field, value, dataset, bucket, category, group_by
+            ),
+            group_by=group_by,
         ),
         kind="trend",
         dataset=dataset,

@@ -64,7 +64,8 @@ TOOL_CATALOG = {
         "value), bucket (second|minute|hour|day|week|month; omit it and the "
         "window picks one), category (severity), group_by ('severity' for one "
         "series per level). Every bucket in the window is returned, 0 where "
-        "nothing was logged, so a gap shows as a gap. "
+        "nothing was logged, so a gap shows as a gap. query_stats.notes also "
+        "summarizes consecutive non-zero bucket runs with their measured totals. "
         "Use to see how one known entity's volume moves over time."
     ),
     "count_by_category_tool": (
@@ -130,15 +131,17 @@ TOOL_CATALOG = {
         "line_id. Only datasets that declare a record id support it -- the raw "
         "remote corpus has no primary key and refuses this."
     ),
-    # Planned (docs/tool_requests.md T2, T3): schemas only, not callable yet.
-    # Drop the "NOT AVAILABLE YET" prefix once the tool is registered.
     "get_nearby_events_tool": (
-        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Returns the log "
-        "entries just before and after one anchor line; params: dataset, "
-        "line_id, before, after, same_entity, same_request. Rows are examples "
-        "(kind context) with an offset from the anchor. Use for the engineer's "
-        "before/after timeline."
+        "TIER index. Returns the log entries just before and after one anchor "
+        "line, in file order; params: dataset (openstack or bgl), line_id (a "
+        "search hit's record_id), before, after (0-50, default 5), "
+        "same_entity (only the anchor's process or node), same_request (only "
+        "the anchor's request id; OpenStack only). Rows are examples (kind "
+        "context) with an offset from the anchor, never a frequency. Use for "
+        "the engineer's before/after timeline."
     ),
+    # Planned (docs/tool_requests.md T3): schema only, not callable yet.
+    # Drop the "NOT AVAILABLE YET" prefix once the tool is registered.
     "count_by_team_tool": (
         "NOT AVAILABLE YET -- cannot close a gap. TIER index. Counts log "
         "entries per owning team and severity over local datasets; params: "
@@ -225,6 +228,7 @@ def _clip(value: object, limit: int = PREVIEW_CHARS) -> str:
 # ``generate_answer`` rather than treating them as measured.
 ANSWER_MEASURED_ROWS = 100
 ANSWER_EXAMPLE_ROWS = 10
+ANSWER_CONTEXT_ROWS = 40
 ANSWER_CATALOG_CHAR_BUDGET = 120_000  # about 30k tokens at 4 chars per token
 _MIN_EXAMPLE_ROWS = 1
 _ANSWER_MEASURED_KINDS = MEASURED_KINDS | {"derived"}
@@ -240,6 +244,37 @@ class ResultCatalog:
     notes: tuple[str, ...] = ()
 
 
+def _nearest_context_rows(rows: list[dict], limit: int) -> tuple[list[dict], str | None]:
+    """Select context examples closest to the anchor, then restore row order.
+
+    Nearby-event results are ordered by ``record_id`` and carry an ``offset``
+    from the anchor. Taking the first rows shows the farthest preceding events
+    when ``before`` is larger than the answer sample. Select by distance instead;
+    a preceding row wins an equal-distance tie, the anchor is always retained
+    when present, and the selected rows are put back in record-id order for the
+    timeline. Results without usable offsets retain ordinary example behavior.
+    """
+    candidates: list[tuple[int, int, int, dict]] = []
+    for position, row in enumerate(rows):
+        try:
+            offset = int(row["offset"])
+        except (KeyError, TypeError, ValueError):
+            return rows[:limit], None
+        candidates.append((abs(offset), 0 if offset < 0 else 1, position, row))
+
+    selected = [item[3] for item in sorted(candidates, key=lambda item: item[:3])[:limit]]
+    selected.sort(
+        key=lambda row: (
+            row.get("record_id") is None,
+            row.get("record_id", row.get("offset", 0)),
+        )
+    )
+    offsets = [int(row["offset"]) for row in selected]
+    if not offsets:
+        return selected, None
+    return selected, f"nearest the anchor, offsets {min(offsets)}..{max(offsets)}"
+
+
 def _catalog_entry(record: dict, example_rows: int) -> str:
     """One result block. ``example_rows`` applies to non-measured kinds only.
 
@@ -249,17 +284,25 @@ def _catalog_entry(record: dict, example_rows: int) -> str:
     rows = record.get("rows") or []
     measured = record.get("kind") in _ANSWER_MEASURED_KINDS
     limit = ANSWER_MEASURED_ROWS if measured else example_rows
-    shown = rows[:limit]
+    context_note = None
+    if record.get("kind") == "context" and not measured:
+        shown, context_note = _nearest_context_rows(rows, limit)
+    else:
+        shown = rows[:limit]
     columns = ", ".join(rows[0].keys()) if rows else ""
     truncated = record.get("truncated")
+    returned = record.get("row_count", len(rows))
+    shown_label = f"{len(shown)}"
+    if context_note:
+        shown_label += f" ({context_note})"
     entry = (
         f"- id: {record.get('id')}\n"
         f"  tool: {record.get('tool_name')}\n"
         f"  kind: {record.get('kind') or 'unknown'}\n"
         f"  dataset: {record.get('dataset') or 'unknown'}\n"
         f"  args: {record.get('arguments')}\n"
-        f"  rows: {record.get('row_count')}\n"
-        f"  rows shown: {len(shown)} of {record.get('row_count', len(rows))}\n"
+        f"  rows returned: {returned}\n"
+        f"  rows in prompt: {shown_label}\n"
         f"  truncated: {'unknown' if truncated is None else truncated}\n"
         f"  columns: {columns}"
     )
@@ -284,7 +327,10 @@ def build_result_catalog(
     returned, so the answer's numbers never come from a silently trimmed table.
     """
     records = [r for r in records if isinstance(r, dict)]
-    limits = [ANSWER_EXAMPLE_ROWS] * len(records)
+    limits = [
+        ANSWER_CONTEXT_ROWS if r.get("kind") == "context" else ANSWER_EXAMPLE_ROWS
+        for r in records
+    ]
     entries = [_catalog_entry(r, n) for r, n in zip(records, limits)]
     total = sum(len(e) for e in entries) + max(len(entries) - 1, 0)
     for i in reversed(range(len(records))):
@@ -453,8 +499,13 @@ class PipelinePrompts:
         "instead. Results of kind `aggregate`, `trend` or `derived` are measured "
         "numbers; results of kind `search`, `context` or `lookup` are examples and "
         "never establish frequency. Count log entries, never 'incidents'. When a "
-        "result is truncated, say that more matching rows exist. Include relevant "
-        "time ranges, filters, calculations and evidence references."
+        "result is truncated, say that more matching rows exist. The tool result "
+        "catalog distinguishes rows returned by a tool from rows in the prompt "
+        "sample. Never say rows were not returned, retrieved or displayed merely "
+        "because they are absent from the prompt sample; do not describe the "
+        "prompt sample as the table displayed to the user. Say rows were outside "
+        "the sample instead. Do not claim the contents of unseen rows. Include "
+        "relevant time ranges, filters, calculations and evidence references."
     )
 
     REFRAME_INSTRUCTION = (

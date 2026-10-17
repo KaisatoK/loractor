@@ -304,47 +304,43 @@ class CountByDataset(BaseModel):
         return list(dict.fromkeys(value))
 
 
-# --- Planned tools (docs/tool_requests.md T2, T3) ---------------------------
-# Schemas and shared descriptions only. The tools themselves are stubs in
-# ``pipeline/tools/planned_tools.py`` and are not registered with any transport
-# yet; see AGENTS.md "Integrating new tools and tables".
-
+# One description for every transport: the local tool, the MCP wrapper and the
+# MCP server all use it, so the model and an external MCP client read the same
+# contract.
 NEARBY_EVENTS_DESCRIPTION = (
     "Return the log entries just before and after one anchor line, for a "
-    "before/after timeline. Inputs: dataset (a corpus with a record id), "
-    "line_id (the anchor), before (0-50, default 5), after (0-50, default 5), "
-    "same_entity (only lines with the anchor's entity_id: process id on "
-    "OpenStack, node on BGL; default false), same_request (only lines with the "
-    "anchor's request id, OpenStack only; default false). Returns kind=context "
+    "before/after timeline. Inputs: dataset (a corpus with a record id: "
+    "openstack or bgl), line_id (the anchor, e.g. a search hit's record_id), "
+    "before (0-50, default 5), after (0-50, default 5), same_entity (only "
+    "lines with the anchor's entity_id: process id on OpenStack, node on BGL; "
+    "default false), same_request (only lines with the anchor's request id, "
+    "OpenStack only, refused elsewhere; default false). Returns kind=context "
     "rows ordered by record_id: record_id, ts, severity, service, entity_id, "
-    "request_id, message, offset (negative before the anchor, 0 for the "
-    "anchor, positive after). An unknown line_id returns status=success with "
-    "empty data and a note, not an error. Context rows are examples, never a "
+    "request_id (OpenStack), message, template, offset (negative before the "
+    "anchor, 0 for the anchor, positive after). Neighbours follow file order, "
+    "not a time window. An unknown line_id returns status=success with empty "
+    "data and a note, not an error. Context rows are examples, never a "
     "frequency."
-)
-
-COUNT_BY_TEAM_DESCRIPTION = (
-    "Count log entries per owning team and severity, joining each row's "
-    "service (Component) to the team ownership table. Inputs: datasets "
-    "(optional list of local dataset ids; default every local dataset), "
-    "start_time and end_time (optional, together; omit both to count every "
-    "row), category (optional severity). Returns kind=aggregate rows {team, "
-    "severity, count} ordered by count, computed in the database over every "
-    "matching row. Services with no owner count as team 'unowned', so team "
-    "totals equal the dataset totals. Counts are log entries, not incidents."
 )
 
 
 class GetNearbyEvents(_DatasetScoped):
-    """Log entries around one anchor line (T2)."""
+    """The log entries just before and after one anchor line.
+
+    Neighbours are taken in record-id order, which is file order (and on
+    OpenStack also time order), not a time-bounded slice. The two flags narrow
+    the neighbours to one correlation handle; they do not move the anchor. The
+    rows are examples for a timeline, never a frequency.
+    """
 
     line_id: Annotated[
         int,
         Field(
             ge=1,
             description=(
-                "Record id of the anchor line. For a 'Line ID: n (dataset)' "
-                "reference, pass n here and that dataset as `dataset`."
+                "Record id of the anchor line (a search hit's record_id). For a "
+                "'Line ID: n (dataset)' reference, pass n here and that dataset "
+                "as `dataset`."
             ),
         ),
     ]
@@ -367,11 +363,28 @@ class GetNearbyEvents(_DatasetScoped):
         bool,
         Field(
             description=(
-                "Only lines sharing the anchor's request id ('req-<uuid>'). "
-                "Only corpora that carry a request id support it."
+                "Only lines sharing the anchor's request_id ('req-<uuid>'). "
+                "Only OpenStack records a request id; other datasets refuse it."
             )
         ),
     ] = False
+
+
+# --- Planned tool (docs/tool_requests.md T3) ---------------------------------
+# Schema and shared description only. The tool itself is a stub in
+# ``pipeline/tools/planned_tools.py`` and is not registered with any transport
+# yet; see AGENTS.md "Integrating new tools and tables".
+
+COUNT_BY_TEAM_DESCRIPTION = (
+    "Count log entries per owning team and severity, joining each row's "
+    "service (Component) to the team ownership table. Inputs: datasets "
+    "(optional list of local dataset ids; default every local dataset), "
+    "start_time and end_time (optional, together; omit both to count every "
+    "row), category (optional severity). Returns kind=aggregate rows {team, "
+    "severity, count} ordered by count, computed in the database over every "
+    "matching row. Services with no owner count as team 'unowned', so team "
+    "totals equal the dataset totals. Counts are log entries, not incidents."
+)
 
 
 class CountByTeam(BaseModel):

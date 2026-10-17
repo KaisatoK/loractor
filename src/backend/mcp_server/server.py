@@ -12,11 +12,11 @@ as ``status: "refused"`` with a ``reason`` and a ``suggestion``, not an error.
 Tools take a ``dataset`` id from a closed vocabulary (``backend.db.datasets``),
 never a table name, and rows use the canonical field names (``ts``,
 ``severity``, ``service``, ``entity_id``, ``message``, ``template``,
-``event_id``, ``record_id``) whatever the corpus calls them.
+``event_id``, ``record_id``, ``request_id``) whatever the corpus calls them.
 
 New tools must use ``_result`` too; see AGENTS.md "Integrating new tools and tables".
-Planned, not served yet: ``get_nearby_events_tool`` (T2) and ``count_by_team_tool``
-(T3); their schemas and descriptions are in ``pipeline/tools/schemas.py``.
+Planned, not served yet: ``count_by_team_tool`` (T3); its schema and description
+are in ``pipeline/tools/schemas.py``.
 """
 
 from __future__ import annotations
@@ -29,11 +29,13 @@ from typing import Any
 from fastmcp import FastMCP
 
 from backend.db import (
+    add_burst_summary,
     compare_periods,
     count_by_dataset,
     count_by_field,
     get_field_values,
     get_log_by_record_id,
+    get_nearby_events,
     get_trend,
     list_datasets,
     top_by_field,
@@ -47,12 +49,15 @@ from backend.pipeline.sweep import (
     investigate_chunk,
     sweep,
 )
+from backend.pipeline.tools.context_tools import nearby_filters, nearby_operation
 from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import run_enveloped
 from backend.pipeline.tools.tools import search_filters, search_operation
 from backend.pipeline.tools.trend_tools import trend_filters, trend_operation
 from backend.pipeline.tools.schemas import (
+    NEARBY_EVENTS_DESCRIPTION,
     CountByDataset,
+    GetNearbyEvents,
     InvestigateChunk,
     SweepChunks,
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
@@ -159,6 +164,25 @@ def get_log_by_line_id_tool(line_id: int, dataset: str = DEFAULT_DATASET_ID) -> 
         lambda: get_log_by_record_id(v["line_id"], v["dataset"]),
         kind="lookup", dataset=v["dataset"], filters={"line_id": v["line_id"]},
         complete=True,
+    )
+
+
+@mcp.tool(name="get_nearby_events_tool", description=NEARBY_EVENTS_DESCRIPTION)
+def get_nearby_events_tool(line_id: int, dataset: str = DEFAULT_DATASET_ID,
+                           before: int = 5, after: int = 5,
+                           same_entity: bool = False,
+                           same_request: bool = False) -> dict:
+    v = _validated(GetNearbyEvents, line_id=line_id, dataset=dataset,
+                   before=before, after=after, same_entity=same_entity,
+                   same_request=same_request)
+    return _result(
+        nearby_operation(v["line_id"], v["dataset"], v["before"], v["after"],
+                         v["same_entity"], v["same_request"]),
+        lambda: get_nearby_events(v["line_id"], v["dataset"], v["before"],
+                                  v["after"], v["same_entity"], v["same_request"]),
+        kind="context", dataset=v["dataset"], complete=True,
+        filters=nearby_filters(v["line_id"], v["before"], v["after"],
+                               v["same_entity"], v["same_request"]),
     )
 
 
@@ -276,7 +300,7 @@ def get_trend_tool(start_time: str, end_time: str, type: tuple[str, str],
     ('severity' for one series per severity level present; optional). Returns
     kind=trend rows {bucket, [severity,] count, prev_count, trend} for EVERY bucket
     in the window, with count 0 where nothing was logged; query_stats.notes names
-    the bucket used.
+    the bucket used and summarizes consecutive non-zero bucket runs with totals.
     """
     v = _validated(GetTrend, start_time=start_time, end_time=end_time, type=type,
                    dataset=dataset, bucket=bucket, category=category,
@@ -284,8 +308,11 @@ def get_trend_tool(start_time: str, end_time: str, type: tuple[str, str],
     field, value = v["type"][0], v["type"][1]
     return _result(
         trend_operation(field, value, v["dataset"], v["category"], v["group_by"]),
-        lambda: get_trend(v["start_time"], v["end_time"], field, value,
-                          v["dataset"], v["bucket"], v["category"], v["group_by"]),
+        lambda: add_burst_summary(
+            get_trend(v["start_time"], v["end_time"], field, value,
+                      v["dataset"], v["bucket"], v["category"], v["group_by"]),
+            group_by=v["group_by"],
+        ),
         kind="trend", dataset=v["dataset"], complete=True,
         filters=trend_filters(v["start_time"], v["end_time"], field, value,
                               v["category"], v["bucket"], v["group_by"]),

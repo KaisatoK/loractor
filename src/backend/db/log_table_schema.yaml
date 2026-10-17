@@ -65,7 +65,8 @@ tables:
           project/tenant ID, with ``-`` for absent fields. A bare ``-`` means no
           request context; NULL when the line has no bracketed token (for
           example traceback lines). Not a network address: for API lines the
-          client IP is at the start of ``Content``.
+          client IP is at the start of ``Content``. Tools expose the request
+          ID as the canonical field ``request_id`` (NULL when there is none).
       - name: Content
         type: VARCHAR
         description: Free-text log message without the header fields.

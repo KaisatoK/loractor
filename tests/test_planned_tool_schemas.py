@@ -1,25 +1,17 @@
-"""Offline checks for the planned T2/T3 tool schemas (docs/tool_requests.md).
+"""Offline checks for the planned T3 tool schema (docs/tool_requests.md).
 
-Only the argument contracts exist; the tools are stubs and are not registered
-with any transport yet.
+Only the argument contract exists; the tool is a stub and is not registered
+with any transport yet. T2 (``get_nearby_events_tool``) is implemented and
+tested in ``test_nearby_events.py``.
 """
 
 import pytest
 from pydantic import ValidationError
 
 from backend.pipeline.tools.envelope import TOOL_KINDS
+from backend.pipeline.tools.mcp_tools import MCP_DB_TOOLS
 from backend.pipeline.tools.registry import LOCAL_DB_TOOLS
-from backend.pipeline.tools.schemas import CountByTeam, GetNearbyEvents
-
-
-def test_nearby_events_defaults_and_bounds():
-    args = GetNearbyEvents(line_id=7)
-    assert (args.before, args.after) == (5, 5)
-    assert args.same_entity is False and args.same_request is False
-    for bad in ({"line_id": 0}, {"line_id": 7, "before": 51},
-                {"line_id": 7, "after": -1}, {"line_id": 7, "dataset": "t"}):
-        with pytest.raises(ValidationError):
-            GetNearbyEvents(**bad)
+from backend.pipeline.tools.schemas import CountByTeam
 
 
 def test_count_by_team_window_is_optional_but_paired_and_ordered():
@@ -37,8 +29,7 @@ def test_count_by_team_accepts_only_local_datasets():
         CountByTeam(datasets=["otel_s3"])
 
 
-def test_planned_tools_have_kinds_but_are_not_registered():
-    assert TOOL_KINDS["get_nearby_events_tool"] == "context"
+def test_planned_tool_has_a_kind_but_is_not_registered():
     assert TOOL_KINDS["count_by_team_tool"] == "aggregate"
-    names = {tool.name for tool in LOCAL_DB_TOOLS}
-    assert not names & {"get_nearby_events_tool", "count_by_team_tool"}
+    for tools in (LOCAL_DB_TOOLS, MCP_DB_TOOLS):
+        assert "count_by_team_tool" not in {tool.name for tool in tools}

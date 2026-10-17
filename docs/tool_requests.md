@@ -34,10 +34,9 @@ kinds) follows once the tools exist (see AGENTS.md, "Integrating new tools and t
 
 | # | Tool | Inputs | Output rows | Notes |
 | --- | --- | --- | --- | --- |
-| T2 | `get_nearby_events_tool` | `table_name`, `line_id`, `before` (default 5, max 50), `after` (default 5, max 50), `same_pid` (bool, default false), `same_request` (bool, default false; same `req-` id as the anchor's `addr`) | ordered by `line_id`: `line_id`, `log_timestamp`, `level`, `component`, `pid`, `addr`, `content`, `offset` (negative before the anchor, 0 for the anchor, positive after) | Brief: "nearby events" for the engineer. An unknown `line_id` returns `status=success` with empty `data` and an explanatory field, not an exception. |
 | T3 | `count_by_team_tool` | `table_names` (list), `start_time?`, `end_time?`, `level?` | `team`, `level`, `count`, ordered by count | `JOIN team_ownership ON team_ownership.component = t.component` (and `dataset`). Unmapped components count as team `unowned`, so totals never drop rows. Needs the `team_ownership` table (on our branch it is in `src/backend/data/team_ownership.csv`, loaded by `setup.load_ownership`; move it to `data/`). |
 
-## For hypothesis tests (phase 2, after T2–T3)
+## For hypothesis tests (phase 2, after T3)
 
 Each returns raw numbers only. Our code decides `supported / contradicted /
 inconclusive` from explicit thresholds, so the tools must not return a verdict.

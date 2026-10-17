@@ -60,7 +60,7 @@ The same agent and corpus answer every role, but each role gets different
 
 | Role | Asks | Evidence collected | Answer ends with |
 | --- | --- | --- | --- |
-| Engineer | What failed, where, and what happened just before and after? | full-text search → nearby events (approximated until the nearby-events tool exists) → an isolated-or-recurring count | a possible cause, labelled a hypothesis, and one next diagnostic check |
+| Engineer | What failed, where, and what happened just before and after? | full-text search → nearby events around the hit (`get_nearby_events_tool`, optionally the same process/node or request) → an isolated-or-recurring count | a possible cause, labelled a hypothesis, and one next diagnostic check |
 | Team lead | Which problems recur, how often, which components/teams? | counts by event and component over a stated period, a trend for the top patterns, owning teams from the ownership table | what the team should investigate first, and why |
 | Manager | What deserves attention first, and what happens next? | measured frequency, severity share, trend direction and breadth, combined by a deterministic priority score | at most three ranked priorities, each with an action and owning team; no invented cost, downtime or customer impact |
 
@@ -149,7 +149,10 @@ sample.
 
 Each corpus is a `Dataset` in `src/backend/db/datasets.py`, declaring its columns
 under canonical names (`ts`, `severity`, `service`, `message`, `entity_id`,
-`template`, `record_id`) plus the capabilities it can honestly honour. Query
+`template`, `record_id`, `request_id`) plus the capabilities it can honestly
+honour. A field is declared only where the corpus really has it: `request_id`
+exists only on OpenStack, derived at query time from the `ADDR` column (no
+reload needed). Query
 builders in `src/backend/db/` compose SQL from those declarations, never from a
 table name supplied by the model.
 
@@ -233,13 +236,21 @@ and outlives the chunk it came from.
 
 ### How the agent uses it
 
-The evidence agent has eleven tools. One is the dataset catalog
+The evidence agent has twelve tools. One is the dataset catalog
 (`list_datasets_tool`: per dataset, rows, first and last timestamp, severity
 levels and a window covering every row, measured on each call, so windows come
 from the data rather than a guess). One counts each whole local dataset by
-severity in a single query (`count_by_dataset_tool`, no time window). Seven are
+severity in a single query (`count_by_dataset_tool`, no time window). Eight are
 ordinary bounded queries; two are the sweep (`sweep_chunks_tool`,
 `investigate_chunk_tool`).
+
+One of the bounded queries, `get_nearby_events_tool`, gives the engineer the
+lines just before and after a search hit (`before`/`after`, 0-50 each), in
+record-id order with an `offset` from the anchor. `same_entity` keeps only the
+anchor's process (OpenStack) or node (BGL); `same_request` keeps only its
+request id and works only on OpenStack, the one corpus that records one (it is
+refused elsewhere). An unknown line id is an empty success with a note. The rows
+are examples (`kind=context`), never a frequency.
 
 The sweep tools are **withheld entirely below Extreme effort** rather than
 offered and refused — a visible tool gets tried eventually, and a refusal still
@@ -665,7 +676,8 @@ confidence tests below are skipped unless enabled.
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
-| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (eleven tools), MCP server validation (no auto-complete tool) |
+| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (twelve tools), MCP server validation (no auto-complete tool) |
+| `test_nearby_events.py` | nearby events: schema, the one-statement SQL (both sides, correlation filters, omitted sides), refusals, explanatory notes, the tool on both transports with one shared description |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
@@ -676,12 +688,15 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 818 passed, 71 skipped`. Three failures
+> The offline suite reports `6 failed, 875 passed, 86 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
-> rendering edge cases). The other two,
+> rendering edge cases). Two more,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
 > `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, need a
-> reachable SereneDB although they are not gated, and pass when it is. The skips
+> reachable SereneDB although they are not gated, and pass when it is. The last,
+> `test_mcp.py::test_sync_bridge_uses_one_loop_and_preserves_skill_result`,
+> also fails at the previous commit: it expects `list_skills()` to list
+> `log-investigation` first, but the order follows the filesystem. The skips
 > are the gated live cases below. The suite passes identically under `TOOLS_TRANSPORT=local` and
 > `TOOLS_TRANSPORT=mcp`.
 
@@ -924,7 +939,7 @@ TOOLS_TRANSPORT=mcp bash ./backend.sh
 ```
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
-dataset catalog, whole-dataset counts, the seven bounded query tools and the two sweep tools through MCP; if the service is
+dataset catalog, whole-dataset counts, the eight bounded query tools and the two sweep tools through MCP; if the service is
 unreachable, the backend logs the failure and falls back to the in-process DB
 implementation. `/auto-complete` is not an MCP tool: it is a chat-box feature and
 is always answered in-process, whatever the transport. MCP mode also exposes `list_skills` and `read_skill`, while
@@ -994,7 +1009,10 @@ unsupported log facts:
    optionally within a time window (`start_time` and `end_time` together); its
    `total_matches` counts every matching line beside the examples returned. Use
    `get_log_by_line_id_tool` when the user supplies a `Line ID: n (dataset)`
-   reference, passing both `line_id` and `dataset`.
+   reference, passing both `line_id` and `dataset`. Use
+   `get_nearby_events_tool` on a hit's `record_id` for the lines just before
+   and after it (`same_entity` for one process or node, `same_request` for one
+   OpenStack request); the rows are examples, not counts.
 3. Use `get_data_tool` to discover a field's real values (services, entity ids,
    templates) before requesting a trend for an exact target with `get_trend_tool`.
 4. Use `count_by_category_tool`, `top_in_category_by_service_tool`, and

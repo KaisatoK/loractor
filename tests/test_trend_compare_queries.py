@@ -9,6 +9,7 @@ from its canonical-field mapping, so the same test shape covers OpenStack and BG
 import pytest
 
 from backend.db import count_query, trend_query
+from backend.db.stats import QueryResult, QueryStats
 from sql_render import normalized
 
 LO = "2017-05-16 00:00:00"
@@ -134,6 +135,41 @@ def test_group_by_counts_every_series_against_the_row_cap():
         )
     assert refused.value.refusal.code == "too_many_buckets"
     assert "day" in refused.value.refusal.suggestion
+
+
+def test_trend_summarizes_consecutive_non_zero_bucket_runs():
+    result = QueryResult(
+        [
+            {"bucket": "07:08", "count": 32},
+            {"bucket": "07:09", "count": 40},
+            {"bucket": "07:10", "count": 4},
+            {"bucket": "07:11", "count": 0},
+            {"bucket": "07:12", "count": 5},
+        ],
+        QueryStats(dataset="bgl"),
+    )
+    trend_query.add_burst_summary(result)
+    assert any(
+        "non-zero bucket runs: 07:08–07:10 (76 log entries); "
+        "07:12–07:12 (5 log entries)" in note
+        for note in result.stats.notes
+    )
+
+
+def test_grouped_trend_summarizes_each_series_separately():
+    result = QueryResult(
+        [
+            {"bucket": "07:08", "severity": "INFO", "count": 1},
+            {"bucket": "07:08", "severity": "FATAL", "count": 3},
+            {"bucket": "07:09", "severity": "INFO", "count": 0},
+            {"bucket": "07:09", "severity": "FATAL", "count": 2},
+        ],
+        QueryStats(dataset="bgl"),
+    )
+    trend_query.add_burst_summary(result, group_by="severity")
+    note = next(note for note in result.stats.notes if "non-zero bucket runs:" in note)
+    assert "INFO: 07:08–07:08 (1 log entries)" in note
+    assert "FATAL: 07:08–07:09 (5 log entries)" in note
 
 
 def test_an_unknown_group_by_is_refused():

@@ -26,7 +26,7 @@ envelope as ``query_stats``, and a refused query yields the refusal payload
 (``status: "refused"``, ``reason``, ``suggestion``) instead of an envelope, so
 the agent narrows and retries rather than seeing an error.
 
-Future tools (nearby events, team counts, trends, hypothesis tests) must return
+Future tools (team counts, hypothesis tests) must return
 this shape; ``collect_tool_results`` tolerates legacy envelopes by filling
 missing fields with ``None`` (inferring only ``kind`` from known tool names), and
 the answer reports those fields as unknown rather than guessing.
@@ -65,8 +65,9 @@ TOOL_KINDS: dict[str, str] = {
     "top_in_category_by_service_tool": "aggregate",
     "compare_periods_tool": "aggregate",
     "get_trend_tool": "trend",
-    # Planned (docs/tool_requests.md T2, T3); stubs in planned_tools.py.
+    # Lines around one anchor line: examples for a timeline, never a frequency.
     "get_nearby_events_tool": "context",
+    # Planned (docs/tool_requests.md T3); stub in planned_tools.py.
     "count_by_team_tool": "aggregate",
     # The sweep ranks chunks from profiles and samples and digests the ones it
     # reads: examples and coverage, never a frequency over the corpus.

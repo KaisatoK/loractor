@@ -8,6 +8,7 @@ from __future__ import annotations
 from langchain.tools import ToolRuntime, tool
 
 from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.pipeline.tools.context_tools import nearby_operation
 from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
@@ -15,8 +16,10 @@ from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.tools import search_operation
 from backend.pipeline.tools.trend_tools import trend_operation
 from backend.pipeline.tools.schemas import (
+    NEARBY_EVENTS_DESCRIPTION,
     CountByDataset,
-    ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
+    ComparePeriods, CountByCategory, GetLogByLineId, GetNearbyEvents, GetTools,
+    GetTrend,
     InvestigateChunk,
     SearchLogs, TopInCategoryByService,
     SweepChunks,
@@ -86,6 +89,19 @@ def get_log_by_line_id_tool(runtime: ToolRuntime, line_id: int,
     return _call(runtime, "get_log_by_line_id_tool",
                  f"fetch {dataset} row with id {line_id}",
                  {"line_id": line_id, "dataset": dataset})
+
+
+@tool(args_schema=GetNearbyEvents, description=NEARBY_EVENTS_DESCRIPTION)
+def get_nearby_events_tool(runtime: ToolRuntime, line_id: int,
+                           dataset: str = DEFAULT_DATASET_ID, before: int = 5,
+                           after: int = 5, same_entity: bool = False,
+                           same_request: bool = False) -> dict:
+    return _call(runtime, "get_nearby_events_tool",
+                 nearby_operation(line_id, dataset, before, after,
+                                  same_entity, same_request),
+                 {"line_id": line_id, "dataset": dataset, "before": before,
+                  "after": after, "same_entity": same_entity,
+                  "same_request": same_request})
 
 
 @tool(args_schema=GetTrend, description="Count one field value per time bucket.")
@@ -174,9 +190,9 @@ def investigate_chunk_tool(runtime: ToolRuntime, chunk_id: str,
 
 MCP_DB_TOOLS = [
     list_datasets_tool, count_by_dataset_tool,
-    count_by_category_tool, get_data_tool, get_log_by_line_id_tool, get_trend_tool,
+    count_by_category_tool, get_data_tool, get_log_by_line_id_tool,
+    get_nearby_events_tool, get_trend_tool,
     search_logs_tool, top_in_category_by_service_tool, compare_periods_tool,
     sweep_chunks_tool, investigate_chunk_tool,
-    # Planned, not registered yet (schemas GetNearbyEvents / CountByTeam):
-    # get_nearby_events_tool (T2), count_by_team_tool (T3).
+    # Planned, not registered yet (schema CountByTeam): count_by_team_tool (T3).
 ]

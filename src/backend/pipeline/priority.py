@@ -17,9 +17,10 @@ renormalized; an item lacking a term that others have scores 0 on it and shows
 "n/a". The output is a derived result record (``kind="derived"``) that renders
 as a table and cites the R-ids it was computed from, so the ranking is checkable.
 
-When new tools land (team counts, nearby events), nothing here changes as long
-as their aggregate rows carry ``count`` plus a group column (``team``,
-``service``, ``event_id`` ...) and, ideally, ``category``.
+When new tools land (team counts), nothing here changes as long as their
+aggregate rows carry ``count`` plus a group column (``team``, ``service``,
+``event_id`` ...) and, ideally, ``category``. Nearby events are ``context``
+rows (examples), so they never enter the score.
 """
 
 from collections import defaultdict
