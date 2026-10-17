@@ -258,7 +258,7 @@ def test_working_status_is_distinct_from_completed_and_failed():
 
 
 def test_the_sweep_tool_relays_events_to_the_reporter():
-    from backend.pipeline.tools.sweep_tools import _relay
+    from backend.pipeline.tools.specs import _relay
 
     written: list[dict] = []
     reporter = ProgressReporter(written.append, "sweep otel_s3")

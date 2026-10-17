@@ -91,20 +91,20 @@ def test_the_schema_accepts_local_ids_only():
 
 
 def test_the_result_is_a_measured_complete_aggregate(monkeypatch):
-    from backend.pipeline.tools import count_tools
+    from backend.pipeline.tools import specs
+    from backend.pipeline.tools.local import LOCAL_TOOLS
 
     rows = QueryResult([
         {"dataset": "bgl", "severity": "FATAL", "count": 855_501},
         {"dataset": "openstack", "severity": "ERROR", "count": 194},
     ])
-    monkeypatch.setattr(count_tools, "count_by_dataset", lambda datasets: rows)
+    monkeypatch.setattr(specs, "count_by_dataset", lambda datasets: rows)
 
     # Invoked the way the agent's ToolNode does, so the injected runtime takes
     # the real path (a direct ``.func`` call hid a dropped runtime before).
     events: list = []
-    message = count_tools.count_by_dataset_tool.invoke(
-        _tool_call(count_tools.count_by_dataset_tool, events)
-    )
+    tool = LOCAL_TOOLS["count_by_dataset_tool"]
+    message = tool.invoke(_tool_call(tool, events))
     result = json.loads(message.content)
     assert [e["status"] for e in events] == ["started", "completed"]
     assert result["kind"] == "aggregate" == TOOL_KINDS["count_by_dataset_tool"]

@@ -39,6 +39,7 @@ from decimal import Decimal
 from typing import Any
 
 from backend.db.capture import capture_queries
+from backend.pipeline.tools.specs import SPECS
 
 # ``search``    limited set of relevant log lines (examples, never a frequency)
 # ``context``   events around an anchor line (nearby events / timeline)
@@ -52,27 +53,10 @@ RESULT_KINDS = ("search", "context", "aggregate", "trend", "lookup", "catalog", 
 # Kinds whose numbers measure frequency over the stated scope.
 MEASURED_KINDS = frozenset({"aggregate", "trend"})
 
-# Kind of every tool name currently known. Legacy envelopes that omit ``kind``
-# are classified from this table; add each new tool here.
-TOOL_KINDS: dict[str, str] = {
-    # One row per dataset: rows, span and levels, for choosing a window.
-    "list_datasets_tool": "catalog",
-    "search_logs_tool": "search",
-    "get_log_by_line_id_tool": "lookup",
-    "get_data_tool": "catalog",
-    "count_by_category_tool": "aggregate",
-    "count_by_dataset_tool": "aggregate",
-    "top_in_category_by_service_tool": "aggregate",
-    "compare_periods_tool": "aggregate",
-    "get_trend_tool": "trend",
-    # Planned (docs/tool_requests.md T2, T3); stubs in planned_tools.py.
-    "get_nearby_events_tool": "context",
-    "count_by_team_tool": "aggregate",
-    # The sweep ranks chunks from profiles and samples and digests the ones it
-    # reads: examples and coverage, never a frequency over the corpus.
-    "sweep_chunks_tool": "search",
-    "investigate_chunk_tool": "search",
-}
+# Kind of every declared tool, read from the spec table (``tools/specs.py``).
+# Legacy envelopes that omit ``kind`` are classified from it, and a tool name in
+# it is what makes a message a database result rather than a skill read.
+TOOL_KINDS: dict[str, str] = {spec.name: spec.kind for spec in SPECS}
 
 ENVELOPE_FIELDS = (
     "kind",

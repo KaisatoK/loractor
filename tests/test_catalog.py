@@ -298,15 +298,15 @@ def test_the_local_tool_takes_no_arguments_and_returns_the_catalog(monkeypatch):
     """Invoked as the agent's ToolNode does: no model arguments, runtime
     injected. Calling ``.func`` directly hid a bug where an empty args_schema
     made langchain-core drop the runtime, so every real call failed."""
-    from backend.pipeline.tools import catalog_tools
+    from backend.pipeline.tools import specs
+    from backend.pipeline.tools.local import LOCAL_TOOLS
 
     _stub_catalog(monkeypatch, present={"openstack", "bgl"})
-    monkeypatch.setattr(catalog_tools, "list_datasets", cq.list_datasets)
+    monkeypatch.setattr(specs, "list_datasets", cq.list_datasets)
 
     events: list = []
-    message = catalog_tools.list_datasets_tool.invoke(
-        _tool_call(catalog_tools.list_datasets_tool, events)
-    )
+    tool = LOCAL_TOOLS["list_datasets_tool"]
+    message = tool.invoke(_tool_call(tool, events))
     result = json.loads(message.content)
 
     assert result["kind"] == "catalog"
@@ -316,9 +316,10 @@ def test_the_local_tool_takes_no_arguments_and_returns_the_catalog(monkeypatch):
 
 @pytest.mark.parametrize("transport", ["local", "mcp"])
 def test_the_model_sees_no_arguments_and_runtime_stays_injected(transport):
-    from backend.pipeline.tools import catalog_tools, mcp_tools
+    from backend.pipeline.tools.local import LOCAL_TOOLS
+    from backend.pipeline.tools.mcp_tools import MCP_TOOLS
 
-    tool = (catalog_tools if transport == "local" else mcp_tools).list_datasets_tool
+    tool = (LOCAL_TOOLS if transport == "local" else MCP_TOOLS)["list_datasets_tool"]
     assert list(tool.tool_call_schema.model_fields) == []
     assert "runtime" in tool._injected_args_keys
 

@@ -17,6 +17,7 @@ from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.playbooks import ownership_context, role_answer_rules, role_playbook
 from backend.pipeline.state import PipelineState, Role
 from backend.pipeline.tools.envelope import MEASURED_KINDS
+from backend.pipeline.tools.specs import SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -40,113 +41,10 @@ ANSWER_EFFORT_NOTES = {
 #   index   -- a local inverted index. Fast, exact, no object-storage traffic.
 #   remote  -- Parquet in object storage, read in place. Costs network and time
 #              in proportion to the time window, and aggregates are approximate.
-TOOL_CATALOG = {
-    "list_datasets_tool": (
-        "TIER metadata. No params. One row per dataset, measured on this call: "
-        "rows, first_timestamp, last_timestamp, span, max_window_seconds, a "
-        "ready window_start/window_end covering every row, and severity levels "
-        "(exact counts on local datasets; declared, uncounted on the remote "
-        "corpus; for otel_slice the window the index was built over). Call it "
-        "FIRST when the user named no time window, so windows and severity "
-        "filters come from the data instead of a guess."
-    ),
-    "count_by_dataset_tool": (
-        "TIER index. Counts log entries per severity in each WHOLE local "
-        "dataset in one query; params: datasets (optional list, default every "
-        "local dataset). No time window: local datasets are counted over every "
-        "row in milliseconds. The remote corpus cannot be counted whole and is "
-        "rejected. Use for a corpus-wide overview or to compare datasets; the "
-        "counts are measured (kind aggregate)."
-    ),
-    "get_trend_tool": (
-        "TIER index|remote. Counts one known service/entity/event per time "
-        "bucket; params: dataset, start_time, end_time, type=(field, exact "
-        "value), bucket (second|minute|hour|day|week|month; omit it and the "
-        "window picks one), category (severity), group_by ('severity' for one "
-        "series per level). Every bucket in the window is returned, 0 where "
-        "nothing was logged, so a gap shows as a gap. "
-        "Use to see how one known entity's volume moves over time."
-    ),
-    "count_by_category_tool": (
-        "TIER index|remote. CHEAPEST aggregate: reads only the timestamp, "
-        "severity and grouping columns, never message text; params: dataset, "
-        "start_time, end_time, type (general|service|entity_id|template|event_id), "
-        "category, limit. Use this FIRST to find where the problem is before "
-        "paying to search text."
-    ),
-    "sweep_chunks_tool": (
-        "TIER sweep. LAST RESORT, and only when the user insists on evidence "
-        "from the WHOLE corpus and a bounded query will not do; params: "
-        "dataset, question, max_promotions (0-4), start_at, confirm_cost. "
-        "Examines all 1,624 chunks in graded passes -- footers, then aggregates "
-        "that read no message text, then stratified samples -- and ranks them. "
-        "max_promotions>0 reads message text for that many top chunks at about "
-        "ELEVEN MINUTES EACH. ALWAYS call with confirm_cost=false first, show "
-        "the user the estimate, then call again with confirm_cost=true. Report "
-        "the returned coverage: a profiled chunk was counted, not read. The "
-        "result also carries a `trace` of every step and the score behind each "
-        "decision -- cite it when explaining why a particular chunk was read. "
-        "`sampling` gives each sample's examined fraction and a likely RANGE "
-        "for its match rate: quote the range rather than the single number, "
-        "because a sample of ~0.3% of a chunk in a few windows is a cheap "
-        "guess, not a measurement."
-    ),
-    "investigate_chunk_tool": (
-        "TIER sweep. Reads one named chunk's message text and returns counts, "
-        "templates and verbatim lines; params: dataset, chunk_id, question. "
-        "Use on a chunk a sweep ranked highly when you need quotable evidence. "
-        "Costs about eleven minutes. Reading one chunk says nothing about the "
-        "rest of the corpus, and the returned coverage says so."
-    ),
-    "search_logs_tool": (
-        "TIER index ONLY. Searches message text and ranks by relevance; "
-        "params: dataset, query_text, category, limit, start_time/end_time "
-        "(optional, both or neither). Requires an indexed dataset -- it is "
-        "refused on the raw remote corpus, which has no index. Returns example "
-        "rows plus total_matches: every row matching the same words, severity "
-        "and window, so the answer can say 'n shown of total_matches'. Use to "
-        "read the actual log lines once a window is narrowed."
-    ),
-    "top_in_category_by_service_tool": (
-        "TIER index|remote. Ranks a field's values by log volume in a window; "
-        "params: dataset, start_time, end_time, field, category, limit. "
-        "Use to locate the noisiest services."
-    ),
-    "compare_periods_tool": (
-        "TIER index|remote. Compares counts between a baseline and a recent "
-        "window; params: dataset, baseline_start/end, recent_start/end, field, "
-        "limit. Scans BOTH windows, so it costs roughly twice a single count. "
-        "Use to detect what changed."
-    ),
-    "get_data_tool": (
-        "TIER index|remote. Lists a field's most common values with counts; "
-        "params: dataset, start_time, end_time, type, limit. Ranked by volume, "
-        "so the first rows are the significant ones. Use to discover a valid "
-        "filter value before requesting a trend. Refused for fields whose "
-        "distinct set is effectively unbounded, such as trace ids."
-    ),
-    "get_log_by_line_id_tool": (
-        "TIER index. Fetches one complete row by primary key; params: dataset, "
-        "line_id. Only datasets that declare a record id support it -- the raw "
-        "remote corpus has no primary key and refuses this."
-    ),
-    # Planned (docs/tool_requests.md T2, T3): schemas only, not callable yet.
-    # Drop the "NOT AVAILABLE YET" prefix once the tool is registered.
-    "get_nearby_events_tool": (
-        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Returns the log "
-        "entries just before and after one anchor line; params: dataset, "
-        "line_id, before, after, same_entity, same_request. Rows are examples "
-        "(kind context) with an offset from the anchor. Use for the engineer's "
-        "before/after timeline."
-    ),
-    "count_by_team_tool": (
-        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Counts log "
-        "entries per owning team and severity over local datasets; params: "
-        "datasets, start_time, end_time (optional, together), category. "
-        "Unowned services count as team 'unowned'. Measured (kind aggregate). "
-        "Use to group recurring problems by team."
-    ),
-}
+# What the classifiers (scope and confidence) know about the evidence tools: one
+# line each, read from the spec table (``tools/specs.py``) so the catalog cannot
+# drift from the tools. Planned tools are listed with a "NOT AVAILABLE YET" line.
+TOOL_CATALOG = {spec.name: spec.catalog for spec in SPECS}
 
 # How the agent is expected to spend its budget. Code enforces the bounds; this
 # tells the model why they exist so it plans within them instead of hitting them.

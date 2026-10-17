@@ -4,37 +4,17 @@ from __future__ import annotations
 import logging
 import os
 
-from backend.pipeline.tools import (
-    compare_periods_tool as local_compare_periods_tool,
-    count_by_category_tool as local_count_by_category_tool,
-    count_by_dataset_tool as local_count_by_dataset_tool,
-    get_data_tool as local_get_data_tool,
-    get_log_by_line_id_tool as local_get_log_by_line_id_tool,
-    get_trend_tool as local_get_trend_tool,
-    investigate_chunk_tool as local_investigate_chunk_tool,
-    list_datasets_tool as local_list_datasets_tool,
-    search_logs_tool as local_search_logs_tool,
-    sweep_chunks_tool as local_sweep_chunks_tool,
-    top_in_category_by_service_tool as local_top_in_category_by_service_tool,
-)
+from backend.pipeline.tools.local import LOCAL_TOOLS
 from backend.pipeline.tools.mcp_tools import MCP_DB_TOOLS, list_skills, read_skill
+from backend.pipeline.tools.specs import available_specs
 
 logger = logging.getLogger(__name__)
 
-LOCAL_DB_TOOLS = [
-    # The catalog first: every windowed tool needs a window it can supply.
-    local_list_datasets_tool,
-    local_count_by_category_tool, local_count_by_dataset_tool,
-    local_get_data_tool, local_get_log_by_line_id_tool,
-    local_get_trend_tool, local_search_logs_tool, local_top_in_category_by_service_tool,
-    local_compare_periods_tool,
-    # The sweep pair. Kept on the main agent like the rest: tool_progress only
-    # reaches the UI from depth <= 1, and a sweep that reports nothing while it
-    # runs for minutes is worse than no sweep.
-    local_sweep_chunks_tool, local_investigate_chunk_tool,
-    # Planned, not registered yet (stubs in planned_tools.py, docs/tool_requests.md):
-    # get_nearby_events_tool (T2), count_by_team_tool (T3).
-]
+# Spec-table order (the catalog first: every windowed tool needs a window it can
+# supply), the sweep pair last. The sweep tools stay on the main agent like the
+# rest: tool_progress only reaches the UI from depth <= 1, and a sweep that
+# reports nothing while it runs for minutes is worse than no sweep.
+LOCAL_DB_TOOLS = [LOCAL_TOOLS[spec.name] for spec in available_specs()]
 
 
 def get_db_tools() -> tuple[list, bool]:

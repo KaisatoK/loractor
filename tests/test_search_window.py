@@ -243,7 +243,8 @@ def test_the_tool_passes_the_window_and_reports_total_matches(monkeypatch, trans
     import json
 
     from backend.db.stats import QueryResult
-    from backend.pipeline.tools import mcp_tools, tools
+    from backend.pipeline.tools import mcp_tools, specs
+    from backend.pipeline.tools.local import LOCAL_TOOLS
     from tool_invoke import tool_call
 
     seen = {}
@@ -252,23 +253,20 @@ def test_the_tool_passes_the_window_and_reports_total_matches(monkeypatch, trans
         seen["args"] = args
         return QueryResult([{"record_id": i} for i in range(10)], total_matches=24)
 
+    monkeypatch.setattr(specs, "search_with_total", fake_search)
     if transport == "local":
-        monkeypatch.setattr(tools, "search_with_total", fake_search)
-        tool = tools.search_logs_tool
+        tool = LOCAL_TOOLS["search_logs_tool"]
     else:
-        # The MCP wrapper forwards to the server; stand the server's tool in.
-        from backend.mcp_server import server
+        # The MCP wrapper forwards to the server; stand the server's code path in.
+        from backend.mcp_server.tools import call_spec
 
         class _Bridge:
             def call_tool(self, name, arguments):
                 assert name == "search_logs_tool"
-                # The server function behind @mcp.tool, called in-process
-                # (FastMCP >= 3 decorators return the plain function).
-                return server.search_logs_tool(**arguments)
+                return call_spec(specs.BY_NAME[name], arguments)
 
-        monkeypatch.setattr(server, "search_with_total", fake_search)
         monkeypatch.setattr(mcp_tools, "get_mcp_bridge", lambda: _Bridge())
-        tool = mcp_tools.search_logs_tool
+        tool = mcp_tools.MCP_TOOLS["search_logs_tool"]
 
     events: list = []
     message = tool.invoke(tool_call(

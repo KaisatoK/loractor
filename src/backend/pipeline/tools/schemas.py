@@ -20,8 +20,15 @@ would have to be kept in sync with it by hand.
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import WithJsonSchema
 
-from backend.db.datasets import DEFAULT_DATASET_ID, dataset_ids
+from backend.db.datasets import (
+    DEFAULT_DATASET_ID,
+    Capability,
+    dataset_ids,
+    datasets_with,
+    local_datasets,
+)
 
 # Accepts 'YYYY-MM-DD HH:MM:SS' plus optional fractional seconds and UTC offset,
 # because the OTel corpus' timestamps are timestamptz and its own metadata
@@ -40,12 +47,44 @@ CanonicalField = Literal["service", "entity_id", "event_id", "template", "severi
 # not follow its own suggestion.
 Bucket = Literal["second", "minute", "hour", "day", "week", "month"]
 
+# Parameters shared by several tools. A constraint or a description written here
+# is advertised to every client and enforced on every transport.
+SeverityFilter = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Exact severity to filter on, in the corpus' own casing (OpenStack "
+            "and BGL use 'ERROR', the OTel corpus 'error'). Take the real values "
+            "from list_datasets_tool. Omit for all severities."
+        )
+    ),
+]
+
+
+def _vocabulary(ids) -> WithJsonSchema:
+    """A closed vocabulary, advertised as a JSON-schema ``enum``.
+
+    Kept as annotation *metadata* rather than ``Field(json_schema_extra=...)``:
+    langchain-core rebuilds each tool's schema from the field metadata and drops
+    the extras, so only metadata reaches the model on the local transport.
+    Validation stays with the registry-backed validators below, so a dataset
+    registered later is still accepted.
+    """
+    return WithJsonSchema({"type": "string", "enum": list(ids)})
+
+
+LocalDatasetId = Annotated[
+    str, _vocabulary(d.id for d in local_datasets())
+]
+
 
 class _DatasetScoped(BaseModel):
     """Base for every tool argument set: a validated corpus id."""
 
     dataset: Annotated[
-        str, Field(description=_DATASET_DESCRIPTION)
+        str,
+        _vocabulary(dataset_ids()),
+        Field(description=_DATASET_DESCRIPTION),
     ] = DEFAULT_DATASET_ID
 
     @field_validator("dataset")
@@ -103,16 +142,10 @@ class CountByCategory(_Windowed):
             )
         ),
     ] = "general"
-    category: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Exact severity to filter on, in the corpus' own casing "
-                "(OpenStack uses 'ERROR', the OTel corpus uses 'error')."
-            )
-        ),
-    ] = None
-    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    category: SeverityFilter = None
+    limit: Annotated[
+        int, Field(ge=1, le=200, description="Most rows to return (default 50).")
+    ] = 50
 
 
 class GetTrend(_Windowed):
@@ -139,7 +172,7 @@ class GetTrend(_Windowed):
             )
         ),
     ] = None
-    category: str | None = None
+    category: SeverityFilter = None
     group_by: Annotated[
         Literal["severity"] | None,
         Field(
@@ -171,8 +204,18 @@ class SearchLogs(_DatasetScoped):
             ),
         ),
     ]
-    category: str | None = None
-    limit: Annotated[int, Field(ge=1, le=50)] = 10
+    category: SeverityFilter = None
+    limit: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=50,
+            description=(
+                "Most example rows to return (default 10). total_matches still "
+                "counts every match."
+            ),
+        ),
+    ] = 10
     start_time: Annotated[
         str | None,
         Field(
@@ -210,19 +253,50 @@ class TopInCategoryByService(_Windowed):
         CanonicalField,
         Field(description="Field to rank. Defaults to the emitting service."),
     ] = "service"
-    category: str | None = None
-    limit: Annotated[int, Field(ge=1, le=100)] = 5
+    category: SeverityFilter = None
+    limit: Annotated[
+        int, Field(ge=1, le=100, description="Most values to return (default 5).")
+    ] = 5
 
 
 class ComparePeriods(_DatasetScoped):
     """Compare counts between a baseline and a recent window."""
 
-    baseline_start: Annotated[str, Field(pattern=DATETIME_REGEX)]
-    baseline_end: Annotated[str, Field(pattern=DATETIME_REGEX)]
-    recent_start: Annotated[str, Field(pattern=DATETIME_REGEX)]
-    recent_end: Annotated[str, Field(pattern=DATETIME_REGEX)]
-    field: CanonicalField = "service"
-    limit: Annotated[int, Field(ge=1, le=100)] = 5
+    baseline_start: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Baseline window start, 'YYYY-MM-DD HH:MM:SS' (UTC).",
+        ),
+    ]
+    baseline_end: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Baseline window end, exclusive. After baseline_start.",
+        ),
+    ]
+    recent_start: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Recent window start, 'YYYY-MM-DD HH:MM:SS' (UTC).",
+        ),
+    ]
+    recent_end: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Recent window end, exclusive. After recent_start.",
+        ),
+    ]
+    field: Annotated[
+        CanonicalField,
+        Field(description="Field whose values are compared. Defaults to service."),
+    ] = "service"
+    limit: Annotated[
+        int, Field(ge=1, le=100, description="Most values to return (default 5).")
+    ] = 5
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -268,14 +342,16 @@ class GetTools(_Windowed):
             )
         ),
     ]
-    limit: Annotated[int, Field(ge=1, le=200)] = 50
+    limit: Annotated[
+        int, Field(ge=1, le=200, description="Most values to return (default 50).")
+    ] = 50
 
 
 class CountByDataset(BaseModel):
     """Whole-dataset severity counts across local datasets. No time window."""
 
     datasets: Annotated[
-        list[str] | None,
+        list[LocalDatasetId] | None,
         Field(
             min_length=1,
             description=(
@@ -289,8 +365,6 @@ class CountByDataset(BaseModel):
     @field_validator("datasets")
     @classmethod
     def _local_datasets(cls, value: list[str] | None) -> list[str] | None:
-        from backend.db.datasets import local_datasets
-
         if value is None:
             return value
         allowed = {d.id for d in local_datasets()}
@@ -378,7 +452,7 @@ class CountByTeam(BaseModel):
     """Log-entry counts per owning team and severity (T3)."""
 
     datasets: Annotated[
-        list[str] | None,
+        list[LocalDatasetId] | None,
         Field(
             min_length=1,
             description=(
@@ -403,16 +477,11 @@ class CountByTeam(BaseModel):
             description="Window end, exclusive. Must be after start_time.",
         ),
     ] = None
-    category: Annotated[
-        str | None,
-        Field(description="Exact severity to filter on, in the corpus' own casing."),
-    ] = None
+    category: SeverityFilter = None
 
     @field_validator("datasets")
     @classmethod
     def _local_datasets(cls, value: list[str] | None) -> list[str] | None:
-        from backend.db.datasets import local_datasets
-
         if value is None:
             return value
         allowed = {d.id for d in local_datasets()}
@@ -441,13 +510,21 @@ class _Sweepable(_DatasetScoped):
     demo table would make the common call an immediate refusal.
     """
 
-    dataset: Annotated[str, Field(description=_DATASET_DESCRIPTION)] = "otel_s3"
+    dataset: Annotated[
+        str,
+        _vocabulary(sorted(d.id for d in datasets_with(Capability.CHUNK_SWEEP))),
+        Field(
+            description=(
+                "Which corpus to sweep. One of: "
+                + ", ".join(sorted(d.id for d in datasets_with(Capability.CHUNK_SWEEP)))
+                + "."
+            ),
+        ),
+    ] = "otel_s3"
 
     @field_validator("dataset")
     @classmethod
     def _sweepable_dataset(cls, value: str) -> str:
-        from backend.db.datasets import Capability, datasets_with
-
         allowed = {d.id for d in datasets_with(Capability.CHUNK_SWEEP)}
         if value not in allowed:
             raise ValueError(
