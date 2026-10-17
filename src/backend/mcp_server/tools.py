@@ -18,8 +18,9 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, ValidationError
 
 from backend.mcp_server.app import mcp
+from backend.mcp_server.errors import to_tool_error
 from backend.mcp_server.skills import list_skill_infos, read_skill_text
-from backend.pipeline.tools.envelope import run_enveloped
+from backend.pipeline.tools.envelope import ToolEnvelope, run_enveloped
 from backend.pipeline.tools.specs import ToolSpec, available_specs
 
 
@@ -74,12 +75,26 @@ def validate_arguments(spec: ToolSpec, arguments: dict[str, Any]) -> dict[str, A
         raise ToolError(f"Invalid arguments for {spec.name}: {problems}") from None
 
 
+def output_schema() -> dict[str, Any]:
+    """The JSON schema of every evidence tool's result (the shared envelope)."""
+    schema = ToolEnvelope.model_json_schema()
+    _strip_titles(schema)
+    return schema
+
+
 def call_spec(spec: ToolSpec, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Validate and run one call, returning the result envelope (or a refusal)."""
+    """Validate and run one call, returning the result envelope (or a refusal).
+
+    Bad arguments and real failures become a ``ToolError`` that says what to fix;
+    a refused query is not a failure and comes back as a result.
+    """
     args = validate_arguments(spec, arguments)
-    return run_enveloped(
-        function=lambda: spec.run(args, None), **spec.envelope_kwargs(args)
-    )
+    try:
+        return run_enveloped(
+            function=lambda: spec.run(args, None), **spec.envelope_kwargs(args)
+        )
+    except Exception as error:
+        raise to_tool_error(spec.name, error) from error
 
 
 def annotations_for(spec: ToolSpec) -> ToolAnnotations:
@@ -107,6 +122,7 @@ class SpecTool(Tool):
             title=spec.title,
             description=spec.description,
             parameters=input_schema(spec),
+            output_schema=output_schema(),
             annotations=annotations_for(spec),
             timeout=spec.timeout,
             spec=spec,

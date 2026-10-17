@@ -3,6 +3,7 @@
 from langchain_typesafe import ClassifierResponse, TypeSafeClassifier
 
 from backend.pipeline.effort import get_effort_spec
+from backend.pipeline.roles import OVERVIEW_ROLES
 
 # The "is a target named?" boundary for the scope gate. Below it no queryable
 # target (dataset, service, entity id, event template or error/message text,
@@ -38,9 +39,6 @@ ANSWER_OK_THRESHOLD = 0.45
 # dataset. For them an overview counts as scoped; the engineer still needs a
 # target. Starting value; validate with routes.sh.
 OVERVIEW_THRESHOLD = 0.6
-
-# Roles whose default scope is the whole dataset.
-OVERVIEW_ROLES = frozenset({"team_lead", "manager"})
 
 # One long-lived classifier; like models.py it reads TYPESAFE_API_KEY at import.
 # No model is passed, so the SDK default selects the release — the gate

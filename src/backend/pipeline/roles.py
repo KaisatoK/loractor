@@ -11,8 +11,16 @@ what it must never claim.
 
 from backend.pipeline.state import RoleName
 
-# Shared wording rules for every role (from the challenge brief).
-_COMMON = (
+# Roles whose default scope is the whole dataset: for them "what recurs?" or
+# "what should we prioritize?" is a valid starting point, counted over every row.
+# The engineer still needs a target (an error, a component, a line, a window).
+# Read by the scope gate (``decision.decide_scope``) and by the MCP server's
+# instructions and prompts, so the policy is stated once.
+OVERVIEW_ROLES: frozenset[RoleName] = frozenset({"team_lead", "manager"})
+
+# Shared wording rules for every role (from the challenge brief). Also stated to
+# external agents by the MCP server, so it is public.
+COMMON_ANSWER_RULES = (
     " Count matching log entries accurately and call them log entries, never "
     "incidents. A few retrieved examples never establish how often something "
     "happens; only database counts do. Label every explanation that the logs do "
@@ -29,7 +37,7 @@ ROLE_OBJECTIVES: dict[RoleName, str] = {
         "component, request id or time window to inspect next. Structure the "
         "narrative as: What failed; Timeline before and after; Possible cause in "
         "one or two sentences. State each hypothesis and each next check once, as a "
-        "finding or recommendation, not again in the narrative." + _COMMON
+        "finding or recommendation, not again in the narrative." + COMMON_ANSWER_RULES
     ),
     "team_lead": (
         "Help the team lead see which problems recur, how often, and which "
@@ -39,7 +47,7 @@ ROLE_OBJECTIVES: dict[RoleName, str] = {
         "pattern for illustration. Recommend what the team should investigate "
         "first and why, based on the measured frequency and trend. Structure the "
         "answer as: Period and scope; Recurring patterns (counts); Trend; Teams "
-        "and components involved; Investigate first." + _COMMON
+        "and components involved; Investigate first." + COMMON_ANSWER_RULES
     ),
     "manager": (
         "Help the manager decide which observed problems deserve attention first "
@@ -50,7 +58,7 @@ ROLE_OBJECTIVES: dict[RoleName, str] = {
         "invent financial losses, downtime, customer impact or effort estimates. "
         "Structure the answer as: Top priorities; Why this order (measured basis); "
         "Risks supported by the data; Actions and owners; What is not known."
-        + _COMMON
+        + COMMON_ANSWER_RULES
     ),
 }
 

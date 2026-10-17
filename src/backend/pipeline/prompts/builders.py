@@ -16,7 +16,7 @@ from backend.db.config import LOG_SCHEMA
 from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.playbooks import ownership_context, role_answer_rules, role_playbook
 from backend.pipeline.state import PipelineState, Role
-from backend.pipeline.tools.envelope import MEASURED_KINDS
+from backend.pipeline.tools.envelope import CUT_MARKER, MEASURED_KINDS
 from backend.pipeline.tools.specs import SPECS
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def _clip(value: object, limit: int = PREVIEW_CHARS) -> str:
     answer's own tables always show the full stored row.
     """
     text = str(value)
-    return text if len(text) <= limit else text[:limit] + "…[cut]"
+    return text if len(text) <= limit else text[:limit] + CUT_MARKER
 
 
 # How much of each tool result the answer model sees. Measured results (counts,

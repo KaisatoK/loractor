@@ -33,10 +33,13 @@ the answer reports those fields as unknown rather than guessing.
 """
 
 import datetime as dt
+import json
 import uuid
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.capture import capture_queries
 from backend.pipeline.tools.specs import SPECS
@@ -57,6 +60,129 @@ MEASURED_KINDS = frozenset({"aggregate", "trend"})
 # Legacy envelopes that omit ``kind`` are classified from it, and a tool name in
 # it is what makes a message a database result rather than a skill read.
 TOOL_KINDS: dict[str, str] = {spec.name: spec.kind for spec in SPECS}
+
+# --- Size limits ---------------------------------------------------------------
+# What one tool result may put into a model's context. Every transport applies
+# them in ``build_envelope`` so the local and MCP tools return identical rows,
+# and a cut is always visible: a shortened cell ends in CUT_MARKER (a silent cut
+# once made the answer quote a shortened hash as if it were the real value) and
+# the envelope counts what was cut.
+CUT_MARKER = "…[cut]"
+MAX_CELL_CHARS = 2_000
+MAX_RESULT_CHARS = 200_000
+# A lookup returns "one complete row" by contract -- it is how a cut search cell
+# is read in full -- so it is never clipped.
+UNCLIPPED_KINDS = frozenset({"lookup"})
+
+
+def clip_rows(
+    rows: list[Any],
+    *,
+    max_cell: int = MAX_CELL_CHARS,
+    max_total: int = MAX_RESULT_CHARS,
+) -> tuple[list[Any], int, int]:
+    """``(rows, clipped_cells, dropped_rows)`` within the size limits.
+
+    Text longer than ``max_cell`` characters is cut (also inside nested cells),
+    then trailing rows are dropped until the serialized rows fit ``max_total``
+    characters. The first row is always kept, so a result is never emptied.
+    """
+    clipped = 0
+
+    def clip(value: Any) -> Any:
+        nonlocal clipped
+        if isinstance(value, str):
+            if len(value) > max_cell:
+                clipped += 1
+                return value[:max_cell] + CUT_MARKER
+            return value
+        if isinstance(value, dict):
+            return {k: clip(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [clip(v) for v in value]
+        return value
+
+    rows = [clip(row) for row in rows]
+    kept, size = 0, 0
+    for row in rows:
+        size += len(json.dumps(row, default=str))
+        if kept and size > max_total:
+            break
+        kept += 1
+    return rows[:kept], clipped, len(rows) - kept
+
+
+class ToolEnvelope(BaseModel):
+    """The result of every evidence tool: what the server advertises as its output.
+
+    Success and refusal share one model because a refusal is a result, not an
+    error. ``build_envelope`` and ``refusal.as_tool_result`` produce the dicts;
+    this model documents them and is what MCP clients validate against, so it
+    must describe exactly what they return.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str = Field(
+        description=(
+            "'success', or 'refused': the request was not run because it was "
+            "unbounded, too wide or unsupported; `reason` says why and "
+            "`suggestion` is a narrower request that would be accepted."
+        )
+    )
+    operation: str | None = Field(None, description="What the call did, in words.")
+    kind: str | None = Field(
+        None,
+        description=(
+            "What the rows are. 'aggregate' and 'trend' are measured frequencies "
+            "over the stated scope; 'search', 'context', 'lookup' and 'catalog' "
+            "rows are examples or metadata and never establish how often "
+            "something happens."
+        ),
+    )
+    dataset: str | None = Field(None, description="The queried corpus id.")
+    query: str | None = Field(
+        None, description="The SQL that ran, parameters bound. Cite it for every number."
+    )
+    filters: dict[str, Any] | None = Field(
+        None, description="The filters that were applied (window, severity, field)."
+    )
+    limit: int | None = Field(None, description="The row cap the tool applied, if any.")
+    returned: int | None = Field(None, description="Rows in `data`.")
+    total_matches: int | None = Field(
+        None, description="Every row matching the filters, when the tool counted them."
+    )
+    truncated: bool | None = Field(
+        None,
+        description=(
+            "True when more matching rows exist than were returned, False when "
+            "the result is provably complete, null when unknown."
+        ),
+    )
+    data: list[dict[str, Any]] | None = Field(None, description="The result rows.")
+    query_stats: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "What the query cost: rows scanned, time, files read, whether the "
+            "counts are approximate, and notes."
+        ),
+    )
+    clipped_cells: int | None = Field(
+        None,
+        description=(
+            f"Text cells cut to {MAX_CELL_CHARS} characters (they end in "
+            f"'{CUT_MARKER}'). Fetch the full line with get_log_by_line_id_tool."
+        ),
+    )
+    clipped_rows: int | None = Field(
+        None, description="Rows dropped to keep the result within the size limit."
+    )
+    code: str | None = Field(None, description="Refusals: a stable category.")
+    reason: str | None = Field(None, description="Refusals: what was wrong.")
+    suggestion: str | None = Field(
+        None, description="Refusals: a concrete request that would be accepted."
+    )
+
 
 ENVELOPE_FIELDS = (
     "kind",
@@ -131,6 +257,9 @@ def build_envelope(
     """Assemble the success envelope for one tool result."""
     rows = list(data) if isinstance(data, list) else ([] if data is None else [data])
     rows = json_safe(rows)
+    clipped_cells = dropped_rows = 0
+    if kind not in UNCLIPPED_KINDS:
+        rows, clipped_cells, dropped_rows = clip_rows(rows)
     returned = len(rows)
     envelope = {
         "status": "success",
@@ -145,6 +274,13 @@ def build_envelope(
         "truncated": is_truncated(returned, limit, total_matches, complete),
         "data": rows,
     }
+    if dropped_rows:
+        # Rows were dropped for size, so the result is incomplete whatever the
+        # query's own cap says.
+        envelope["truncated"] = True
+        envelope["clipped_rows"] = dropped_rows
+    if clipped_cells:
+        envelope["clipped_cells"] = clipped_cells
     if query_stats:
         envelope["query_stats"] = json_safe(query_stats)
     return envelope
@@ -205,6 +341,9 @@ def run_enveloped(
         )
         if "truncated" in remote and remote["truncated"] is not None:
             envelope["truncated"] = remote["truncated"]
+        for key in ("clipped_cells", "clipped_rows"):
+            if remote.get(key):
+                envelope[key] = remote[key]
         return envelope
     return build_envelope(
         operation=operation,
