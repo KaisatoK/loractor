@@ -123,6 +123,13 @@ def search_logs(
         "hybrid" if hybrid else "template" if templated else "lexical",
     )
 
+    # An external index answers on its own: there is no base table to join back
+    # to, and the index materializes columns from the source files itself. So
+    # the fusion machinery below -- which exists to join ranked ids against a
+    # table -- has nothing to join to, and would be wrong rather than slow.
+    if ds.search_is_self_contained:
+        return _search_index_only(ds, query_text, severity, limit, stats)
+
     record_id = ds.sql_for("record_id")
     message = ds.sql_for("message")
     index = ds.search_relation()
@@ -312,3 +319,77 @@ def get_log_by_record_id(
         relation=ds.scan_relation(),
     )
     return query, [record_id], QueryStats(dataset=ds.id)
+
+
+def _search_index_only(
+    dataset: Dataset,
+    query_text: str,
+    severity: str | None,
+    limit: int,
+    stats: QueryStats,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """BM25 search straight off an index, with no base table.
+
+    Used for an index built over remote files. Columns are read through the
+    index, which re-fetches each matched row from its file, so this is the one
+    search path whose cost is dominated by object storage rather than by the
+    index.
+
+    Note the timestamp goes through ``select_sql_for``: materializing a
+    nanosecond value raises in the driver exactly as reading it directly does.
+    """
+    terms = search_terms(query_text)
+    if not terms:
+        raise refuse(
+            f"No searchable words in {query_text!r}.",
+            "Search for a word that appears in log messages, such as "
+            "'timeout' or 'connection refused'.",
+            code="empty_query",
+        )
+
+    matcher = sql.SQL("ts_any([{terms}])").format(
+        terms=sql.SQL(", ").join(
+            sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder())
+            for _ in terms
+        )
+    )
+    index = dataset.search_relation()
+
+    columns = sql.SQL(", ").join(
+        sql.SQL("{col} AS {alias}").format(
+            col=dataset.select_sql_for(name), alias=sql.Identifier(name)
+        )
+        for name, _ in _display_fields(dataset)
+    )
+
+    clauses = [sql.SQL("{m} @@ {matcher}").format(
+        m=dataset.sql_for("message"), matcher=matcher
+    )]
+    params: list = list(terms)
+
+    severity_clause, severity_params = pred.severity_filter(dataset, severity)
+    if severity_params:
+        # Matched through the index, which carries severity verbatim.
+        clauses.append(
+            sql.SQL("{col} @@ %s").format(col=dataset.sql_for("severity"))
+        )
+        params.extend(severity_params)
+
+    query = sql.SQL("""
+        SELECT {columns}, BM25({index}.tableoid) AS relevance
+        FROM {index}
+        WHERE {where}
+        ORDER BY relevance DESC
+        {limit}
+    """).format(
+        columns=columns,
+        index=index,
+        where=sql.SQL(" AND ").join(clauses),
+        limit=pred.bounded_limit(dataset, limit),
+    )
+
+    stats.notes.append(
+        "rows were read from object storage through an in-place index; "
+        "nothing was copied locally"
+    )
+    return query, params, stats

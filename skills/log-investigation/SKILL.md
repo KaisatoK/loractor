@@ -32,8 +32,10 @@ count, then search inside it.
    locate the spike inside the window you started with.
 3. **Then search text, on an indexed dataset.** `search_logs_tool` reads an
    inverted index. It is refused on the raw remote corpus, which has none — so
-   aggregate on the remote corpus to find the window, and search the indexed
-   slice to read lines.
+   aggregate on the remote corpus to find the window, then search `otel_slice`
+   to read lines. That index is built *in place* over the same Parquet files:
+   nothing is copied, and each match is re-read from object storage, so expect
+   about a second per search rather than milliseconds.
 4. **Discover filter values before filtering.** `get_data_tool` returns a
    field's most common values with counts, ranked by volume. Do not guess a
    service name.

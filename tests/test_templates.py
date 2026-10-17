@@ -39,7 +39,7 @@ def _isolate_vector_cache():
 
 # --- Naming -----------------------------------------------------------------
 def test_each_dataset_gets_its_own_template_table():
-    assert templates.template_table("otel_slice") == "otel_slice_templates"
+    assert templates.template_table("bgl") == "bgl_templates"
     assert templates.template_table("openstack") == "openstack_templates"
 
 
@@ -71,15 +71,42 @@ def test_a_dataset_without_templates_is_refused():
     assert excinfo.value.refusal.code == "unsupported_capability"
 
 
-def test_every_registered_corpus_currently_parses_templates():
-    """Documents why the test above needs a synthetic dataset."""
+def test_not_every_corpus_parses_templates():
+    """Which is why the guard above exists and is reachable.
+
+    The OTel index has no table to carry a template column, so it declares no
+    TEMPLATES capability and template work against it is refused rather than
+    attempted.
+    """
     from backend.db.datasets import all_datasets
 
-    assert all(d.supports(Capability.TEMPLATES) for d in all_datasets())
+    assert not all(d.supports(Capability.TEMPLATES) for d in all_datasets())
+    assert not resolve("otel_slice").supports(Capability.TEMPLATES)
 
 
-def test_the_slice_declares_templates():
-    assert resolve("otel_slice").supports(Capability.TEMPLATES)
+def test_the_materialized_corpora_declare_templates():
+    """BGL and OpenStack store their rows, so a template column can exist.
+
+    The OTel index cannot: it indexes remote files with no table of its own,
+    so there is nothing to attach a derived template column to.
+    """
+    assert resolve("bgl").supports(Capability.TEMPLATES)
+    assert resolve("openstack").supports(Capability.TEMPLATES)
+
+
+def test_the_otel_index_is_searchable_without_templates():
+    """Removing the materialized slice removed its template column.
+
+    Search on OTel is lexical over the in-place index; semantic reach comes
+    from the remote tier's derived template expression instead.
+    """
+    from backend.db import query
+
+    text = render(
+        query.search_logs.__wrapped__("charge card", dataset="otel_slice", limit=3)[0]
+    )
+    assert "BM25" in text
+    assert "query_embedding" not in text
 
 
 def test_missing_template_table_never_breaks_search(monkeypatch):
@@ -92,7 +119,7 @@ def test_missing_template_table_never_breaks_search(monkeypatch):
         raise RuntimeError("no such table")
 
     monkeypatch.setattr(templates, "templates_status", explode)
-    assert templates.has_template_vectors("otel_slice") is False
+    assert templates.has_template_vectors("bgl") is False
 
 
 def test_an_empty_template_table_is_not_usable(monkeypatch):
@@ -101,7 +128,7 @@ def test_an_empty_template_table_is_not_usable(monkeypatch):
         "templates_status",
         lambda _d: {"exists": True, "embedded": 0, "templates": 0},
     )
-    assert templates.has_template_vectors("otel_slice") is False
+    assert templates.has_template_vectors("bgl") is False
 
 
 def test_a_populated_template_table_is_usable(monkeypatch):
@@ -110,13 +137,13 @@ def test_a_populated_template_table_is_usable(monkeypatch):
         "templates_status",
         lambda _d: {"exists": True, "embedded": 768, "templates": 768},
     )
-    assert templates.has_template_vectors("otel_slice") is True
+    assert templates.has_template_vectors("bgl") is True
 
 
 # --- Branch SQL -------------------------------------------------------------
 def test_the_branch_produces_the_fusion_contract():
     """Must yield (rid, rank) so it composes with the existing RRF."""
-    branch, params = templates.template_branch(resolve("otel_slice"))
+    branch, params = templates.template_branch(resolve("bgl"))
     text = render(branch)
     assert "rid" in text
     assert "rank" in text
@@ -124,14 +151,14 @@ def test_the_branch_produces_the_fusion_contract():
 
 
 def test_the_branch_reads_the_template_table_and_joins_to_rows():
-    text = render(templates.template_branch(resolve("otel_slice"))[0])
-    assert "otel_slice_templates" in text
+    text = render(templates.template_branch(resolve("bgl"))[0])
+    assert "bgl_templates" in text
     assert "query_embedding" in text
 
 
 def test_the_branch_bounds_both_distance_and_width():
     """Unbounded, a vague query would expand to most of the corpus."""
-    text = render(templates.template_branch(resolve("otel_slice"))[0])
+    text = render(templates.template_branch(resolve("bgl"))[0])
     assert str(templates.MAX_TEMPLATE_DISTANCE) in text
     assert str(templates.TEMPLATE_BRANCH_WIDTH) in text
 
@@ -139,31 +166,32 @@ def test_the_branch_bounds_both_distance_and_width():
 def test_the_branch_joins_on_template_text_not_a_row_column():
     """Rows are reached by template equality, so rebuilding templates never
     requires rewriting the base table."""
-    text = render(templates.template_branch(resolve("otel_slice"))[0])
+    text = render(templates.template_branch(resolve("bgl"))[0])
     assert "template_text" in text
 
 
 # --- Search mode selection --------------------------------------------------
-def test_the_slice_uses_the_template_branch_when_vectors_exist(monkeypatch):
+def test_a_templated_corpus_uses_the_template_branch(monkeypatch):
     from backend.db import query
 
     monkeypatch.setattr(templates, "has_template_vectors", lambda _d: True)
-    built = query.search_logs.__wrapped__(
-        "money conversion problem", dataset="otel_slice", limit=3
+    text = render(
+        query.search_logs.__wrapped__(
+            "memory hardware fault", dataset="bgl", limit=3
+        )[0]
     )
-    text = render(built[0])
-    assert "otel_slice_templates" in text
+    assert "bgl_templates" in text
     assert "query_embedding" in text
 
 
-def test_the_slice_falls_back_to_lexical_without_vectors(monkeypatch):
+def test_a_templated_corpus_falls_back_to_lexical_without_vectors(monkeypatch):
     from backend.db import query
 
     monkeypatch.setattr(templates, "has_template_vectors", lambda _d: False)
     text = render(
-        query.search_logs.__wrapped__("timeout", dataset="otel_slice", limit=3)[0]
+        query.search_logs.__wrapped__("timeout", dataset="bgl", limit=3)[0]
     )
-    assert "otel_slice_templates" not in text
+    assert "bgl_templates" not in text
     assert "BM25" in text
 
 
@@ -189,10 +217,9 @@ def test_the_template_mode_discloses_itself_in_the_stats(monkeypatch):
     from backend.db import query
 
     monkeypatch.setattr(templates, "has_template_vectors", lambda _d: True)
-    built = query.search_logs.__wrapped__(
-        "money conversion problem", dataset="otel_slice", limit=3
-    )
-    stats = built[2]
+    stats = query.search_logs.__wrapped__(
+        "memory hardware fault", dataset="bgl", limit=3
+    )[2]
     assert any("template-level" in note for note in stats.notes)
 
 

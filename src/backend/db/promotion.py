@@ -44,10 +44,7 @@ from backend.db.budget import (
 from backend.db.chunks import Chunk
 from backend.db.datasets import OTEL_TEMPLATE_EXPRESSION, Dataset, resolve
 from backend.db.errors import refuse
-from backend.db.slices import (
-    BODY_SECONDS_PER_ROW_GROUP,
-    _ensure_dictionaries,
-)
+from backend.db.corpus import BODY_SECONDS_PER_ROW_GROUP, ensure_dictionaries
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +316,7 @@ def _materialize(
     cur.execute(
         sql.SQL("VACUUM (REFRESH_TABLE) {t}").format(t=sql.Identifier(table))
     )
-    _ensure_dictionaries(cur)
+    ensure_dictionaries(cur)
     cur.execute(
         sql.SQL("""
             CREATE INDEX {idx} ON {t} USING inverted (

@@ -220,7 +220,7 @@ def test_beyond_the_measured_range_the_estimate_stops_claiming_flatness():
 def test_indexing_in_place_is_cheaper_than_materializing():
     """Both sides measured. Disk per row, and time for a comparable extract."""
     from backend.db.budget import MATERIALIZED_BYTES_PER_ROW
-    from backend.db.slices import BODY_SECONDS_PER_ROW_GROUP
+    from backend.db.corpus import BODY_SECONDS_PER_ROW_GROUP
 
     assert external.EXTERNAL_BYTES_PER_ROW < MATERIALIZED_BYTES_PER_ROW
 

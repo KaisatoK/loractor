@@ -78,6 +78,15 @@ class DatasetKind(StrEnum):
     LOCAL_FILE = "local_file"
     """A file loaded into a local table by a loader (loghub datasets)."""
 
+    EXTERNAL_INDEX = "external_index"
+    """An inverted index built over remote files, with no local copy of rows.
+
+    The index *is* the dataset: there is no base table to join back to, and a
+    query reads columns through the index, which re-fetches each matched row
+    from the source file. So searching is a little slower than on a copied
+    table, and nothing was downloaded to make it possible.
+    """
+
 
 # Fractional digits each timestamp precision carries. Python's ``datetime`` tops
 # out at six, which is the line anything finer has to be truncated to before it
@@ -244,6 +253,15 @@ class Dataset:
             ) from None
 
     @property
+    def search_is_self_contained(self) -> bool:
+        """Whether search reads the index alone, with no join to a base table.
+
+        True for an external index, where there is no base table and the index
+        materializes columns from the source files itself.
+        """
+        return self.kind is DatasetKind.EXTERNAL_INDEX
+
+    @property
     def ts_needs_truncation(self) -> bool:
         """Whether returning this timestamp to the client needs truncating.
 
@@ -283,6 +301,11 @@ class Dataset:
         HTTPS gives no bucket listing, and ``?`` wildcards are unsupported over
         S3, so a wider window means more entries here.
         """
+        if self.kind is DatasetKind.EXTERNAL_INDEX:
+            # The index answers directly; there is no base relation. Returning
+            # the index here keeps callers that compose a FROM clause working,
+            # and reading it is exactly what is wanted.
+            return sql.Identifier(self.sources[0])
         if self.kind is DatasetKind.REMOTE_PARQUET:
             # A single source is passed as a scalar path, not a one-element
             # list, and the difference is not cosmetic: a *list* argument makes
@@ -433,9 +456,9 @@ OTEL_SEVERITY_VALUES = ("info", "error", "information", "trace", "warn", "fatal"
 # only when necessary; BGL needs semantic search, the OTel slice only gets it
 # when asked for. The capability set reflects the configuration, so a disabled
 # slice reports no VECTOR capability rather than failing at query time.
-OTEL_SLICE_EMBEDDINGS = os.getenv("OTEL_SLICE_EMBEDDINGS", "false").lower() == "true"
-
-OTEL_SLICE_TABLE = "otel_slice"
+# The in-place index over the remote corpus. Not a table: the rows stay in
+# object storage and only the postings live here.
+OTEL_INDEX_NAME = "otel_ext_idx"
 
 
 def _parse_parts(spec: str) -> tuple[int, ...]:
@@ -529,13 +552,16 @@ OTEL_S3 = (
 OTEL_SLICE = (
     Dataset(
         id="otel_slice",
-        kind=DatasetKind.NATIVE_TABLE,
+        kind=DatasetKind.EXTERNAL_INDEX,
         description=(
             "Searchable slice of the OTel corpus: problem-severity rows from a "
-            "bounded time window, materialized locally with a BM25 index. Small "
-            "and exact, and the right target for text search."
+            "bounded window, indexed IN PLACE over the remote Parquet. The rows "
+            "are never copied -- only the search postings are stored locally -- "
+            "so this is the target for text search on OTel. A match re-reads "
+            "its row from object storage, so expect ~1s rather than ~20ms."
         ),
-        sources=(OTEL_SLICE_TABLE,),
+        # The index relation is the whole dataset: there is no local table.
+        sources=(OTEL_INDEX_NAME,),
         fields=MappingProxyType(
             {
                 TS: Field(column="Timestamp"),
@@ -545,30 +571,30 @@ OTEL_SLICE = (
                 ),
                 MESSAGE: Field(column="Body", text_indexed=True),
                 ENTITY_ID: Field(column="TraceId"),
-                TEMPLATE: Field(
-                    column="EventTemplate", text_indexed=True, token_indexed=True
-                ),
-                RECORD_ID: Field(column="line_id"),
             }
         ),
         capabilities=frozenset(
             {
                 Capability.BM25,
-                Capability.RECORD_ID,
                 Capability.EXACT_COUNTS,
-                Capability.TEMPLATES,
-                Capability.AUTO_COMPLETE,
             }
-            | ({Capability.VECTOR} if OTEL_SLICE_EMBEDDINGS else set())
         ),
+        # No RECORD_ID: an external index keys on the reader's own row identity,
+        # which is not a column anyone can ask for. No TEMPLATES either -- the
+        # template column was computed during materialization, and there is no
+        # materialization step any more. Semantic reach over OTel comes from the
+        # remote tier's derived template expression instead.
         severity_values=OTEL_SEVERITY_VALUES,
         ts_cast="timestamptz",
-        index_name=f"{OTEL_SLICE_TABLE}_idx",
-        token_index_name=f"{OTEL_SLICE_TABLE}_token_idx",
+        # Verified: the remote Parquet is TIMESTAMPTZ_NS, and materializing a
+        # raw value through the index hits the same driver limit as reading it
+        # directly, so it is truncated on the way out.
+        ts_precision="nanosecond",
+        index_name=OTEL_INDEX_NAME,
+        token_index_name=None,
         selectors=MappingProxyType(
             {
                 "@": SERVICE,
-                "^": TEMPLATE,
                 "$": MESSAGE,
             }
         ),
@@ -633,9 +659,10 @@ BGL = Dataset(
     id="bgl",
     kind=DatasetKind.NATIVE_TABLE,
     description=(
-        "Blue Gene/L supercomputer RAS log (loghub, 2k rows). Local, exact, "
-        "fully indexed, with template-level embeddings. Spans seven months of "
-        "2005-2006, so it is the corpus for long-range questions."
+        "Blue Gene/L supercomputer RAS log (loghub, 4.7M rows). Local, exact, "
+        "fully indexed, with template-level embeddings over all 20,352 "
+        "templates. Spans seven months of 2005-2006, so it is the corpus for "
+        "long-range questions."
     ),
     sources=(BGL_TABLE,),
     fields=MappingProxyType(

@@ -295,31 +295,46 @@ def test_search_shape_follows_the_corpus_not_its_name(monkeypatch):
     assert params == ["oom", "oom"]
 
     # No template vectors built yet: lexical only.
-    templates.set_vector_cache("otel_slice", False)
-    lexical, params, _ = build(db.search_logs, "oom", dataset="otel_slice")
+    templates.set_vector_cache("bgl", False)
+    lexical, params, _ = build(db.search_logs, "oom", dataset="bgl")
     assert "ai_embed" not in normalized(lexical)
     assert "BM25" in normalized(lexical)
 
     # Template vectors available: semantic branch fused with BM25.
-    templates.set_vector_cache("otel_slice", True)
-    templated, params, _ = build(db.search_logs, "oom", dataset="otel_slice")
-    assert "otel_slice_templates" in normalized(templated)
+    templates.set_vector_cache("bgl", True)
+    templated, params, _ = build(db.search_logs, "oom", dataset="bgl")
+    assert "bgl_templates" in normalized(templated)
     assert "BM25" in normalized(templated)
 
+    # An external index answers alone: no base table exists to join to.
+    index_only, params, _ = build(db.search_logs, "oom", dataset="otel_slice")
+    rendered = normalized(index_only)
+    assert "otel_ext_idx" in rendered
+    assert "JOIN" not in rendered
+    assert "BM25" in rendered
+
     templates.clear_vector_cache()
 
 
-def test_search_reads_the_index_relation_never_the_remote_files():
-    """True in both search shapes: a text query must never reach S3."""
+def test_search_never_composes_a_remote_scan():
+    """A text query must never put read_parquet in its own FROM clause.
+
+    The OTel index does reach object storage -- that is how an in-place index
+    returns a row -- but through the index, not through a scan the query layer
+    composed. Those are different costs: one re-reads a handful of matched
+    rows, the other would read a window of the corpus.
+    """
     from backend.db import templates
 
-    for available in (False, True):
-        templates.set_vector_cache("otel_slice", available)
-        query, _, _ = build(db.search_logs, "oom", dataset="otel_slice")
-        rendered = normalized(query)
-        assert "read_parquet" not in rendered
-        assert '"otel_slice_idx"' in rendered
     templates.clear_vector_cache()
+    for dataset, relation in (
+        ("otel_slice", "otel_ext_idx"),
+        ("bgl", "bgl_idx"),
+        ("openstack", "log_idx"),
+    ):
+        rendered = normalized(build(db.search_logs, "oom", dataset=dataset)[0])
+        assert "read_parquet" not in rendered, dataset
+        assert relation in rendered, dataset
 
 
 def test_high_cardinality_field_listing_is_refused():
@@ -491,7 +506,7 @@ NO_MATCH = "WHERE false"
 
 def test_auto_complete_resolves_selectors_per_dataset():
     assert '"service"' in render_auto_complete("@nova", "openstack")
-    assert '"ServiceName"' in render_auto_complete("@cart", "otel_slice")
+    assert '"Component"' in render_auto_complete("@KERN", "bgl")
 
 
 def test_auto_complete_uses_the_text_mirror_for_an_integer_field():
@@ -526,10 +541,21 @@ def test_auto_complete_content_branch_returns_record_ids():
     assert "ts_dict_agg" not in rendered
 
 
-def test_auto_complete_content_branch_works_on_the_otel_slice():
-    rendered = render_auto_complete("$timeout", "otel_slice")
-    assert '"Body"' in rendered
-    assert "line_id" in rendered
+def test_auto_complete_is_not_offered_on_the_otel_index():
+    """An external index has no verbatim+token index pair, so the type-ahead
+    recipe cannot run against it and says so instead of failing at query
+    time."""
+    from backend.db.datasets import Capability, resolve
+
+    assert not resolve("otel_slice").supports(Capability.AUTO_COMPLETE)
+
+
+def test_auto_complete_content_branch_works_on_a_local_corpus():
+    """The ``$`` branch matches whole lines and inserts a record reference, so
+    it needs a corpus with a record id -- which an external index has not."""
+    rendered = render_auto_complete("$parity", "bgl")
+    assert '"Content"' in rendered
+    assert "LineId" in rendered
 
 
 def test_auto_complete_queries_the_index_not_the_table():

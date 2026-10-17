@@ -74,7 +74,7 @@ Findings that shaped the design
     BY "Timestamp") ... FROM read_parquet(...)``. The ordered window forces the
     engine to buffer and sort the entire result while streaming ``Body`` from
     object storage, which it cannot do even for a two-second window. Two rules
-    follow, both implemented in :mod:`backend.db.slices`:
+    follow, both implemented in :mod:`backend.db.promotion`:
 
     * extract in **small time-sliced batches**, one statement each, sized by
       arrival rate so no statement handles much more than ~50,000 rows;

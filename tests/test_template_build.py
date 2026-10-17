@@ -11,10 +11,14 @@ This file exists because it did not. Two real defects, both found by running it:
   would be re-selected forever at a steady batch per round -- indistinguishable
   from healthy progress if the loop trusts rows-affected.
 
-A 20,352-template corpus takes ~28 minutes to embed, so "watch it and see" is
+A 20,352-template corpus takes ~36 minutes to embed, so "watch it and see" is
 not a viable check. These tests drive the loop against a stub cursor and assert
 it stops, in every failure mode, without touching a database or an embedding
 service.
+
+They use BGL because it is a materialized corpus with real templates. The OTel
+index cannot stand in: it is an index over remote files with no table of its
+own, so there is nothing to attach a template column to.
 """
 
 from __future__ import annotations
@@ -138,7 +142,7 @@ def stub(monkeypatch):
 # --- The happy path still works --------------------------------------------
 def test_a_normal_build_embeds_everything_and_stops(stub):
     cursor = stub(StubCursor(pending=450))
-    report = templates.build_templates("otel_slice", rebuild=True)
+    report = templates.build_templates("bgl", rebuild=True)
 
     assert report["embedded"] == 450
     assert report["unembedded"] == 0
@@ -148,13 +152,13 @@ def test_a_normal_build_embeds_everything_and_stops(stub):
 def test_the_number_of_rounds_matches_the_batch_size(stub):
     """A tight bound, so a regression that re-embeds shows up here."""
     cursor = stub(StubCursor(pending=templates.EMBED_BATCH * 3))
-    templates.build_templates("otel_slice", rebuild=True)
+    templates.build_templates("bgl", rebuild=True)
     assert cursor.update_calls == 3
 
 
 def test_nothing_is_embedded_twice(stub):
     cursor = stub(StubCursor(pending=300))
-    report = templates.build_templates("otel_slice", rebuild=True)
+    report = templates.build_templates("bgl", rebuild=True)
     assert report["embedded"] == len(cursor.rows) == 300
 
 
@@ -168,7 +172,7 @@ def test_a_template_the_service_cannot_embed_does_not_spin(stub, monkeypatch):
     monkeypatch.setattr(templates, "EMBED_BATCH", 10)
     poison = "template 7"
     cursor = stub(StubCursor(pending=50, embeddable=lambda text: text != poison))
-    report = templates.build_templates("otel_slice", rebuild=True)
+    report = templates.build_templates("bgl", rebuild=True)
 
     # Stops with work outstanding, and says why.
     assert report["unembedded"] >= 1
@@ -182,7 +186,7 @@ def test_a_template_the_service_cannot_embed_does_not_spin(stub, monkeypatch):
 def test_an_entirely_unembeddable_corpus_stops_after_one_round(stub, monkeypatch):
     monkeypatch.setattr(templates, "EMBED_BATCH", 25)
     cursor = stub(StubCursor(pending=100, embeddable=lambda _t: False))
-    report = templates.build_templates("otel_slice", rebuild=True)
+    report = templates.build_templates("bgl", rebuild=True)
 
     assert report["embedded"] == 0
     assert report["unembedded"] == 100
@@ -193,7 +197,7 @@ def test_an_entirely_unembeddable_corpus_stops_after_one_round(stub, monkeypatch
 def test_the_round_ceiling_is_derived_from_the_work_outstanding(stub):
     """Even if the progress check were removed, iterations stay bounded."""
     cursor = stub(StubCursor(pending=1000))
-    templates.build_templates("otel_slice", rebuild=True)
+    templates.build_templates("bgl", rebuild=True)
     assert cursor.update_calls <= 1000 // templates.EMBED_BATCH + 2
 
 
@@ -205,7 +209,7 @@ def test_an_incomplete_build_is_reported_not_hidden(stub, monkeypatch):
     """
     monkeypatch.setattr(templates, "EMBED_BATCH", 5)
     stub(StubCursor(pending=40, embeddable=lambda t: t != "template 0"))
-    report = templates.build_templates("otel_slice", rebuild=True)
+    report = templates.build_templates("bgl", rebuild=True)
     assert report["incomplete_reason"]
     assert report["unembedded"] > 0
 
@@ -220,7 +224,7 @@ def test_ids_continue_from_the_existing_maximum(stub):
         2: {"template_text": "older", "row_count": 1, "embedding": [0.0]},
     }
     stub(cursor)
-    templates.build_templates("otel_slice")
+    templates.build_templates("bgl")
 
     assert len(cursor.rows) == 12
     assert sorted(cursor.rows) == list(range(1, 13))
@@ -229,7 +233,7 @@ def test_ids_continue_from_the_existing_maximum(stub):
 def test_a_build_with_nothing_outstanding_issues_no_updates(stub):
     cursor = StubCursor(pending=0)
     stub(cursor)
-    report = templates.build_templates("otel_slice")
+    report = templates.build_templates("bgl")
 
     assert cursor.update_calls == 0
     assert report["embedded"] == 0
@@ -243,7 +247,7 @@ def test_an_implausible_template_count_is_refused(stub):
 
     stub(StubCursor(pending=templates.MAX_TEMPLATES + 1))
     with pytest.raises(QueryRefused) as excinfo:
-        templates.build_templates("otel_slice", rebuild=True)
+        templates.build_templates("bgl", rebuild=True)
     assert excinfo.value.refusal.code == "too_many_templates"
 
 
@@ -252,7 +256,7 @@ def test_progress_is_reported_as_it_goes(stub):
     seen: list[tuple[int, int]] = []
     stub(StubCursor(pending=templates.EMBED_BATCH * 2))
     templates.build_templates(
-        "otel_slice", rebuild=True, progress=lambda done, total: seen.append((done, total))
+        "bgl", rebuild=True, progress=lambda done, total: seen.append((done, total))
     )
     assert seen
     assert seen[-1][0] == templates.EMBED_BATCH * 2

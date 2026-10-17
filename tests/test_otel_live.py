@@ -152,91 +152,69 @@ def test_auto_complete_never_reaches_object_storage():
     assert db.auto_complete("@frontend", "otel_s3") == []
 
 
-# --- Template embeddings (Task 8) -------------------------------------------
-def test_template_embeddings_cover_every_row_of_the_slice():
-    """Completeness is an honesty requirement.
+# --- The in-place index replaced the materialized slice ----------------------
+def test_the_otel_index_copies_nothing():
+    """The slice used to materialize rows locally; the index does not.
 
-    If embeddings covered only some templates, a semantic search finding nothing
-    would not be evidence that nothing is there.
+    Measured when the change was made: the same coverage costs 465 s rather
+    than 1,324 s to build, 45-60 B/row rather than 155, and no row is copied.
     """
-    from backend.db.templates import templates_status
+    from backend.db.datasets import DatasetKind, resolve
 
-    status = templates_status("otel_slice")
-    if not status.get("exists"):
-        pytest.skip("template embeddings not built")
-
-    assert status["complete"], status
-    assert status["embedded"] == status["templates"]
-    assert status["rows_covered"] > 0
+    dataset = resolve("otel_slice")
+    assert dataset.kind is DatasetKind.EXTERNAL_INDEX
+    assert dataset.search_is_self_contained
 
 
-def test_templates_are_far_fewer_than_rows():
-    """The reduction that makes embedding affordable at all.
+def test_search_on_the_index_returns_real_log_lines():
+    import backend.db as db
+    from backend.db.external import external_index_status
 
-    Measured at build time: 150,557 rows reduced to 768 templates, 196x.
-    """
+    if not external_index_status().get("exists"):
+        pytest.skip("in-place OTel index not built")
+
+    rows = db.search_logs("failed to charge card", dataset="otel_slice", limit=3)
+    assert len(rows) > 0
+    for row in rows:
+        assert row["message"]
+        assert row["service"]
+        assert row["ts"] is not None
+
+
+def test_the_index_discloses_that_rows_came_from_object_storage():
+    """Search is ~1 s rather than ~20 ms because a match re-reads its row from
+    the file. An answer should be able to say why."""
+    import backend.db as db
+    from backend.db.external import external_index_status
+
+    if not external_index_status().get("exists"):
+        pytest.skip("in-place OTel index not built")
+
+    rows = db.search_logs("charge", dataset="otel_slice", limit=2)
+    assert any("object storage" in note for note in rows.stats.notes)
+
+
+def test_the_nanosecond_timestamp_survives_the_driver():
+    """Materializing a raw nanosecond value raises in psycopg2, so the index's
+    timestamp is truncated on the way out."""
+    import backend.db as db
+    from backend.db.external import external_index_status
+
+    if not external_index_status().get("exists"):
+        pytest.skip("in-place OTel index not built")
+
+    rows = db.search_logs("charge", dataset="otel_slice", limit=2)
+    assert rows
+    assert rows[0]["ts"].microsecond is not None
+
+
+def test_no_slice_table_remains():
+    """The materialized slice and its template table are gone."""
     from backend.db.probe import probe_cursor
-    from backend.db.templates import templates_status
-
-    status = templates_status("otel_slice")
-    if not status.get("exists"):
-        pytest.skip("template embeddings not built")
 
     with probe_cursor() as cur:
-        cur.execute("SELECT count(*) AS n FROM otel_slice")
-        rows = int(cur.fetchone()["n"])
-
-    assert status["templates"] < rows / 20
-
-
-def test_semantic_search_finds_what_lexical_search_cannot():
-    """The whole point of the template branch.
-
-    'money conversion problem' shares no word with 'failed to convert shipping
-    cost to currency', so BM25 alone returns nothing.
-    """
-    from backend.db.templates import matched_templates, templates_status
-
-    if not templates_status("otel_slice").get("exists"):
-        pytest.skip("template embeddings not built")
-
-    matches = matched_templates("money conversion problem", "otel_slice", limit=3)
-    assert matches
-    assert all(m["row_count"] > 0 for m in matches)
-    assert all(0 <= m["distance"] <= 2 for m in matches)
-
-
-def test_matched_templates_report_how_much_corpus_they_cover():
-    """A template matching 16,000 rows is a different finding from one
-    matching 1, and the agent has to be able to tell them apart."""
-    from backend.db.templates import matched_templates, templates_status
-
-    if not templates_status("otel_slice").get("exists"):
-        pytest.skip("template embeddings not built")
-
-    matches = matched_templates("failed to charge card", "otel_slice", limit=5)
-    assert matches
-    assert all("row_count" in m and "template" in m for m in matches)
-
-
-def test_fused_search_discloses_that_matching_is_template_level():
-    """A template match describes a kind of event, not an individual line."""
-    import backend.db as db
-    from backend.db import templates
-
-    if not templates.templates_status("otel_slice").get("exists"):
-        pytest.skip("template embeddings not built")
-
-    templates.clear_vector_cache()
-    result = db.search_logs("money conversion problem", dataset="otel_slice", limit=3)
-    assert len(result) > 0
-    assert any("template-level" in note for note in result.stats.notes)
-
-
-def test_openstack_search_still_uses_per_row_embeddings():
-    """The 2,000-row corpus keeps the more precise path."""
-    import backend.db as db
-
-    result = db.search_logs("instance failed to spawn", dataset="openstack", limit=3)
-    assert len(result) > 0
-    assert not any("template-level" in note for note in result.stats.notes)
+        cur.execute(
+            "SELECT count(*) AS n FROM information_schema.tables "
+            "WHERE table_name IN ('otel_slice', 'otel_slice_templates')"
+        )
+        assert int(cur.fetchone()["n"]) == 0

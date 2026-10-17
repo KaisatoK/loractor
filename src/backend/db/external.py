@@ -46,7 +46,7 @@ from psycopg2 import sql
 from backend.db.budget import BUDGET, PROBLEM_SEVERITIES, fits
 from backend.db.datasets import Dataset, resolve
 from backend.db.errors import refuse
-from backend.db.slices import _ensure_dictionaries, row_groups_touched
+from backend.db.corpus import arrival_rate, ensure_dictionaries, row_groups_touched
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +128,6 @@ def plan_external_index(
     the materialized path -- text has to be read either way.
     """
     from datetime import datetime
-
-    from backend.db.slices import arrival_rate
 
     ds = resolve(dataset) if isinstance(dataset, str) else dataset
     begin = datetime.fromisoformat(start.replace(" ", "T"))
@@ -242,7 +240,7 @@ def build_external_index(
         # one does not report a negative size.
         cur.execute("VACUUM")
         baseline = _db_bytes(cur)
-        _ensure_dictionaries(cur)
+        ensure_dictionaries(cur)
 
         severity_list = sql.SQL(", ").join(
             sql.Literal(s) for s in plan.severities
