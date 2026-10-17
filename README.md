@@ -642,8 +642,10 @@ suggestion carries `line_id` in place of `count`.
 | `POST /chats/{chat_id}/run/{run_id}/cancel` | `{cancelled: bool}` |
 
 `status` is `running | done | error | cancelled`. On `done`, `result` carries
-`{answer, tool_results, progress}` — the same payload the backend persists as
-the assistant message. `wait` long-polls (capped at 30s). Starting an
+`{answer, tool_results, progress, elapsed_seconds}` — the answer payload the
+backend persists as the assistant message, plus the run's own wall-clock window
+from accepting the question to finishing (the UI shows it under the answer).
+`wait` long-polls (capped at 30s). Starting an
 investigation for a chat that already has one returns the existing `run_id`.
 `DELETE /chats/{chat_id}` cancels and discards any active run.
 

@@ -53,6 +53,10 @@ class RunState:
     answer: str = ""
     tool_results: list[Any] = field(default_factory=list)
     progress: list[str] = field(default_factory=list)
+    # Wall-clock window from accepting the user's question to the run reaching a
+    # terminal state. Monotonic, so it is immune to clock changes mid-run.
+    started_at: float = field(default_factory=time.monotonic)
+    elapsed_seconds: float | None = None
     cancel: threading.Event = field(default_factory=threading.Event)
     condition: threading.Condition = field(default_factory=threading.Condition)
 
@@ -194,10 +198,12 @@ class RunRegistry:
                     lines.close()  # type: ignore[union-attr]
                 except Exception:  # noqa: BLE001
                     pass
+            run.elapsed_seconds = time.monotonic() - run.started_at
             run.result = {
                 "answer": run.answer,
                 "tool_results": run.tool_results,
                 "progress": run.progress,
+                "elapsed_seconds": round(run.elapsed_seconds, 2),
             }
             try:
                 on_finish(run)

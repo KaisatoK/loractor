@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pyperclip
 import streamlit as st
@@ -15,6 +16,55 @@ def _persist(*args, **kwargs) -> None:
         chat_client.append_message(*args, **kwargs)
     except Exception as err:  # noqa: BLE001
         st.warning(f"Message could not be saved: {err}")
+
+
+def _parse_ts(value) -> datetime | None:
+    """Parse a stored ISO-8601 message timestamp, or ``None`` if unusable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rest = divmod(seconds, 60)
+    return f"{int(minutes)}m {rest:04.1f}s"
+
+
+def _answer_elapsed(history: list[dict], idx: int, item: dict) -> float | None:
+    """Seconds from receiving the user's question to this answer being ready.
+
+    Freshly finished runs carry the worker's own monotonic measurement
+    (``elapsed_seconds``). For history loaded from the backend it is derived from
+    the stored ``created_at`` of the question and of the answer — the user turn
+    is persisted when the investigation is accepted and the assistant turn when
+    it completes, so the difference is the same window.
+    """
+    live = item.get("elapsed_seconds")
+    if live is not None:
+        return float(live)
+    if item.get("reframed_for"):
+        # Reframing reuses existing evidence; timing it against the original
+        # question would overstate the work done.
+        return None
+    answered = _parse_ts(item.get("created_at"))
+    if answered is None:
+        return None
+    asked = next(
+        (
+            _parse_ts(h.get("created_at"))
+            for h in reversed(history[:idx])
+            if h.get("role") == "user"
+        ),
+        None,
+    )
+    if asked is None:
+        return None
+    return max(0.0, (answered - asked).total_seconds())
 
 
 @st.fragment(key="copy_to_clipboard_button")
@@ -99,6 +149,7 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
                 "content": result.get("answer", ""),
                 "progress": result.get("progress") or [],
                 "tool_results": result.get("tool_results") or [],
+                "elapsed_seconds": result.get("elapsed_seconds"),
             }
         )
         # Full rerun so the completed answer renders through the history loop
@@ -238,6 +289,9 @@ def main_page():
                         "same evidence, no new collection."
                     )
                 render_answer(st, item["content"], item.get("tool_results"))
+                elapsed = _answer_elapsed(current_chat["history"], idx, item)
+                if elapsed is not None:
+                    st.caption(f"Answered in {_format_duration(elapsed)}")
                 if item.get("tool_results"):
                     # Never offer the role the answer is already written for:
                     # originals use the chat's role, reframed items their target.

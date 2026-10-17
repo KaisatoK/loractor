@@ -388,3 +388,93 @@ def test_run_endpoints_require_auth_and_ownership(client, api_module, monkeypatc
 
     release.set()
     _poll_until_done(client, owner_headers, "c1", run_id)
+
+
+# --- Answer latency -----------------------------------------------------------
+
+
+def test_run_result_carries_the_elapsed_window():
+    """The worker measures its own wall-clock window and reports it."""
+    registry = RunRegistry()
+
+    def produce(_run):
+        time.sleep(0.05)
+        yield _event(type="messages", content="hi")
+
+    run = registry.start(
+        user_id="u", chat_id="c", produce=produce, on_finish=lambda _r: None
+    )
+    _wait_terminal(registry, run.run_id)
+
+    assert run.status == DONE
+    assert run.elapsed_seconds >= 0.05
+    assert run.result["elapsed_seconds"] == round(run.elapsed_seconds, 2)
+
+
+def test_elapsed_window_is_reported_for_failed_runs_too():
+    registry = RunRegistry()
+
+    def produce(_run):
+        yield _event(type="messages", content="partial")
+        raise RuntimeError("boom")
+
+    run = registry.start(
+        user_id="u", chat_id="c", produce=produce, on_finish=lambda _r: None
+    )
+    _wait_terminal(registry, run.run_id)
+
+    assert run.status == ERROR
+    assert run.result["elapsed_seconds"] is not None
+
+
+def test_poll_payload_exposes_elapsed_on_completion(client, api_module, monkeypatch):
+    _user, headers = _make_user("latency")
+    _create_chat(client, headers)
+
+    def quick_stream(_req, _user_id):
+        yield _event(type="messages", content="answer")
+
+    monkeypatch.setattr(api_module, "stream_events", quick_stream)
+    run_id = client.post(
+        "/chats/c1/investigate",
+        json={
+            "role": "engineer",
+            "effort": "Medium",
+            "question": "q",
+            "history": [{"role": "user", "content": "q"}],
+        },
+        headers=headers,
+    ).json()["run_id"]
+
+    payload = _poll_until_done(client, headers, "c1", run_id)
+    assert payload["result"]["elapsed_seconds"] >= 0
+
+
+# --- UI derivation ------------------------------------------------------------
+
+
+def test_ui_derives_latency_from_stored_message_timestamps():
+    from ui.main_page.main_page import _answer_elapsed, _format_duration
+
+    history = [
+        {"role": "user", "content": "q", "created_at": "2026-10-17T10:00:00+00:00"},
+        {
+            "role": "assistant",
+            "content": "a",
+            "created_at": "2026-10-17T10:01:03.5+00:00",
+        },
+    ]
+    assert _answer_elapsed(history, 1, history[1]) == 63.5
+    assert _format_duration(63.5) == "1m 03.5s"
+    assert _format_duration(4.26) == "4.3s"
+
+    # A live-finished run's own measurement wins over derivation.
+    assert _answer_elapsed(history, 1, {"elapsed_seconds": 2.5}) == 2.5
+    # Reframes and timestamp-less messages report nothing rather than a guess.
+    assert (
+        _answer_elapsed(
+            history, 1, {"created_at": "2026-10-17T10:01:03.5+00:00", "reframed_for": "manager"}
+        )
+        is None
+    )
+    assert _answer_elapsed(history, 1, {"role": "assistant"}) is None
