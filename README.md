@@ -659,7 +659,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 671 passed, 46 skipped`. Three failures
+> The offline suite reports `5 failed, 746 passed, 57 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and

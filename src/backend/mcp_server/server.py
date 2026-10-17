@@ -168,7 +168,7 @@ def count_by_category_tool(start_time: str, end_time: str, type: str = "general"
     """Count log rows per severity, overall or broken down by another field.
 
     Inputs: start_time, end_time ('YYYY-MM-DD HH:MM:SS'), type
-    (general|service|entity_id|event_id), dataset, category (optional), limit
+    (general|service|entity_id|template|event_id), dataset, category (optional), limit
     (1-200, default 50). Returns kind=aggregate rows {[<type>,] severity, count}
     computed in the database over every matching row: a measured frequency for the
     stated window (row counts, not incidents); `query_stats.approximate` marks a

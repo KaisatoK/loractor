@@ -37,9 +37,10 @@ DERIVED_TOOL_NAME = "priority_score"
 
 # Group columns that identify a "problem", in preference order. The dataset
 # registry (``backend.db.datasets``) returns canonical names (``service``,
-# ``entity_id``, ``severity``); ``component``/``pid``/``category`` are the
-# pre-registry OpenStack names, kept so stored history still ranks.
-DIMENSIONS = ("event_id", "service", "component", "team", "entity_id", "pid")
+# ``entity_id``, ``severity``, ``template``); ``event_id`` exists only where a
+# corpus has one, and ``component``/``pid``/``category`` are the pre-registry
+# OpenStack names, kept so stored history still ranks.
+DIMENSIONS = ("event_id", "template", "service", "component", "team", "entity_id", "pid")
 SEVERITY_COLUMNS = ("severity", "category")
 COMPONENT_COLUMNS = ("service", "component")
 # Compared upper-cased. Every informational value a registered corpus declares

@@ -49,7 +49,7 @@ TOOL_CATALOG = {
     "count_by_category_tool": (
         "TIER index|remote. CHEAPEST aggregate: reads only the timestamp, "
         "severity and grouping columns, never message text; params: dataset, "
-        "start_time, end_time, type (general|service|entity_id|event_id), "
+        "start_time, end_time, type (general|service|entity_id|template|event_id), "
         "category, limit. Use this FIRST to find where the problem is before "
         "paying to search text."
     ),

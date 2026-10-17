@@ -89,12 +89,14 @@ class CountByCategory(_Windowed):
     """Counts grouped by severity, optionally broken down by another field."""
 
     type: Annotated[
-        Literal["general", "service", "entity_id", "event_id"],
+        Literal["general", "service", "entity_id", "template", "event_id"],
         Field(
             description=(
                 "Breakdown dimension. 'general' counts by severity only; the "
-                "others add that field. 'entity_id' is the correlation handle "
-                "(process id on OpenStack, trace id on OTel)."
+                "others add that field. 'template' is the parsed event template "
+                "(a recurring pattern); 'event_id' only where the corpus has one. "
+                "'entity_id' is the correlation handle (process id on OpenStack, "
+                "node on BGL, trace id on OTel)."
             )
         ),
     ] = "general"

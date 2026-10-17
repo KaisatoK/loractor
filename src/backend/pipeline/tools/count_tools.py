@@ -17,6 +17,7 @@ _LABELS = {
     "service": "services",
     "entity_id": "entities",
     "event_id": "event ids",
+    "template": "event templates",
 }
 
 
