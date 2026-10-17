@@ -12,10 +12,10 @@ from langchain.tools import ToolRuntime, tool
 from backend.db import (
     compare_periods,
     get_log_by_record_id,
-    search_logs,
     top_by_field,
 )
 from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.db.query import search_with_total
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import (
     ComparePeriods,
@@ -25,6 +25,28 @@ from backend.pipeline.tools.schemas import (
 )
 
 
+def search_operation(query_text: str, dataset: str, category: str | None,
+                     start_time: str | None, end_time: str | None) -> str:
+    """The search's human label, shared by every transport."""
+    operation = f"search {dataset} messages for '{query_text}'"
+    if category:
+        operation += f" with severity '{category}'"
+    if start_time and end_time:
+        operation += f" from {start_time} to {end_time}"
+    return operation
+
+
+def search_filters(query_text: str, category: str | None,
+                   start_time: str | None, end_time: str | None) -> dict:
+    """The applied filters; the window keys feed the answer's data scope."""
+    return {
+        "query_text": query_text,
+        "category": category,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+
 @tool(args_schema=SearchLogs)
 def search_logs_tool(
     query_text: str,
@@ -32,26 +54,29 @@ def search_logs_tool(
     category: str | None = None,
     dataset: str = DEFAULT_DATASET_ID,
     limit: int = 10,
+    start_time: str | None = None,
+    end_time: str | None = None,
 ) -> dict:
     """Search message text on an indexed corpus; put severity in category.
 
-    Reads the inverted index, so it never scans the remote files. On the OTel
-    corpus use the indexed slice -- the raw remote tier has no index. Returns
+    Optionally within a time window (start_time and end_time together). Reads
+    the inverted index, so it never scans the remote files. On the OTel corpus
+    use the indexed slice -- the raw remote tier has no index. Returns
     kind=search: at most ``limit`` example rows ranked by relevance, plus
-    ``truncated``. Examples never measure frequency; use count_by_category_tool.
+    ``total_matches`` (every row matching the same words, severity and window)
+    and an exact ``truncated``. Examples never measure frequency; use
+    count_by_category_tool.
     """
-    operation = f"search {dataset} messages for '{query_text}'"
-    if category:
-        operation += f" with severity '{category}'"
-
     return execute_database_tool(
         runtime=runtime,
-        operation=operation,
-        function=lambda: search_logs(query_text, dataset, category, limit),
+        operation=search_operation(query_text, dataset, category, start_time, end_time),
+        function=lambda: search_with_total(
+            query_text, dataset, category, limit, start_time, end_time
+        ),
         kind="search",
         dataset=dataset,
         limit=limit,
-        filters={"query_text": query_text, "category": category},
+        filters=search_filters(query_text, category, start_time, end_time),
     )
 
 

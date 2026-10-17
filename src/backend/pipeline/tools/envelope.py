@@ -230,6 +230,7 @@ def run_enveloped(
         filters=filters,
         limit=limit,
         queries=queries,
+        total_matches=getattr(data, "total_matches", None),
         complete=complete,
         query_stats=_stats_of(data),
     )

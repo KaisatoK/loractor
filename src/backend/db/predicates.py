@@ -32,7 +32,9 @@ Bucket = Literal["second", "minute", "hour", "day"]
 BUCKETS: tuple[str, ...] = ("second", "minute", "hour", "day", "week", "month")
 
 
-def ts_filter(dataset: Dataset, window: TimeWindow) -> tuple[sql.Composable, list]:
+def ts_filter(
+    dataset: Dataset, window: TimeWindow, alias: str | None = None
+) -> tuple[sql.Composable, list]:
     """``ts >= start AND ts < end``, cast the way the dataset needs.
 
     Half-open so adjacent windows tile without double-counting a boundary row.
@@ -40,10 +42,16 @@ def ts_filter(dataset: Dataset, window: TimeWindow) -> tuple[sql.Composable, lis
     OTel column are all ``timestamptz``, but a corpus may declare a naive
     ``timestamp``, and using the wrong one either errors or silently compares
     against a shifted instant.
+
+    ``alias`` qualifies the column (``t."Timestamp"``) for queries that join an
+    index to its table, where an unqualified name could be ambiguous.
     """
     cast = sql.SQL(dataset.ts_cast)
+    ts = dataset.sql_for("ts")
+    if alias:
+        ts = sql.SQL("{a}.{col}").format(a=sql.Identifier(alias), col=ts)
     clause = sql.SQL("{ts} >= %s::{cast} AND {ts} < %s::{cast}").format(
-        ts=dataset.sql_for("ts"), cast=cast
+        ts=ts, cast=cast
     )
     return clause, [window.start, window.end]
 

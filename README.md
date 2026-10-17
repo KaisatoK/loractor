@@ -668,6 +668,7 @@ confidence tests below are skipped unless enabled.
 | `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (eleven tools), MCP server validation (no auto-complete tool) |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
+| `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
 | `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
@@ -989,7 +990,9 @@ unsupported log facts:
    (`window_start`/`window_end`); choose windows from it instead of guessing.
    Pass a `dataset` id (`openstack` is the default; `bgl`, `otel_s3`,
    `otel_slice`) to every log tool; there are no table names. Use
-   `search_logs_tool` for message-content searches on an indexed corpus. Use
+   `search_logs_tool` for message-content searches on an indexed corpus,
+   optionally within a time window (`start_time` and `end_time` together); its
+   `total_matches` counts every matching line beside the examples returned. Use
    `get_log_by_line_id_tool` when the user supplies a `Line ID: n (dataset)`
    reference, passing both `line_id` and `dataset`.
 3. Use `get_data_tool` to discover a field's real values (services, entity ids,

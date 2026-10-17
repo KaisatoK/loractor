@@ -395,7 +395,12 @@ def has_template_vectors(dataset: Dataset | str) -> bool:
     return available
 
 
-def template_branch(dataset: Dataset) -> tuple[sql.Composable, list]:
+def template_branch(
+    dataset: Dataset,
+    *,
+    join: sql.Composable | None = None,
+    where: sql.Composable | None = None,
+) -> tuple[sql.Composable, list]:
     """The semantic branch: query -> nearest templates -> matching rows.
 
     Returns SQL producing ``(rid, rank)`` so it can be fused with the lexical
@@ -405,6 +410,11 @@ def template_branch(dataset: Dataset) -> tuple[sql.Composable, list]:
     a template id on every row. The template column is already indexed, and the
     alternative would mean rewriting the base table whenever templates are
     rebuilt.
+
+    ``join`` and ``where`` filter the matching rows (severity, time window) and
+    refer to the index relation as ``r``; their parameters are the caller's.
+    Filtering here, not after the fusion, keeps a branch's top rows from being
+    spent on rows the filters then drop.
     """
     table = template_table(dataset)
     record_id = dataset.sql_for("record_id")
@@ -421,6 +431,8 @@ def template_branch(dataset: Dataset) -> tuple[sql.Composable, list]:
             LIMIT {width}
         ) m
         JOIN {relation} r ON {template_expr} = m.template_text
+        {join}
+        {where}
     """).format(
         record_id=record_id,
         templates=sql.Identifier(table),
@@ -430,6 +442,8 @@ def template_branch(dataset: Dataset) -> tuple[sql.Composable, list]:
         else template_col,
         max_dist=sql.Literal(MAX_TEMPLATE_DISTANCE),
         width=sql.Literal(TEMPLATE_BRANCH_WIDTH),
+        join=join or sql.SQL(""),
+        where=where or sql.SQL(""),
     )
     return branch, []
 

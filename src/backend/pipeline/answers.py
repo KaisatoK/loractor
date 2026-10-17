@@ -193,11 +193,17 @@ def _fmt(value: Any) -> str:
 
 def _truncation(record: dict) -> str:
     truncated = record.get("truncated")
+    total = record.get("total_matches")
+    returned = record.get("returned") or record.get("row_count")
     if truncated is True:
-        total = record.get("total_matches")
         more = f" of {total}" if total is not None else ""
-        return f"truncated: yes ({record.get('returned') or record.get('row_count')}{more} rows returned; more matching rows exist)"
+        return f"truncated: yes ({returned}{more} rows returned; more matching rows exist)"
     if truncated is False:
+        # A counted total is worth stating even when nothing was cut: "3 of 3"
+        # says these are all the matches, which "truncated: no" alone leaves
+        # for the reader to infer.
+        if total is not None:
+            return f"truncated: no ({returned or 0} of {total} matching)"
         return "truncated: no"
     return "truncated: unknown (not reported by this tool)"
 

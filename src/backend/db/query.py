@@ -1,17 +1,41 @@
 """Search and single-row fetch.
 
-Search has two shapes, chosen by declared capability rather than by dataset id:
+Search has four shapes, chosen by declared capability rather than by dataset id:
 
+* **Lexical** -- corpora with only an inverted index use one BM25 branch. This
+  is the OpenStack and BGL path today.
+* **Template** -- corpora with template embeddings fuse the BM25 branch with a
+  template-level semantic branch by reciprocal rank fusion.
 * **Hybrid** -- corpora with a per-row embedding column fuse a BM25 branch and a
-  vector branch with reciprocal rank fusion. This is the OpenStack path and it
-  is preserved exactly, down to the ``1/(60 + rank)`` weighting.
-* **Lexical** -- corpora with only an inverted index use the BM25 branch alone.
-  This is the OTel slice, which deliberately has no per-row embeddings: there is
-  no budget to embed a billion log bodies, and template-level embeddings
-  (:mod:`backend.db.templates`) cover semantic search instead.
+  vector branch, with the same ``1/(60 + rank)`` weighting.
+* **Index only** -- an index built in place over remote files (``otel_slice``)
+  answers on its own; there is no base table to join back to.
 
-Search always runs against the **index relation**, never the base table or the
-remote files, so a text query never reaches S3.
+Search runs against the **index relation**, so a text query never scans S3.
+
+Filters go inside the ranked branch
+-----------------------------------
+
+Each branch keeps only its top ``BRANCH_DEPTH`` rows before fusion. Severity
+used to be applied *after* that cut, on the joined table, so a severity whose
+rows ranked below the top 100 vanished. Measured: OpenStack 'instance' at ERROR
+returned 0 of its 24 matches, and BGL 'error' at FATAL 0 of 345,086. Severity is
+now matched in the index (``"Level" @@ %s``) inside every branch, and a time
+window joins the base table inside the branch. The local index does not carry
+the timestamp, so the window needs that join. Measured on BGL, the
+join was correct and kept BM25 ranking: 43 ms for the whole seven-month span. A
+``LineId IN (subquery)`` shape was equally correct and fast; the join was kept
+because it reads the same whatever the record id. The outer query keeps both
+filters as well, so a row outside them can never be returned.
+
+Counting the matches
+--------------------
+
+:func:`search_with_total` runs the search, then :func:`count_search_matches`
+with the same match condition and filters and no ``LIMIT``, so a result can say
+"10 shown of 194" and ``truncated`` is exact. Without a window the count reads
+only the index (~2 ms). Semantic matches have no countable match set, so a
+search that fuses a semantic branch reports ``total_matches`` as unknown.
 """
 
 from __future__ import annotations
@@ -27,7 +51,8 @@ from backend.db.connection import query_runner
 from backend.db.datasets import Capability, Dataset, resolve
 from backend.db import templates
 from backend.db.errors import refuse
-from backend.db.stats import QueryStats
+from backend.db.stats import QueryResult, QueryStats
+from backend.db.windows import TimeWindow, build_window
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +80,13 @@ _SEARCH_NOISE = frozenset({
     "the", "their", "then", "there", "these", "this", "to", "was", "were",
     "what", "when", "where", "which", "why", "with",
 })
+
+# Search modes whose rows come partly from a semantic branch. Their matches have
+# no countable set, so ``total_matches`` stays unknown.
+SEMANTIC_MODES = frozenset({"hybrid", "template"})
+
+# Alias of the base table joined inside a ranked branch for the window.
+_BRANCH_TABLE = "bt"
 
 
 def search_terms(query_text: str) -> tuple[str, ...]:
@@ -93,52 +125,24 @@ def _display_fields(dataset: Dataset) -> list[tuple[str, sql.Composable]]:
     ]
 
 
-@query_runner
-def search_logs(
-    query_text: str,
-    dataset: str | None = None,
-    severity: str | None = None,
-    limit: int = 10,
-) -> tuple[sql.Composable, list, QueryStats]:
-    """Rank log lines by relevance to ``query_text``.
+# --- Shared pieces ------------------------------------------------------------
+def search_mode(dataset: Dataset) -> str:
+    """Which search shape a dataset gets: index_only, hybrid, template or lexical.
 
-    No time window is required: this reads the inverted index, whose size is
-    already bounded by whatever built it, so there is no scan to constrain.
+    Chosen by what the corpus has, not by its name. Per-row embeddings win when
+    they exist; template embeddings are the affordable substitute at scale; BM25
+    alone is the floor. ``has_template_vectors`` is cached per process.
     """
-    ds = resolve(dataset)
-    pred.require(ds, Capability.BM25, "full-text search")
+    if dataset.search_is_self_contained:
+        return "index_only"
+    if dataset.supports(Capability.VECTOR):
+        return "hybrid"
+    if dataset.supports(Capability.TEMPLATES) and templates.has_template_vectors(dataset):
+        return "template"
+    return "lexical"
 
-    stats = QueryStats(dataset=ds.id, approximate=False)
 
-    # Three search shapes, chosen by what the corpus actually has rather than by
-    # its name. Per-row embeddings win when they exist; template embeddings are
-    # the affordable substitute at scale; BM25 alone is the floor.
-    hybrid = ds.supports(Capability.VECTOR)
-    templated = (
-        not hybrid
-        and ds.supports(Capability.TEMPLATES)
-        and templates.has_template_vectors(ds)
-    )
-    logger.debug(
-        'Searching %s for "%s" (severity=%s, mode=%s)',
-        ds.id,
-        query_text,
-        severity,
-        "hybrid" if hybrid else "template" if templated else "lexical",
-    )
-
-    # An external index answers on its own: there is no base table to join back
-    # to, and the index materializes columns from the source files itself. So
-    # the fusion machinery below -- which exists to join ranked ids against a
-    # table -- has nothing to join to, and would be wrong rather than slow.
-    if ds.search_is_self_contained:
-        return _search_index_only(ds, query_text, severity, limit, stats)
-
-    record_id = ds.sql_for("record_id")
-    message = ds.sql_for("message")
-    index = ds.search_relation()
-    relation = ds.scan_relation()
-
+def _terms_or_refuse(query_text: str) -> tuple[str, ...]:
     terms = search_terms(query_text)
     if not terms:
         raise refuse(
@@ -147,46 +151,179 @@ def search_logs(
             "'timeout' or 'connection refused'.",
             code="empty_query",
         )
+    return terms
 
-    # One fuzzy sub-query per word, combined with ts_any, rather than handing the
-    # whole phrase to ts_levenshtein.
-    #
-    # The index stores *tokens*, so a multi-word argument is looked up as a
-    # single token and matches nothing. Measured against the slice: 'order'
-    # matched 58,199 rows while 'failed to place order' matched 0 -- and because
-    # this is the only branch for a dataset without embeddings, every multi-word
-    # search returned empty. ts_any keeps recall (any word may match) and lets
-    # BM25 float the rows matching more words to the top, which is what makes a
-    # natural-language query behave sensibly without an embedding model.
-    matcher = sql.SQL("ts_any([{terms}])").format(
+
+def _matcher(terms: tuple[str, ...]) -> sql.Composable:
+    """One fuzzy sub-query per word, combined with ``ts_any``.
+
+    The index stores *tokens*, so a multi-word argument is looked up as a
+    single token and matches nothing. Measured against the slice: 'order'
+    matched 58,199 rows while 'failed to place order' matched 0. ``ts_any``
+    keeps recall (any word may match) and lets BM25 float the rows matching more
+    words to the top.
+    """
+    return sql.SQL("ts_any([{terms}])").format(
         terms=sql.SQL(", ").join(
             sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder())
             for _ in terms
         )
     )
 
+
+def search_window(
+    dataset: Dataset, start_time: str | None, end_time: str | None
+) -> TimeWindow | None:
+    """The optional search window: both bounds or neither, validated as usual."""
+    if start_time is None and end_time is None:
+        return None
+    if start_time is None or end_time is None:
+        raise refuse(
+            "A search window needs both start_time and end_time.",
+            "Give both bounds, or neither to search the whole index.",
+            code="half_window",
+        )
+    return build_window(dataset, start_time, end_time)
+
+
+def _qualified(alias: str, column: sql.Composable) -> sql.Composable:
+    return sql.SQL("{a}.{c}").format(a=sql.Identifier(alias), c=column)
+
+
+def _branch_filters(
+    dataset: Dataset,
+    alias: str,
+    severity: str | None,
+    window: TimeWindow | None,
+) -> tuple[sql.Composable, list[sql.Composable], list]:
+    """``(join, where clauses, params)`` filtering one ranked branch.
+
+    ``alias`` names the index relation in that branch. Severity is matched in
+    the index when the corpus indexes it verbatim -- no join needed -- and
+    otherwise on the base table. A window always needs the base table, since
+    the local index does not carry the timestamp.
+    """
+    _, severity_params = pred.severity_filter(dataset, severity)  # validates
+    clauses: list[sql.Composable] = []
+    params: list = []
+    needs_table = window is not None
+
+    if severity_params:
+        field = dataset.field("severity")
+        if field.text_indexed:
+            clauses.append(
+                sql.SQL("{col} @@ %s").format(
+                    col=_qualified(alias, dataset.sql_for("severity"))
+                )
+            )
+        else:
+            needs_table = True
+            clauses.append(
+                sql.SQL("{col} = %s").format(
+                    col=_qualified(_BRANCH_TABLE, dataset.sql_for("severity"))
+                )
+            )
+        params.extend(severity_params)
+
+    if window is not None:
+        clause, window_params = pred.ts_filter(dataset, window, alias=_BRANCH_TABLE)
+        clauses.append(clause)
+        params.extend(window_params)
+
+    join: sql.Composable = sql.SQL("")
+    if needs_table:
+        record_id = dataset.sql_for("record_id")
+        join = sql.SQL("JOIN {relation} {bt} ON {bt_id} = {idx_id}").format(
+            relation=dataset.scan_relation(),
+            bt=sql.Identifier(_BRANCH_TABLE),
+            bt_id=_qualified(_BRANCH_TABLE, record_id),
+            idx_id=_qualified(alias, record_id),
+        )
+    return join, clauses, params
+
+
+def _and(clauses: list[sql.Composable], *, prefix: str) -> sql.Composable:
+    """Clauses joined with AND, after ``prefix`` ('WHERE' or 'AND'); empty if none."""
+    if not clauses:
+        return sql.SQL("")
+    return sql.SQL(prefix + " ") + sql.SQL(" AND ").join(clauses)
+
+
+# --- Search ---------------------------------------------------------------------
+@query_runner
+def search_logs(
+    query_text: str,
+    dataset: str | None = None,
+    severity: str | None = None,
+    limit: int = 10,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Rank log lines by relevance to ``query_text``.
+
+    The window is optional: search reads the inverted index, whose size is
+    already bounded by whatever built it, so a window narrows the question
+    rather than bounding the cost. Use :func:`search_with_total` to also count
+    every match.
+    """
+    ds = resolve(dataset)
+    pred.require(ds, Capability.BM25, "full-text search")
+    terms = _terms_or_refuse(query_text)
+    window = search_window(ds, start_time, end_time)
+
+    stats = QueryStats(dataset=ds.id, approximate=False)
+    if window is not None:
+        stats.window_seconds = window.seconds
+
+    mode = search_mode(ds)
+    logger.debug(
+        'Searching %s for "%s" (severity=%s, window=%s, mode=%s)',
+        ds.id,
+        query_text,
+        severity,
+        f"{window.start}..{window.end}" if window else None,
+        mode,
+    )
+
+    # An external index answers on its own: there is no base table to join back
+    # to, and the index materializes columns from the source files itself. So
+    # the fusion machinery below -- which exists to join ranked ids against a
+    # table -- has nothing to join to, and would be wrong rather than slow.
+    if mode == "index_only":
+        return _search_index_only(ds, terms, severity, window, limit, stats)
+
+    record_id = ds.sql_for("record_id")
+    message = ds.sql_for("message")
+    index = ds.search_relation()
+    relation = ds.scan_relation()
+    matcher = _matcher(terms)
+
+    lex_join, lex_clauses, lex_params = _branch_filters(ds, "i", severity, window)
     lexical = sql.SQL("""
-        SELECT {record_id} AS rid,
-               ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
+        SELECT rid, ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
         FROM (
-            SELECT {record_id}, BM25({index}.tableoid) AS s
-            FROM {index}
-            WHERE {message} @@ {matcher}
+            SELECT {idx_id} AS rid, BM25({i}.tableoid) AS s
+            FROM {index} {i} {join}
+            WHERE {msg} @@ {matcher} {filters}
             ORDER BY s DESC
             LIMIT {depth}
         ) lex
     """).format(
-        record_id=record_id,
+        idx_id=_qualified("i", record_id),
+        i=sql.Identifier("i"),
         index=index,
-        message=message,
+        join=lex_join,
+        msg=_qualified("i", message),
         matcher=matcher,
+        filters=_and(lex_clauses, prefix="AND"),
         depth=sql.Literal(BRANCH_DEPTH),
     )
-    params: list = list(terms)
+    params: list = [*terms, *lex_params]
 
-    if hybrid:
+    if mode == "hybrid":
         # The embedding is computed inside SereneDB; the model name and
         # dimension are code-owned configuration, not caller input.
+        vec_join, vec_clauses, vec_params = _branch_filters(ds, "i", severity, window)
         fused = sql.SQL("""
             WITH query_embedding AS (
                 SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
@@ -194,11 +331,11 @@ def search_logs(
             fused AS (
                 {lexical}
                 UNION ALL
-                SELECT {record_id} AS rid,
-                       ROW_NUMBER() OVER (ORDER BY dist) AS rank
+                SELECT rid, ROW_NUMBER() OVER (ORDER BY dist) AS rank
                 FROM (
-                    SELECT {record_id}, embedding <=> q.emb AS dist
-                    FROM {index}, query_embedding q
+                    SELECT {idx_id} AS rid, {i}.embedding <=> q.emb AS dist
+                    FROM {index} {i} {join} CROSS JOIN query_embedding q
+                    {filters}
                     ORDER BY dist
                     LIMIT {depth}
                 ) vec
@@ -207,14 +344,17 @@ def search_logs(
             model=sql.Literal(EMBEDDING_MODEL),
             dim=sql.Literal(EMBEDDING_DIMENSION),
             lexical=lexical,
-            record_id=record_id,
+            idx_id=_qualified("i", record_id),
+            i=sql.Identifier("i"),
             index=index,
+            join=vec_join,
+            filters=_and(vec_clauses, prefix="WHERE"),
             depth=sql.Literal(BRANCH_DEPTH),
         )
-        # ai_embed's placeholder comes first in the composed statement, then
-        # one placeholder per lexical term.
-        params = [query_text, *terms]
-    elif templated:
+        # ai_embed's placeholder comes first in the composed statement, then the
+        # lexical branch's, then the vector branch's filters.
+        params = [query_text, *params, *vec_params]
+    elif mode == "template":
         # Template-level semantic branch: the query is matched against the
         # *shapes* of messages, then every row of a matching shape is retrieved.
         #
@@ -225,7 +365,10 @@ def search_logs(
         # invisible to BM25. The lexical branch discriminates -- it sees each
         # row's full text, which a template cannot, since all rows of one
         # template look identical to it.
-        template_sql, _ = templates.template_branch(ds)
+        tpl_join, tpl_clauses, tpl_params = _branch_filters(ds, "r", severity, window)
+        template_sql, _ = templates.template_branch(
+            ds, join=tpl_join, where=_and(tpl_clauses, prefix="WHERE")
+        )
         fused = sql.SQL("""
             WITH query_embedding AS (
                 SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
@@ -241,7 +384,7 @@ def search_logs(
             lexical=lexical,
             template_branch=template_sql,
         )
-        params = [query_text, *terms]
+        params = [query_text, *params, *tpl_params]
         stats.notes.append("semantic matching is template-level, not per-row")
     else:
         fused = sql.SQL("WITH fused AS ({lexical})").format(lexical=lexical)
@@ -257,11 +400,20 @@ def search_logs(
         for name, column in _display_fields(ds)
     ]
 
-    severity_clause, severity_params = pred.severity_filter(ds, severity)
+    # The outer filters repeat the branch filters on the joined row: a guard, so
+    # a row outside them can never be returned whatever a branch did.
+    outer_clauses: list[sql.Composable] = []
+    outer_params: list = []
+    _, severity_params = pred.severity_filter(ds, severity)
     if severity_params:
-        severity_clause = sql.SQL("WHERE t.{col} = %s").format(
-            col=ds.sql_for("severity")
+        outer_clauses.append(
+            sql.SQL("{col} = %s").format(col=_qualified("t", ds.sql_for("severity")))
         )
+        outer_params.extend(severity_params)
+    if window is not None:
+        clause, window_params = pred.ts_filter(ds, window, alias="t")
+        outer_clauses.append(clause)
+        outer_params.extend(window_params)
 
     query = sql.SQL("""
         {fused}
@@ -269,7 +421,7 @@ def search_logs(
                SUM(1.0 / ({k} + f.rank)) AS relevance
         FROM fused f
         JOIN {relation} t ON t.{record_id} = f.rid
-        {severity_clause}
+        {outer_filters}
         GROUP BY {columns_bare}
         ORDER BY relevance DESC
         {limit}
@@ -279,14 +431,88 @@ def search_logs(
         k=sql.Literal(RRF_K),
         relation=relation,
         record_id=record_id,
-        severity_clause=severity_clause,
+        outer_filters=_and(outer_clauses, prefix="WHERE"),
         columns_bare=sql.SQL(", ").join(
             sql.SQL("t.{col}").format(col=column)
             for _, column in _display_fields(ds)
         ),
         limit=pred.bounded_limit(ds, limit),
     )
-    return query, params + severity_params, stats
+    return query, params + outer_params, stats
+
+
+@query_runner
+def count_search_matches(
+    query_text: str,
+    dataset: str | None = None,
+    severity: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Every row :func:`search_logs` could rank: the same match and filters, no LIMIT.
+
+    The lexical match only. Without a window this reads the index alone
+    (measured ~2 ms on 4.7M BGL rows); a window joins the base table as the
+    ranked branch does (~37 ms for BGL's whole span).
+    """
+    ds = resolve(dataset)
+    pred.require(ds, Capability.BM25, "full-text search")
+    terms = _terms_or_refuse(query_text)
+    window = search_window(ds, start_time, end_time)
+    stats = QueryStats(dataset=ds.id, approximate=False)
+
+    if ds.search_is_self_contained:
+        clauses, params = _index_only_filters(ds, terms, severity, window)
+        query = sql.SQL("SELECT count(*) AS n FROM {index} WHERE {where}").format(
+            index=ds.search_relation(), where=sql.SQL(" AND ").join(clauses)
+        )
+        return query, params, stats
+
+    join, clauses, filter_params = _branch_filters(ds, "i", severity, window)
+    query = sql.SQL("""
+        SELECT count(*) AS n
+        FROM {index} {i} {join}
+        WHERE {msg} @@ {matcher} {filters}
+    """).format(
+        index=ds.search_relation(),
+        i=sql.Identifier("i"),
+        join=join,
+        msg=_qualified("i", ds.sql_for("message")),
+        matcher=_matcher(terms),
+        filters=_and(clauses, prefix="AND"),
+    )
+    return query, [*terms, *filter_params], stats
+
+
+def search_with_total(
+    query_text: str,
+    dataset: str | None = None,
+    severity: str | None = None,
+    limit: int = 10,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> QueryResult:
+    """Search, then count every match, so ``truncated`` is exact.
+
+    Two statements, both captured for the tool result's ``query``. A refused
+    search is returned as is, uncounted. A search that fuses a semantic branch
+    reports ``total_matches`` as unknown: its rows are not a countable set.
+    """
+    result = search_logs(query_text, dataset, severity, limit, start_time, end_time)
+    if result.refused:
+        return result
+    if search_mode(resolve(dataset)) in SEMANTIC_MODES:
+        result.stats.notes.append(
+            "total_matches not counted: semantic matches are not a countable set"
+        )
+        return result
+
+    counted = count_search_matches(query_text, dataset, severity, start_time, end_time)
+    if counted.refused or not counted:
+        return result
+    result.total_matches = int(counted[0]["n"])
+    result.stats.elapsed_ms += counted.stats.elapsed_ms
+    return result
 
 
 @query_runner
@@ -326,10 +552,42 @@ def get_log_by_record_id(
     return query, [record_id], QueryStats(dataset=ds.id)
 
 
+# --- The in-place index ---------------------------------------------------------
+def _index_only_filters(
+    dataset: Dataset,
+    terms: tuple[str, ...],
+    severity: str | None,
+    window: TimeWindow | None,
+) -> tuple[list[sql.Composable], list]:
+    """Match, severity and window clauses read straight off a self-contained index.
+
+    Severity is matched through the index, which carries it verbatim. The
+    timestamp is not indexed: each candidate row's value is re-read from its
+    source file, so a window here is untested against a built index and may be
+    slow (AGENTS.md).
+    """
+    clauses = [
+        sql.SQL("{m} @@ {matcher}").format(
+            m=dataset.sql_for("message"), matcher=_matcher(terms)
+        )
+    ]
+    params: list = list(terms)
+    _, severity_params = pred.severity_filter(dataset, severity)
+    if severity_params:
+        clauses.append(sql.SQL("{col} @@ %s").format(col=dataset.sql_for("severity")))
+        params.extend(severity_params)
+    if window is not None:
+        clause, window_params = pred.ts_filter(dataset, window)
+        clauses.append(clause)
+        params.extend(window_params)
+    return clauses, params
+
+
 def _search_index_only(
     dataset: Dataset,
-    query_text: str,
+    terms: tuple[str, ...],
     severity: str | None,
+    window: TimeWindow | None,
     limit: int,
     stats: QueryStats,
 ) -> tuple[sql.Composable, list, QueryStats]:
@@ -343,42 +601,14 @@ def _search_index_only(
     Note the timestamp goes through ``select_sql_for``: materializing a
     nanosecond value raises in the driver exactly as reading it directly does.
     """
-    terms = search_terms(query_text)
-    if not terms:
-        raise refuse(
-            f"No searchable words in {query_text!r}.",
-            "Search for a word that appears in log messages, such as "
-            "'timeout' or 'connection refused'.",
-            code="empty_query",
-        )
-
-    matcher = sql.SQL("ts_any([{terms}])").format(
-        terms=sql.SQL(", ").join(
-            sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder())
-            for _ in terms
-        )
-    )
     index = dataset.search_relation()
-
     columns = sql.SQL(", ").join(
         sql.SQL("{col} AS {alias}").format(
             col=dataset.select_sql_for(name), alias=sql.Identifier(name)
         )
         for name, _ in _display_fields(dataset)
     )
-
-    clauses = [sql.SQL("{m} @@ {matcher}").format(
-        m=dataset.sql_for("message"), matcher=matcher
-    )]
-    params: list = list(terms)
-
-    severity_clause, severity_params = pred.severity_filter(dataset, severity)
-    if severity_params:
-        # Matched through the index, which carries severity verbatim.
-        clauses.append(
-            sql.SQL("{col} @@ %s").format(col=dataset.sql_for("severity"))
-        )
-        params.extend(severity_params)
+    clauses, params = _index_only_filters(dataset, terms, severity, window)
 
     query = sql.SQL("""
         SELECT {columns}, BM25({index}.tableoid) AS relevance

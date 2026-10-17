@@ -209,3 +209,29 @@ def test_counts_by_dataset_cover_every_row_of_each_local_corpus(loaded):
         assert total == catalog[dataset_id]["rows"]
     fatal = next(r for r in rows if r["dataset"] == "bgl" and r["severity"] == "FATAL")
     assert fatal["count"] == 855_501
+
+
+# --- Time-filtered search with an exact count (T1) -----------------------------
+def test_a_rare_severity_is_found_and_counted_inside_a_window(loaded):
+    """Before T1, 'error' at FATAL returned none of its 345,086 matches: the
+    top 100 by BM25 were all other levels. Severity and the window now apply
+    inside the ranked branch, and the count uses the same conditions."""
+    from backend.db.connection import db_cursor
+    from backend.db.query import search_with_total
+
+    lo, hi = "2005-07-01 00:00:00", "2005-08-01 00:00:00"
+    rows = search_with_total("error", "bgl", "FATAL", 10, lo, hi)
+    assert not rows.refused
+    assert len(rows) == 10
+    for row in rows:
+        assert row["severity"] == "FATAL"
+        assert lo <= row["ts"].strftime("%Y-%m-%d %H:%M:%S") < hi
+
+    with db_cursor() as cur:
+        cur.execute(
+            'SELECT count(*) AS n FROM bgl_idx i JOIN bgl t ON t."LineId" = i."LineId" '
+            'WHERE i."Content" @@ ts_any([ts_levenshtein(%s, 1)]) AND t."Level" = %s '
+            'AND t."Timestamp" >= %s::timestamptz AND t."Timestamp" < %s::timestamptz',
+            ["error", "FATAL", lo, hi],
+        )
+        assert rows.total_matches == int(cur.fetchone()["n"])

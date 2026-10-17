@@ -136,11 +136,18 @@ class QueryResult(list):
         rows: list[dict] | None = None,
         stats: QueryStats | None = None,
         refusal: object | None = None,
+        total_matches: int | None = None,
     ) -> None:
         super().__init__(rows or [])
         self.stats = stats or QueryStats()
         self.stats.row_count = len(self)
         self.refusal = refusal
+        self.total_matches = total_matches
+        """Every row the query matched before its ``LIMIT``, when counted.
+
+        ``None`` means not counted -- the envelope then infers truncation from
+        the limit instead of claiming an exact figure.
+        """
 
     @property
     def refused(self) -> bool:

@@ -100,9 +100,12 @@ TOOL_CATALOG = {
     ),
     "search_logs_tool": (
         "TIER index ONLY. Searches message text and ranks by relevance; "
-        "params: dataset, query_text, category, limit. Requires an indexed "
-        "dataset -- it is refused on the raw remote corpus, which has no "
-        "index. Use to read the actual log lines once a window is narrowed."
+        "params: dataset, query_text, category, limit, start_time/end_time "
+        "(optional, both or neither). Requires an indexed dataset -- it is "
+        "refused on the raw remote corpus, which has no index. Returns example "
+        "rows plus total_matches: every row matching the same words, severity "
+        "and window, so the answer can say 'n shown of total_matches'. Use to "
+        "read the actual log lines once a window is narrowed."
     ),
     "top_in_category_by_service_tool": (
         "TIER index|remote. Ranks a field's values by log volume in a window; "

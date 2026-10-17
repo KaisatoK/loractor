@@ -50,7 +50,10 @@ count, then search inside it.
 2. **Then narrow the window.** Follow up with a trend or a tighter count to
    locate the spike inside the window you started with.
 3. **Then search text, on an indexed dataset.** `search_logs_tool` reads an
-   inverted index. It is refused on the raw remote corpus, which has none — so
+   inverted index. Pass the narrowed window (`start_time` and `end_time`
+   together) so the search only ranks lines inside it, and report its
+   `total_matches` beside the rows shown. It is refused on the raw remote
+   corpus, which has none — so
    aggregate on the remote corpus to find the window, then search `otel_slice`
    to read lines. That index is built *in place* over the same Parquet files:
    nothing is copied, and each match is re-read from object storage, so expect

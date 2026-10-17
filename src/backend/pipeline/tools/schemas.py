@@ -153,10 +153,11 @@ class GetTrend(_Windowed):
 
 
 class SearchLogs(_DatasetScoped):
-    """Full-text search over an indexed corpus.
+    """Full-text search over an indexed corpus, optionally within a time window.
 
-    No time window: this reads the inverted index, whose size is already bounded
-    by whatever built it, so there is no scan to constrain.
+    The window is optional, unlike every scanning tool's: search reads the
+    inverted index, whose size is already bounded by whatever built it, so a
+    window narrows the question rather than bounding the cost.
     """
 
     query_text: Annotated[
@@ -172,6 +173,34 @@ class SearchLogs(_DatasetScoped):
     ]
     category: str | None = None
     limit: Annotated[int, Field(ge=1, le=50)] = 10
+    start_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Optional window start, 'YYYY-MM-DD HH:MM:SS' (add '+00' on the "
+                "OTel corpus). Give it together with end_time, or neither; "
+                "the dataset's window limit applies."
+            ),
+        ),
+    ] = None
+    end_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Optional window end, exclusive. Required with start_time.",
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _window_pair(self) -> Self:
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError(
+                "start_time and end_time go together: give both or neither"
+            )
+        if self.start_time is not None and self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
 
 
 class TopInCategoryByService(_Windowed):

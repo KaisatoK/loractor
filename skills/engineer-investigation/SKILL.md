@@ -11,9 +11,12 @@ What failed, in which component, and what happened just before and after?
 ## Evidence to collect (in this order)
 1. **Find the error lines** with full-text search (`search_logs_tool`): use the
    error wording, component or event the user named; restrict by severity
-   (`category`) and, when a time-filtered search tool is available, by the time
-   window. Keep the `record_id` (the line id), timestamp, service and template of
-   the best hits.
+   (`category`) and, when the user named a period, by the time window
+   (`start_time` and `end_time` together). Keep the `record_id` (the line id),
+   timestamp, service and template of the best hits. The result's
+   `total_matches` counts every matching line, so say "n shown of
+   total_matches"; it is the number of matching log entries, not a frequency
+   over time (step 3 measures that).
 2. **Nearby events.** When a nearby-events tool is available (planned:
    `get_nearby_events_tool`, events around a `line_id`), call it on the most
    relevant hit. Until then, approximate from the hit's `record_id` (search

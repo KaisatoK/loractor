@@ -230,3 +230,60 @@ def test_the_catalog_window_covers_every_row(loaded):
     rows = db.count_by_field(row["window_start"], row["window_end"], dataset="openstack")
     assert not rows.refused
     assert sum(r["count"] for r in rows) == row["rows"]
+
+
+# --- Time-filtered search with an exact count (T1) -----------------------------
+def _independent_count(term, severity=None, lo=None, hi=None):
+    """Matches counted with plain SQL, not through the search code."""
+    from backend.db.connection import db_cursor
+
+    where = ['i."Content" @@ ts_any([ts_levenshtein(%s, 1)])']
+    params = [term]
+    if severity:
+        where.append('t."Level" = %s')
+        params.append(severity)
+    if lo:
+        where.append('t."Timestamp" >= %s::timestamptz AND t."Timestamp" < %s::timestamptz')
+        params += [lo, hi]
+    with db_cursor() as cur:
+        cur.execute(
+            'SELECT count(*) AS n FROM openstack_idx i JOIN openstack t '
+            f'ON t."LineId" = i."LineId" WHERE {" AND ".join(where)}',
+            params,
+        )
+        return int(cur.fetchone()["n"])
+
+
+def test_a_severity_ranked_below_the_top_100_is_still_found(loaded):
+    """Before T1, severity was applied after the BM25 top-100 cut: 'instance'
+    has 101,982 matches, its 24 ERROR rows rank below the first 100, and the
+    search returned none of them."""
+    from backend.db.query import search_with_total
+
+    rows = search_with_total("instance", "openstack", "ERROR", 10)
+    assert not rows.refused
+    assert rows.total_matches == _independent_count("instance", "ERROR") == 24
+    assert len(rows) == 10
+    assert all(r["severity"] == "ERROR" for r in rows)
+    assert rows.total_matches > len(rows)  # so `truncated` will be true
+
+
+def test_a_windowed_search_returns_only_rows_inside_the_window(loaded):
+    from backend.db.query import search_with_total
+
+    lo, hi = "2017-05-16 00:00:00", "2017-05-16 06:00:00"
+    rows = search_with_total("instance", "openstack", "ERROR", 10, lo, hi)
+    assert not rows.refused
+    assert rows.total_matches == _independent_count("instance", "ERROR", lo, hi)
+    assert len(rows) == min(10, rows.total_matches)
+    for row in rows:
+        assert row["severity"] == "ERROR"
+        assert lo <= row["ts"].strftime("%Y-%m-%d %H:%M:%S") < hi
+
+
+def test_the_total_is_exact_below_the_limit(loaded):
+    """'failed' matches only 10 rows: all are returned and nothing is cut."""
+    from backend.db.query import search_with_total
+
+    rows = search_with_total("failed", "openstack", None, 50)
+    assert rows.total_matches == _independent_count("failed") == len(rows)

@@ -36,10 +36,10 @@ from backend.db import (
     get_log_by_record_id,
     get_trend,
     list_datasets,
-    search_logs,
     top_by_field,
 )
 from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.db.query import search_with_total
 from backend.db.stats import QueryResult
 from backend.pipeline.sweep import (
     SweepBudget,
@@ -49,6 +49,7 @@ from backend.pipeline.sweep import (
 )
 from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import run_enveloped
+from backend.pipeline.tools.tools import search_filters, search_operation
 from backend.pipeline.tools.trend_tools import trend_filters, trend_operation
 from backend.pipeline.tools.schemas import (
     CountByDataset,
@@ -117,25 +118,32 @@ def count_by_dataset_tool(datasets: list[str] | None = None) -> dict:
 
 @mcp.tool(name="search_logs_tool")
 def search_logs_tool(query_text: str, category: str | None = None,
-                     dataset: str = DEFAULT_DATASET_ID, limit: int = 10) -> dict:
-    """Search log message content on an indexed corpus, optionally one severity.
+                     dataset: str = DEFAULT_DATASET_ID, limit: int = 10,
+                     start_time: str | None = None,
+                     end_time: str | None = None) -> dict:
+    """Search log message content on an indexed corpus, optionally one severity and window.
 
     Inputs: query_text (words or a concept; never a severity), category (one of the
     dataset's own severity values, optional), dataset (registered id), limit (1-50,
-    default 10). Returns kind=search: at most `limit` example rows (record_id, ts,
-    severity, service, entity_id, message, event_id when the corpus has them, and
-    relevance) plus the executed query, filters and `truncated`. Examples do not
-    measure frequency; use count_by_category_tool.
+    default 10), start_time and end_time ('YYYY-MM-DD HH:MM:SS', optional, both or
+    neither; the dataset's window limit applies). Returns kind=search: at most
+    `limit` example rows (record_id, ts, severity, service, entity_id, message,
+    event_id when the corpus has them, and relevance), `total_matches` (every row
+    matching the same words, severity and window; null for a semantic search),
+    `truncated` (exact when total_matches is known), the executed queries and
+    filters. Examples do not measure frequency; use count_by_category_tool.
     """
     v = _validated(SearchLogs, query_text=query_text, category=category,
-                   dataset=dataset, limit=limit)
-    operation = f"search {v['dataset']} messages for '{v['query_text']}'"
-    if v["category"]:
-        operation += f" with severity '{v['category']}'"
-    return _result(operation, lambda: search_logs(
-        v["query_text"], v["dataset"], v["category"], v["limit"]),
+                   dataset=dataset, limit=limit, start_time=start_time,
+                   end_time=end_time)
+    return _result(
+        search_operation(v["query_text"], v["dataset"], v["category"],
+                         v["start_time"], v["end_time"]),
+        lambda: search_with_total(v["query_text"], v["dataset"], v["category"],
+                                  v["limit"], v["start_time"], v["end_time"]),
         kind="search", dataset=v["dataset"], limit=v["limit"],
-        filters={"query_text": v["query_text"], "category": v["category"]})
+        filters=search_filters(v["query_text"], v["category"],
+                               v["start_time"], v["end_time"]))
 
 
 @mcp.tool(name="get_log_by_line_id_tool")

@@ -114,6 +114,31 @@ def test_appendix_states_scope_queries_and_truncation():
     assert "truncated: yes" in text
 
 
+def _search_record(returned: int, total: int | None, truncated: bool | None) -> dict:
+    return {
+        "id": "R1", "tool_name": "search_logs_tool", "arguments": {}, "kind": "search",
+        "row_count": returned, "returned": returned, "rows": [{"n": 1}] * returned,
+        "dataset": "openstack", "query": "SELECT 1", "filters": {},
+        "total_matches": total, "truncated": truncated,
+    }
+
+
+def test_a_complete_result_still_shows_its_total():
+    """3 of 3: nothing was cut, but the count is stated, so 'all of them' is visible."""
+    text = render_appendix([_search_record(3, 3, False)])
+    assert "search, 3 rows; truncated: no (3 of 3 matching)" in text
+
+
+def test_a_cut_result_shows_shown_of_total():
+    text = render_appendix([_search_record(10, 24, True)])
+    assert "truncated: yes (10 of 24 rows returned; more matching rows exist)" in text
+
+
+def test_a_result_without_a_total_states_nothing_extra():
+    text = render_appendix([_search_record(3, None, False)])
+    assert "search, 3 rows; truncated: no\n" in text
+
+
 def test_appendix_reports_unknown_query_and_truncation_for_legacy_records():
     legacy = {"id": "R1", "tool_name": "x", "arguments": {"a": 1}, "row_count": 1,
               "rows": [{"a": 1}], "kind": None, "query": None, "truncated": None}

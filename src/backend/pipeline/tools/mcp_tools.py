@@ -12,6 +12,7 @@ from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
+from backend.pipeline.tools.tools import search_operation
 from backend.pipeline.tools.trend_tools import trend_operation
 from backend.pipeline.tools.schemas import (
     CountByDataset,
@@ -102,11 +103,13 @@ def get_trend_tool(runtime: ToolRuntime, start_time: str, end_time: str,
 @tool(args_schema=SearchLogs, description="Search log message content.")
 def search_logs_tool(runtime: ToolRuntime, query_text: str,
                      category: str | None = None, dataset: str = DEFAULT_DATASET_ID,
-                     limit: int = 10) -> dict:
+                     limit: int = 10, start_time: str | None = None,
+                     end_time: str | None = None) -> dict:
     return _call(runtime, "search_logs_tool",
-                 f"search {dataset} messages for '{query_text}'",
+                 search_operation(query_text, dataset, category, start_time, end_time),
                  {"query_text": query_text, "category": category,
-                  "dataset": dataset, "limit": limit})
+                  "dataset": dataset, "limit": limit,
+                  "start_time": start_time, "end_time": end_time})
 
 
 @tool(args_schema=TopInCategoryByService,

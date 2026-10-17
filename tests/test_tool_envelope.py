@@ -244,3 +244,32 @@ def test_rows_are_json_safe_so_langchain_keeps_them_parseable():
     ])
     assert [r["kind"] for r in records] == ["search"]
     assert records[0]["rows"][0]["relevance"] == 0.0327868852
+
+
+# --- total_matches from the query layer (T1) ----------------------------------
+
+
+def test_a_result_carrying_total_matches_makes_truncated_exact():
+    from backend.db.stats import QueryResult
+
+    rows = [{"n": i} for i in range(10)]
+    more = run_enveloped(operation="op", kind="search", limit=10,
+                         function=lambda: QueryResult(rows, total_matches=194))
+    assert more["total_matches"] == 194
+    assert more["truncated"] is True
+
+    # Exactly the limit, and nothing more: the cap was hit but nothing was cut.
+    exact = run_enveloped(operation="op", kind="search", limit=10,
+                          function=lambda: QueryResult(rows, total_matches=10))
+    assert exact["total_matches"] == 10
+    assert exact["truncated"] is False
+
+
+def test_a_result_without_total_matches_keeps_the_limit_heuristic():
+    from backend.db.stats import QueryResult
+
+    rows = [{"n": i} for i in range(10)]
+    env = run_enveloped(operation="op", kind="search", limit=10,
+                        function=lambda: QueryResult(rows))
+    assert env["total_matches"] is None
+    assert env["truncated"] is True
