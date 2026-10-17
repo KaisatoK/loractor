@@ -28,8 +28,9 @@ Which problems recur, how often, and which components or teams are involved?
    what the message looks like.
 
 ## Answer must contain
-- The period and filters, then the top recurring patterns with their counts.
+- The period and scope first, then the top recurring patterns with their counts.
 - The trend of the top patterns.
+- The count/trend table, and the computed priority ranking when one is present.
 - The components and owning teams involved.
 - What the team should investigate first and why (highest measured count or
   clearest rising trend), as a recommendation, not a root cause.

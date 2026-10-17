@@ -27,7 +27,9 @@ Which observed problems deserve attention first, and what should happen next?
 ## Answer must contain
 - At most three priorities, in order, each with its measured basis (count,
   severity share, trend direction, components/teams affected).
-- The reason for the order, in one sentence.
+- The reason for the order, in one sentence. When a computed priority ranking is
+  present, follow its order and say it was computed from the counts.
+- At most one table.
 - One concrete next action per priority and the owning team.
 - What the data does not tell us (cause, impact) in one line.
 

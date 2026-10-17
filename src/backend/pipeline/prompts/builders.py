@@ -5,12 +5,19 @@ in ``decision.py`` owns routing and revision policy; Jev supplies only the
 narrow semantic signals that code cannot derive reliably from text.
 """
 
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 from langchain_typesafe import ClassifierRequest, Noul, NoulCriteria
 
 from backend.db.config import LOG_SCHEMA
 from backend.pipeline.effort import get_effort_spec
-from backend.pipeline.playbooks import ownership_context, role_playbook
+from backend.pipeline.playbooks import ownership_context, role_answer_rules, role_playbook
 from backend.pipeline.state import PipelineState, Role
+from backend.pipeline.tools.envelope import MEASURED_KINDS
+
+logger = logging.getLogger(__name__)
 
 ANSWER_EFFORT_NOTES = {
     "Low": "Be brief: lead with the verdict, keep it under ~150 words, at most one table, skip caveats unless critical.",
@@ -157,38 +164,6 @@ QUERYABLE_TARGETS = [
 ]
 
 
-# What each role's answer must DO with the evidence (distinct questions, evidence
-# and next steps per role; length alone is not personalization). The narrative
-# goes in `blocks`; claims go in `findings`; next steps in `recommendations`.
-ROLE_ANSWER_CONTRACTS = {
-    "engineer": (
-        "Narrative: what failed (component, event, the exact error message with "
-        "its line id and timestamp), then the before/after timeline from the "
-        "retrieved rows, then the possible cause. Show the search/nearby-event "
-        "table. Recommendations: ONE to TWO concrete diagnostic checks (what to "
-        "inspect, where, and what result would confirm or refute the cause). Do not "
-        "write hypotheses or next checks in the narrative; the findings and "
-        "recommendations carry them."
-    ),
-    "team_lead": (
-        "Narrative: the period and scope first, then the recurring patterns ranked "
-        "by their database counts, their trend, and the components and owning "
-        "teams involved. Show the count/trend table (and the priority_score table "
-        "when present). Recommendations: what the team should investigate first "
-        "and why (highest measured count or clearest rising trend), each with the "
-        "owning team."
-    ),
-    "manager": (
-        "Narrative: a short prioritized list (at most three) with the measured "
-        "basis of each (row count, error share, trend, components/teams affected). "
-        "When a priority_score result exists, follow its ranking and say it was "
-        "computed from the counts. Show at most one table. Recommendations: one "
-        "action per priority with the owning team. Never estimate cost, downtime, "
-        "customer impact or effort; the data does not contain them."
-    ),
-}
-
-
 PREVIEW_CHARS = 240
 
 
@@ -203,6 +178,94 @@ def _clip(value: object, limit: int = PREVIEW_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "…[cut]"
 
 
+# How much of each tool result the answer model sees. Measured results (counts,
+# trends, the derived ranking) are what the answer ranks and compares, so they
+# are shown in full up to the largest tool cap; examples only need a sample.
+# Starting values: confirm with the prompt sizes logged by ``answer_node`` and
+# ``generate_answer`` rather than treating them as measured.
+ANSWER_MEASURED_ROWS = 100
+ANSWER_EXAMPLE_ROWS = 10
+ANSWER_CATALOG_CHAR_BUDGET = 120_000  # about 30k tokens at 4 chars per token
+_MIN_EXAMPLE_ROWS = 1
+_ANSWER_MEASURED_KINDS = MEASURED_KINDS | {"derived"}
+
+
+@dataclass(frozen=True)
+class ResultCatalog:
+    """The answer prompt's tool-result catalog and what could not be shown."""
+
+    text: str
+    # Human-readable notes (e.g. measured rows alone exceed the budget); the
+    # answer node surfaces them in the data-scope appendix.
+    notes: tuple[str, ...] = ()
+
+
+def _catalog_entry(record: dict, example_rows: int) -> str:
+    """One result block. ``example_rows`` applies to non-measured kinds only.
+
+    One ``{col: value}`` per row and no ``|``: pipe-delimited lines once primed
+    the model to emit stray markdown-table pipes in the answer.
+    """
+    rows = record.get("rows") or []
+    measured = record.get("kind") in _ANSWER_MEASURED_KINDS
+    limit = ANSWER_MEASURED_ROWS if measured else example_rows
+    shown = rows[:limit]
+    columns = ", ".join(rows[0].keys()) if rows else ""
+    truncated = record.get("truncated")
+    entry = (
+        f"- id: {record.get('id')}\n"
+        f"  tool: {record.get('tool_name')}\n"
+        f"  kind: {record.get('kind') or 'unknown'}\n"
+        f"  dataset: {record.get('dataset') or 'unknown'}\n"
+        f"  args: {record.get('arguments')}\n"
+        f"  rows: {record.get('row_count')}\n"
+        f"  rows shown: {len(shown)} of {record.get('row_count', len(rows))}\n"
+        f"  truncated: {'unknown' if truncated is None else truncated}\n"
+        f"  columns: {columns}"
+    )
+    if record.get("kind") == "derived":
+        entry += f"\n  formula: {record.get('formula')}"
+    if shown:
+        entry += "\n  data:\n" + "\n".join(
+            "    {" + ", ".join(f"{k}: {_clip(v)}" for k, v in row.items()) + "}"
+            for row in shown
+        )
+    return entry
+
+
+def build_result_catalog(
+    records: Sequence[dict], char_budget: int = ANSWER_CATALOG_CHAR_BUDGET
+) -> ResultCatalog:
+    """Render the tool results for the answer prompt within a character budget.
+
+    Measured rows are never cut to fit the budget. When over budget, example
+    rows shrink to ``_MIN_EXAMPLE_ROWS`` one record at a time, newest first. If
+    the measured rows alone exceed the budget they are kept anyway and a note is
+    returned, so the answer's numbers never come from a silently trimmed table.
+    """
+    records = [r for r in records if isinstance(r, dict)]
+    limits = [ANSWER_EXAMPLE_ROWS] * len(records)
+    entries = [_catalog_entry(r, n) for r, n in zip(records, limits)]
+    total = sum(len(e) for e in entries) + max(len(entries) - 1, 0)
+    for i in reversed(range(len(records))):
+        if total <= char_budget:
+            break
+        if records[i].get("kind") in _ANSWER_MEASURED_KINDS:
+            continue
+        shrunk = _catalog_entry(records[i], _MIN_EXAMPLE_ROWS)
+        total -= len(entries[i]) - len(shrunk)
+        entries[i] = shrunk
+    notes: tuple[str, ...] = ()
+    if total > char_budget:
+        note = (
+            f"the answer saw all measured rows, but the result catalog is {total} "
+            f"characters, over the {char_budget} budget"
+        )
+        logger.warning("answer catalog over budget: %s", note)
+        notes = (note,)
+    return ResultCatalog("\n".join(entries), notes)
+
+
 def dataset_catalog() -> dict:
     """What corpora exist, how big they are, and what each supports.
 
@@ -215,8 +278,27 @@ def dataset_catalog() -> dict:
     return catalog()
 
 
-def summarized_attempts(tool_results: object) -> list[dict]:
-    """Compact summaries of the tool calls already attempted this turn."""
+def summarized_attempts(tool_results: object, tool_calls: object = None) -> list[dict]:
+    """Compact summaries of the tool calls already attempted this turn.
+
+    Built from every call when ``tool_calls`` is known, so the "can an untried
+    tool close the gap?" question also sees failed and empty calls. Without it
+    (an older state) the successful result records are summarized instead.
+    """
+    if tool_calls:
+        rows = {r.get("id"): r.get("row_count") or 0 for r in tool_results or []}
+        summary = []
+        for call in tool_calls:
+            item = {
+                "tool_name": call.get("tool_name"),
+                "arguments": call.get("arguments"),
+                "status": call.get("status"),
+                "row_count": sum(rows.get(rid, 0) for rid in call.get("result_ids", [])),
+            }
+            if call.get("status") == "failure":
+                item["error_message"] = call.get("error_message")
+            summary.append(item)
+        return summary
     summary = []
     for record in tool_results or []:
         summary.append(
@@ -398,7 +480,7 @@ class PipelinePrompts:
                 "evidence_report": state.get("evidence_report", {}),
                 "answer": state.get("answer", ""),
                 "tool_catalog": TOOL_CATALOG,
-                "attempted_tools": summarized_attempts(state.get("tool_results")),
+                "attempted_tools": summarized_attempts(state.get("tool_results"), state.get("tool_calls")),
             },
             "questions": {
                 "evidence_relevant": self.evidence_relevant_question(),
@@ -601,34 +683,8 @@ class PipelinePrompts:
             "No previous attempt exists.",
         )
 
-        # One result per block, newline-separated — deliberately NO pipe (`|`)
-        # separators: the catalog is shown to the model, and pipe-delimited
-        # lines primed it to emit stray markdown-table pipes in the answer.
-        catalog_lines = []
-        for record in state.get("tool_results", []) or []:
-            rows = record.get("rows") or []
-            columns = ", ".join(rows[0].keys()) if rows else ""
-            preview = " ; ".join(
-                "{" + ", ".join(f"{k}: {_clip(v)}" for k, v in row.items()) + "}"
-                for row in rows[:2]
-            )
-            truncated = record.get("truncated")
-            entry = (
-                f"- id: {record.get('id')}\n"
-                f"  tool: {record.get('tool_name')}\n"
-                f"  kind: {record.get('kind') or 'unknown'}\n"
-                f"  dataset: {record.get('dataset') or 'unknown'}\n"
-                f"  args: {record.get('arguments')}\n"
-                f"  rows: {record.get('row_count')}\n"
-                f"  truncated: {'unknown' if truncated is None else truncated}\n"
-                f"  columns: {columns}\n"
-                f"  preview: {preview}"
-            )
-            if record.get("kind") == "derived":
-                # The computed ranking is small; show it whole.
-                entry += f"\n  formula: {record.get('formula')}\n  all rows: {rows}"
-            catalog_lines.append(entry)
-        tool_result_catalog = "\n".join(catalog_lines)
+        catalog = build_result_catalog(state.get("tool_results", []) or [])
+        tool_result_catalog = catalog.text
         role_name = state["role"]["name"]
 
         return (
@@ -638,9 +694,9 @@ class PipelinePrompts:
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
-            "<role answer contract>\n"
-            f"{ROLE_ANSWER_CONTRACTS.get(role_name, '')}\n"
-            "</role answer contract>\n"
+            "<role answer rules>\n"
+            f"{role_answer_rules(role_name)}\n"
+            "</role answer rules>\n"
             "<team ownership>\n"
             f"{ownership_context()}\n"
             "</team ownership>\n"

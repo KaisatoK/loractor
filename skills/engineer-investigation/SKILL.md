@@ -30,8 +30,12 @@ What failed, in which component, and what happened just before and after?
 ## Answer must contain
 - The failing component, event and exact error message(s) with line ids.
 - An ordered before/after timeline from the retrieved rows.
-- A possible cause, labelled as a hypothesis unless the rows confirm it.
-- One concrete next check (what to inspect, where, and why).
+- The table of the matching lines and their neighbouring events.
+- A possible cause, labelled as a hypothesis unless the rows confirm it. State
+  the hypothesis once, where hypotheses are listed; do not repeat it in the
+  narrative.
+- One or two concrete diagnostic checks (what to inspect, where, and why), each
+  saying which result would confirm the cause and which would refute it.
 
 ## Never
 - Report the number of search hits as a frequency.

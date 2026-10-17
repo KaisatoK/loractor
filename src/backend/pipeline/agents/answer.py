@@ -3,15 +3,21 @@ validated ``AnswerOutput`` via direct ``deepseek.invoke`` (no ``response_format`
 so reasoning streams; shape in ``ANSWER_JSON_SPEC``; errors propagate).
 """
 
+import logging
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.pipeline.contracts import AnswerOutput
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import ANSWER_SYSTEM_PROMPT
 
-# The json output contract, placed in the user message so the system prompt can
-# stay ``ANSWER_SYSTEM_PROMPT``. No schema is transmitted, so it carries the word
-# "json", a shape example, and the two block shapes plus the follow-up type.
+logger = logging.getLogger(__name__)
+
+# The json output contract. It lives in the user message so the
+# ``ANSWER_SYSTEM_PROMPT`` can stay the system message; no schema is
+# transmitted, so the prompt must carry the word "json" and an explicit example
+# of the shape. The system prompt already carries the writing/grounding rules,
+# so this spec enumerates the two block shapes and the follow-up type.
 ANSWER_JSON_SPEC = (
     "Return ONLY one json object and no other text, markdown, or commentary. "
     "The json object MUST match exactly this shape:\n"
@@ -67,6 +73,12 @@ def generate_answer(prompt: str) -> AnswerOutput:
                 )
             ),
         ]
+    )
+    usage = getattr(message, "usage_metadata", None) or {}
+    logger.info(
+        "answer model usage: input_tokens=%s output_tokens=%s",
+        usage.get("input_tokens"),
+        usage.get("output_tokens"),
     )
     return AnswerOutput.model_validate_json(message.text)
 

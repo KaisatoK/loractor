@@ -37,8 +37,13 @@ the team lead and manager only) an overview of the whole dataset; otherwise `nee
 investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
 investigation and calls the database tools itself, then submits a free-text summary
 of its findings. The report of `summary` plus `evidence` (and optional
-`hypotheses`) is built off-agent from that summary and the captured results, which
-are renumbered `R1..Rn` for the answer tables. A bundled `log-investigation` skill
+`hypotheses`) is assembled off-agent: code builds one evidence item per tool call
+(name, arguments, success or failure, linked results, so failed and empty calls
+show too), and the model only writes the summary and at most three hypotheses
+citing those items. Results are numbered `R1..Rn` for the answer tables. The
+answer model sees every row of a measured result (counts, trends, up to 100 rows)
+and a 10-row sample of example results; each result states how many rows are
+shown. Each role's answer rules live only in its skill. A bundled `log-investigation` skill
 decides when hypotheses apply.
 
 ## One question, three roles
@@ -627,6 +632,7 @@ confidence tests below are skipped unless enabled.
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
+| `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
 | `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |

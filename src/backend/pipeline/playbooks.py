@@ -32,6 +32,35 @@ def role_playbook(role_name: str) -> str:
     return _FRONTMATTER.sub("", path.read_text(encoding="utf-8"), count=1).strip()
 
 
+ANSWER_RULE_SECTIONS = ("Question this role asks", "Answer must contain", "Never")
+
+
+def _section(body: str, heading: str) -> str | None:
+    """The ``## heading`` block of a playbook, heading included, or ``None``."""
+    match = re.search(
+        rf"^## {re.escape(heading)}[ \t]*\n.*?(?=^## |\Z)", body, re.DOTALL | re.MULTILINE
+    )
+    return match.group(0).strip() if match else None
+
+
+@functools.lru_cache(maxsize=None)
+def role_answer_rules(role_name: str) -> str:
+    """The answer-side sections of a role's skill (the single source of the rules).
+
+    Returns "Question this role asks", "Answer must contain" and "Never" from the
+    same file ``role_playbook`` reads, without "Evidence to collect". A missing
+    section raises ``ValueError`` so a broken skill fails on first use.
+    """
+    body = role_playbook(role_name)
+    sections = []
+    for heading in ANSWER_RULE_SECTIONS:
+        section = _section(body, heading)
+        if section is None:
+            raise ValueError(f"skill for role {role_name!r} has no '## {heading}' section")
+        sections.append(section)
+    return "\n\n".join(sections)
+
+
 @functools.lru_cache(maxsize=1)
 def ownership_map() -> dict[str, str]:
     """``component -> team`` from the ownership CSV (empty if it is absent)."""

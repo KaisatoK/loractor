@@ -41,6 +41,9 @@ class PipelineState(TypedDict):
     answer: str
     # Display-only raw tool rows: {id, tool_name, arguments, row_count, rows}.
     tool_results: list[dict[str, Any]]
+    # Every database-tool call of the evidence stage (also failed and empty
+    # ones): {call_id, tool_name, arguments, status, error_message, result_ids}.
+    tool_calls: list[dict[str, Any]]
     # The answer agent's drafted optional follow-up question.
     follow_up: str | None
     # Consecutive clarification turns, used to break clarification loops.

@@ -215,6 +215,6 @@ def test_answer_node_adds_priority_for_manager_not_engineer(monkeypatch):
     assert [r["id"] for r in engineer["tool_results"]] == ["R1", "R2"]
     assert "priority_score" in prompts_seen[0] and "priority_score" not in prompts_seen[1]
     assert APPENDIX_HEADING in manager["answer"]
-    # Role-specific answer contracts reach the prompt.
-    assert "prioritized list" in prompts_seen[0]
-    assert "timeline" in prompts_seen[1]
+    # Role-specific answer rules (from the role skill) reach the prompt.
+    assert "At most three priorities" in prompts_seen[0]
+    assert "before/after timeline" in prompts_seen[1]

@@ -6,6 +6,7 @@ os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 import asyncio
 
+import pytest
 from fastmcp import Client
 
 from backend.mcp_server import server
@@ -53,6 +54,59 @@ def test_find_evidence_prompt_injects_only_the_users_playbook():
 def test_team_for_maps_known_and_unknown_components():
     assert playbooks.team_for("nova.compute.manager") == "Compute Platform"
     assert playbooks.team_for("not.a.service") == "unowned"
+
+
+def test_every_role_skill_has_the_four_headings():
+    for role in ROLE_SKILLS:
+        body = playbooks.role_playbook(role)
+        for heading in (
+            "Question this role asks",
+            "Evidence to collect",
+            "Answer must contain",
+            "Never",
+        ):
+            assert f"\n## {heading}" in body, (role, heading)
+
+
+def test_role_answer_rules_exclude_evidence_plan():
+    for role in ROLE_SKILLS:
+        rules = playbooks.role_answer_rules(role)
+        assert "## Question this role asks" in rules
+        assert "## Answer must contain" in rules
+        assert "## Never" in rules
+        assert "Evidence to collect" not in rules
+
+
+def test_answer_prompt_carries_the_roles_rules():
+    prompts = PipelinePrompts()
+    state = lambda role: {**_state(role), "evidence_report": {}, "tool_results": []}  # noqa: E731
+    for role in ROLE_SKILLS:
+        prompt = prompts.answer(state(role))
+        assert playbooks.role_answer_rules(role) in prompt
+
+
+def test_role_answer_contracts_dict_is_gone():
+    from backend.pipeline.prompts import builders
+
+    assert not hasattr(builders, "ROLE_ANSWER_CONTRACTS")
+
+
+def test_skill_missing_a_section_raises(tmp_path, monkeypatch):
+    skill = tmp_path / ROLE_SKILLS["engineer"]
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: x\n---\n\n# T\n\n## Question this role asks\nq\n\n## Never\nn\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(playbooks, "SKILLS_ROOT", tmp_path)
+    playbooks.role_playbook.cache_clear()
+    playbooks.role_answer_rules.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="Answer must contain"):
+            playbooks.role_answer_rules("engineer")
+    finally:
+        playbooks.role_playbook.cache_clear()
+        playbooks.role_answer_rules.cache_clear()
 
 
 def test_mcp_server_serves_role_playbooks():

@@ -23,9 +23,11 @@ from backend.pipeline.agents import (
     get_find_evidence_agent,
     generate_normalized,
 )
-from backend.pipeline.agents.evidence_report import generate_evidence_report
+from backend.pipeline.agents.evidence_report import generate_evidence_judgement
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.data_scope import build_data_scope
+from backend.pipeline.evidence import build_evidence
 from backend.pipeline.playbooks import team_for
 from backend.pipeline.priority import with_priority
 from backend.pipeline.cost import investigation_cost
@@ -36,8 +38,9 @@ from backend.pipeline.decision import (
     decide_scope,
 )
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
+from backend.pipeline.prompts.builders import build_result_catalog
 from backend.pipeline.state import PipelineState
-from backend.pipeline.tools.results import collect_tool_results
+from backend.pipeline.tools.results import collect_tool_calls, collect_tool_results
 
 logger = logging.getLogger(__name__)
 
@@ -178,19 +181,27 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     # feeds both the report catalog and answer tables, so the ids stay identical.
     records = collect_tool_results(result["messages"])
 
-    # ``generate_evidence_report`` makes a direct DeepSeek call (no structured
-    # output) from the agent's summary plus captured results; provider/validation
-    # failures propagate rather than being swallowed.
+    # The evidence items come from the actual tool calls, in code; the model
+    # (a direct DeepSeek call, no structured-output wrapper) writes only the
+    # summary and hypotheses over them. A provider or validation failure
+    # propagates rather than being swallowed.
+    calls = collect_tool_calls(result["messages"], records)
+    evidence = build_evidence(calls, records)
     role = state["role"]
-    report = generate_evidence_report(
+    judgement = generate_evidence_judgement(
         request=json.dumps(state["normalized"], default=str),
         role=f"{role['name']}: {role['objective']}",
         investigation=_last_agent_summary(result["messages"]),
+        evidence=evidence,
         results=records,
     )
     # The data scope is derived from the records in code, never by the model.
-    evidence_report = report.model_copy(
-        update={"data_scope": build_data_scope(records)}
+    evidence_report = EvidenceReport(
+        summary=judgement.summary,
+        evidence=evidence,
+        hypotheses=judgement.hypotheses,
+        coverage=judgement.coverage,
+        data_scope=build_data_scope(records),
     ).model_dump()
     history = [*(state.get("evidence_report_history") or []), evidence_report]
 
@@ -198,6 +209,7 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
         **state,
         "evidence_report": evidence_report,
         "tool_results": records,
+        "tool_calls": calls,
         "answer": "",
         "evidence_report_history": history,
     }
@@ -212,13 +224,16 @@ def answer_node(state: PipelineState) -> PipelineState:
     if state["role"]["name"] in PRIORITY_ROLES:
         records = with_priority(records, team_for)
     state = {**state, "tool_results": records}
-    structured = generate_answer(prompts.answer(state))
+    prompt = prompts.answer(state)
+    logger.info("answer prompt: %d chars", len(prompt))
+    structured = generate_answer(prompt)
     valid_ids = {record.get("id") for record in records}
+    notes = build_result_catalog(records).notes
     # Cost is measured from the tool results' own query_stats, not narrated by
     # the model, so the volume the answer reports cannot be wrong.
     cost = investigation_cost(records)
     answer = serialize_answer(
-        structured, valid_ids, records, cost_note=cost.get("note", "")
+        structured, valid_ids, records, notes, cost_note=cost.get("note", "")
     )
     # The answer agent drafts the optional follow-up; confidence decides whether
     # to show it, so keep the draft in state either way.

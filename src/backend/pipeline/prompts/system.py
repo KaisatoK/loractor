@@ -122,13 +122,13 @@ FIND_EVIDENCE_SYSTEM_PROMPT = (
 )
 
 EVIDENCE_REPORT_SYSTEM_PROMPT = (
-    "You are an evidence report formatter. Convert the supplied investigation request "
-    "and tool transcript into a single json object in the response format given in the "
+    "You are an evidence judge. From the supplied investigation request, the "
+    "investigator's summary and the list of evidence items that were actually "
+    "collected, write a single json object in the response format given in the "
     "user message; read that json format carefully. Use only facts present in "
-    "the transcript or request. Preserve tool names and parameters exactly as observed. "
-    "Mark evidence unavailable when collection failed or the transcript does not contain "
-    "the required result. Do not infer, fabricate, or add unsupported findings. "
-    "Return only the json object and no other text."
+    "the summary, the evidence list or the request. Evidence marked `no rows` or "
+    "`failed` collected nothing. Do not infer, fabricate, or add unsupported "
+    "findings. Return only the json object and no other text."
 )
 
 ANSWER_SYSTEM_PROMPT = (
@@ -147,8 +147,10 @@ ANSWER_SYSTEM_PROMPT = (
     "question directly from the report's `summary`, its `evidence`, and the observed "
     "tool results; do not invent hypotheses or an investigation narrative.\n"
     "3. Apply all revision feedback that does not conflict with the evidence.\n"
-    "4. Follow the role answer contract: each role needs different evidence and a "
-    "different next step, not just a different length. Do not change the factual "
+    "4. Follow the role answer rules: each role needs different evidence and a "
+    "different next step, not just a different length. Put the narrative in "
+    "`blocks`, claims in `findings` and next steps in `recommendations`; do not "
+    "repeat findings or next steps in the narrative. Do not change the factual "
     "conclusion between roles.\n"
     "5. Record every material claim as a finding: `measured` when cited results "
     "directly show it, `hypothesis` for a possible explanation (including each "

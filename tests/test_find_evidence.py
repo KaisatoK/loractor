@@ -21,7 +21,8 @@ from pydantic import ValidationError
 from backend.pipeline import graph
 from backend.pipeline.agents import evidence_report
 from backend.pipeline.agents.find_evidence import get_find_evidence_agent
-from backend.pipeline.contracts import EvidenceReport, Hypothesis
+from backend.pipeline.contracts import EvidenceJudgement, EvidenceReport, Hypothesis
+from backend.pipeline.evidence import build_evidence
 from backend.pipeline.prompts import EVIDENCE_REPORT_SYSTEM_PROMPT
 from backend.pipeline.tools.registry import get_db_tools
 from backend.pipeline.tools.results import MAX_RESULT_ROWS, collect_tool_results
@@ -88,7 +89,7 @@ class _RaisingModel:
 
 # A minimal payload that satisfies the ``EvidenceReport`` contract; the model
 # returns it as its text block and the entry point parses it locally.
-_REPORT_JSON = json.dumps({"summary": "s", "evidence": [], "hypotheses": []})
+_REPORT_JSON = json.dumps({"summary": "s", "hypotheses": []})
 
 
 class _RecordingModel:
@@ -175,71 +176,79 @@ def test_collect_tool_results_caps_rows_but_reports_true_count():
     assert len(records[0]["rows"]) == MAX_RESULT_ROWS
 
 
-# --- evidence_report.generate_evidence_report -----------------------------
+# --- evidence_report.generate_evidence_judgement --------------------------
 
 
-def test_generate_evidence_report_uses_system_prompt_and_json_example(monkeypatch):
-    recorder = _RecordingModel()
-    monkeypatch.setattr(evidence_report, "deepseek", recorder)
+def _evidence():
+    calls = [
+        {"call_id": "c1", "tool_name": "search_logs_tool",
+         "arguments": {"query_text": "x"}, "status": "success",
+         "error_message": None, "result_ids": ["R1"]},
+        {"call_id": "c2", "tool_name": "get_trend_tool",
+         "arguments": {"type": "service"}, "status": "success",
+         "error_message": None, "result_ids": []},
+        {"call_id": "c3", "tool_name": "count_by_category_tool",
+         "arguments": {"type": "pid"}, "status": "failure",
+         "error_message": "db down", "result_ids": []},
+    ]
+    return build_evidence(calls, _RECORDS)
 
-    report = evidence_report.generate_evidence_report(
+
+def _judge(**overrides):
+    kwargs = dict(
         request="count the errors",
         role="engineer: investigate a specific error",
         investigation="We ran search_logs_tool and found 3 errors.",
+        evidence=_evidence(),
         results=_RECORDS,
     )
+    kwargs.update(overrides)
+    return evidence_report.generate_evidence_judgement(**kwargs)
 
-    # The model's text is parsed into the report contract and returned.
-    assert report == EvidenceReport(summary="s", evidence=[], hypotheses=[])
+
+def test_generate_evidence_judgement_uses_system_prompt_and_json_example(monkeypatch):
+    recorder = _RecordingModel()
+    monkeypatch.setattr(evidence_report, "deepseek", recorder)
+
+    judgement = _judge()
+
+    # The model's text is parsed into the judgement contract and returned.
+    assert judgement == EvidenceJudgement(summary="s", hypotheses=[])
 
     messages = recorder.messages
-    # The system prompt is the system message, and it keeps its rules
-    # (grounding, exact tool names/params, unavailable marking).
     assert isinstance(messages[0], SystemMessage)
     assert messages[0].content == EVIDENCE_REPORT_SYSTEM_PROMPT
-    assert "Preserve tool names and parameters exactly" in messages[0].content
 
-    # DeepSeek json mode needs the literal word "json" plus a JSON example; both
-    # may come from the system prompt or the user message.
+    # DeepSeek json mode needs the literal word "json" plus a JSON example.
     combined = "".join(m.content for m in messages)
     assert "json" in combined.lower()
-    assert '"summary"' in combined and '"evidence"' in combined
+    assert '"summary"' in combined and '"hypotheses"' in combined
 
-    # The user message carries the request/role/investigation/catalog; the
-    # catalog is built from the id-carrying captured records.
     user = messages[1]
     assert isinstance(user, HumanMessage)
     assert "count the errors" in user.content
     assert "engineer: investigate a specific error" in user.content
     assert "We ran search_logs_tool and found 3 errors." in user.content
-    assert "R1: search_logs_tool" in user.content
 
 
-def test_generate_evidence_report_spec_enumerates_tool_status_values(monkeypatch):
-    # The contract's ToolStatus is the closed set {"success", "failure"}, but the
-    # shape example only ever shows "success". A model that emits "failed" for a
-    # failed tool call is rejected by pydantic with a literal_error, so the spec
-    # must enumerate both allowed values explicitly. Pin it here so a future trim
-    # cannot silently drop the enumeration again.
+def test_prompt_lists_the_code_built_evidence_items(monkeypatch):
     recorder = _RecordingModel()
     monkeypatch.setattr(evidence_report, "deepseek", recorder)
+    _judge()
+    user = recorder.messages[1].content
+    assert "- E1: search_logs_tool({'query_text': 'x'}) -> R1 [unknown, 1 rows]" in user
+    assert "- E2: get_trend_tool({'type': 'service'}) -> no rows" in user
+    assert "- E3: count_by_category_tool({'type': 'pid'}) -> failed: db down" in user
+    assert "captured results catalog" not in user
 
-    evidence_report.generate_evidence_report(
-        request="count the errors",
-        role="engineer: investigate a specific error",
-        investigation="We ran search_logs_tool and found 3 errors.",
-        results=_RECORDS,
-    )
 
+def test_spec_no_longer_asks_the_model_for_code_built_fields():
     spec = evidence_report.JSON_OUTPUT_SPEC
-    assert "tool_used[].status" in spec
-    assert '"success"' in spec
-    assert '"failure"' in spec
-    assert '"failed"' in spec  # named and ruled out, not silently tolerated
-
-    # The enumeration must reach the model through the user message.
-    user = recorder.messages[1]
-    assert '"success"' in user.content and '"failure"' in user.content
+    for field in ("tool_used", "availability", "result_ids", '"evidence":'):
+        assert field not in spec
+    # Closed vocabularies and the cap stay in the prompt text.
+    assert '"supported"' in spec and '"unsupported"' in spec and '"inconclusive"' in spec
+    assert "Cite ONLY the `E`-ids listed" in spec
 
 
 def test_json_spec_states_the_hypothesis_cap():
@@ -248,55 +257,35 @@ def test_json_spec_states_the_hypothesis_cap():
     assert "AT MOST 3" in evidence_report.JSON_OUTPUT_SPEC
 
 
-def test_generate_evidence_report_propagates_model_errors(monkeypatch):
-    # There is no empty-report fallback: a model failure escapes the entry
-    # point so the caller sees it.
+def test_generate_evidence_judgement_propagates_model_errors(monkeypatch):
     monkeypatch.setattr(evidence_report, "deepseek", _RaisingModel())
-
     with pytest.raises(RuntimeError, match="model boom"):
-        evidence_report.generate_evidence_report(
-            request="count the errors",
-            role="engineer: investigate a specific error",
-            investigation="We ran search_logs_tool and found 3 errors.",
-            results=_RECORDS,
-        )
+        _judge()
 
 
-def test_generate_evidence_report_streams_without_response_format(monkeypatch):
-    # The streamed reasoning projects incrementally only when the call carries no
-    # structured-output guarantee; ``response_format`` (in any form) collapses it
-    # to a single delta, so the live progress panel would show one block. Pin its
-    # absence here so it cannot be reintroduced silently.
+def test_generate_evidence_judgement_streams_without_response_format(monkeypatch):
+    # ``response_format`` (in any form) collapses the streamed reply to one
+    # delta, so the live progress panel would show one block. Pin its absence.
     recorder = _RecordingModel()
     monkeypatch.setattr(evidence_report, "deepseek", recorder)
-
-    report = evidence_report.generate_evidence_report(
-        request="count the errors",
-        role="engineer: investigate a specific error",
-        investigation="We ran search_logs_tool and found 3 errors.",
-        results=_RECORDS,
-    )
-
-    # The reasoning block is excluded from ``message.text``, so only the json
-    # text block is parsed into the report.
-    assert report == EvidenceReport(summary="s", evidence=[], hypotheses=[])
+    assert _judge() == EvidenceJudgement(summary="s", hypotheses=[])
     assert recorder.kwargs == {}
     assert "response_format" not in recorder.kwargs
 
 
-def test_generate_evidence_report_malformed_text_raises_validation_error(monkeypatch):
-    # No fence handling or repair: text that is not valid json for the contract
-    # raises rather than being swallowed.
+def test_generate_evidence_judgement_malformed_text_raises_validation_error(monkeypatch):
     recorder = _RecordingModel(message=AIMessage(content="not json at all"))
     monkeypatch.setattr(evidence_report, "deepseek", recorder)
-
     with pytest.raises(ValidationError):
-        evidence_report.generate_evidence_report(
-            request="count the errors",
-            role="engineer: investigate a specific error",
-            investigation="We ran search_logs_tool and found 3 errors.",
-            results=_RECORDS,
-        )
+        _judge()
+
+
+def test_judgement_with_four_hypotheses_is_rejected():
+    hypothesis = {
+        "hypothesis": "h", "description": "d", "status": "inconclusive", "evidence_ids": [],
+    }
+    with pytest.raises(ValidationError):
+        EvidenceJudgement.model_validate({"summary": "s", "hypotheses": [hypothesis] * 4})
 
 
 # --- EvidenceReport contract ----------------------------------------------
@@ -341,7 +330,7 @@ def test_find_evidence_node_propagates_report_failure(monkeypatch):
     monkeypatch.setattr(
         graph, "get_find_evidence_agent", lambda effort: _StubInvestigationAgent()
     )
-    monkeypatch.setattr(graph, "generate_evidence_report", _raising_generate)
+    monkeypatch.setattr(graph, "generate_evidence_judgement", _raising_generate)
 
     state = {
         "effort": "Low",

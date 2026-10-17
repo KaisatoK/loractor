@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 from backend.pipeline import graph
-from backend.pipeline.contracts import EvidenceReport, Hypothesis
+from backend.pipeline.contracts import EvidenceJudgement, Hypothesis
 from backend.pipeline.data_scope import build_data_scope
 
 
@@ -71,13 +71,32 @@ def test_find_evidence_node_attaches_code_built_scope(monkeypatch):
         lambda messages: [_rec("R1", "aggregate", {"category": "ERROR"})],
     )
     monkeypatch.setattr(
-        graph, "generate_evidence_report",
-        lambda **kwargs: EvidenceReport(summary="s", evidence=[]),
+        graph, "collect_tool_calls",
+        lambda messages, records: [
+            {"call_id": "c1", "tool_name": "count_by_category_tool",
+             "arguments": {"type": "service"}, "status": "success",
+             "error_message": None, "result_ids": ["R1"]}
+        ],
     )
+    seen = {}
+
+    def _judge(**kwargs):
+        seen.update(kwargs)
+        return EvidenceJudgement(summary="s")
+
+    monkeypatch.setattr(graph, "generate_evidence_judgement", _judge)
     state = {
         "effort": "Low",
         "role": {"name": "engineer", "objective": "o"},
         "normalized": {"normalized_question": "q"},
     }
     out = graph.find_evidence_node(state)
-    assert out["evidence_report"]["data_scope"]["measured_result_ids"] == ["R1"]
+    report = out["evidence_report"]
+    assert report["data_scope"]["measured_result_ids"] == ["R1"]
+    # The report is assembled from code-built evidence plus the model's judgement.
+    assert report["summary"] == "s" and report["hypotheses"] == []
+    assert [e["id"] for e in report["evidence"]] == ["E1"]
+    assert report["evidence"][0]["availability"] == "available"
+    assert report["evidence"][0]["result_ids"] == ["R1"]
+    assert [e.id for e in seen["evidence"]] == ["E1"]
+    assert out["tool_calls"][0]["tool_name"] == "count_by_category_tool"

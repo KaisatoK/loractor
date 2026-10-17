@@ -58,6 +58,7 @@ def serialize_answer(
     answer: Any,
     valid_ids: set[str],
     records: Sequence[dict] | None = None,
+    notes: Sequence[str] = (),
     cost_note: str = "",
 ) -> str:
     """Render the narrative, the labelled ledger and the scope appendix.
@@ -66,6 +67,8 @@ def serialize_answer(
     its own line. Table blocks whose id is absent from ``valid_ids`` are dropped
     and repeated ids are collapsed. Findings, recommendations and (when
     ``records`` are given) the data-scope appendix are appended by code.
+    ``notes`` are limits of what the answer model saw; they go in the appendix.
+
     ``cost_note`` is appended after the recommendations, before the appendix. It
     is computed off-model from the tool results' own ``query_stats`` (see
     :mod:`backend.pipeline.cost`), so what the answer claims about data volume is
@@ -83,7 +86,7 @@ def serialize_answer(
     if cost_note:
         pieces.append(cost_note)
     if records:
-        pieces.append(render_appendix(records))
+        pieces.append(render_appendix(records, notes))
     return "\n\n".join(pieces)
 
 
@@ -199,7 +202,7 @@ def _truncation(record: dict) -> str:
     return "truncated: unknown (not reported by this tool)"
 
 
-def render_appendix(records: Sequence[dict]) -> str:
+def render_appendix(records: Sequence[dict], notes: Sequence[str] = ()) -> str:
     """The code-built "Data scope and queries" section for these records."""
     records = [r for r in records if isinstance(r, dict)]
     scope = build_data_scope(records)
@@ -232,6 +235,8 @@ def render_appendix(records: Sequence[dict]) -> str:
         )
     if scope.truncated_result_ids:
         lines.append("- Truncated: " + ", ".join(scope.truncated_result_ids))
+    for note in notes:
+        lines.append(f"- Note: {note}")
 
     for record in records:
         kind = record.get("kind") or "unknown"

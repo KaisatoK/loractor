@@ -126,6 +126,30 @@ class DataScope(BaseModel):
     unknown_truncation_result_ids: list[str] = Field(default_factory=list)
 
 
+class EvidenceJudgement(BaseModel):
+    """What the model writes after an investigation; everything else is code.
+
+    The evidence items (tool, parameters, status, errors, result ids) are built
+    in code from the actual tool calls (``pipeline/evidence.py``); the model only
+    summarizes and proposes hypotheses that cite those items' ids.
+    """
+
+    summary: str = Field(
+        description=(
+            "A concise summary of the investigation grounded only in the collected "
+            "evidence. No fabricated or inferred results."
+        )
+    )
+    hypotheses: list[Hypothesis] = Field(default_factory=list, max_length=3)
+    coverage: str = Field(
+        default="",
+        description=(
+            "What fraction of the data was actually examined, and at what depth; "
+            "copied onto EvidenceReport.coverage."
+        ),
+    )
+
+
 class EvidenceReport(BaseModel):
     summary: str = Field(
         description=(
