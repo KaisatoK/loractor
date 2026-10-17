@@ -1,9 +1,9 @@
-import json
 from datetime import datetime
 
 import pyperclip
 import streamlit as st
 
+from stream_events import apply_event
 from ui import chat_client
 from ui.chat_box import chat_box
 from ui.rendering import MARKER_RE, render_answer
@@ -77,56 +77,12 @@ def _status_label(status: str) -> str:
 
 
 def _apply_event(run: dict, event: dict) -> None:
-    """Fold one streamed event into the in-progress run's rendered state."""
-    etype = event.get("type")
-    content = event.get("content", "")
-    if etype == "messages":
-        run["answer"] = content
-    elif etype == "tool_results":
-        try:
-            run["tool_results"] = json.loads(content) or []
-        except (TypeError, ValueError):
-            run["tool_results"] = []
-    elif etype == "tool_progress":
-        try:
-            op = json.loads(content)
-        except (TypeError, ValueError):
-            return
-        action, status = op.get("operation", ""), op.get("status")
-        if status == "completed":
-            run["progress"].append(f"✓ {action}")
-        elif status == "working":
-            # A long-running tool reporting from inside itself. The sweep
-            # iterates over up to 1,624 chunks in one call, so these are the
-            # only sign it is progressing; the message says which pass it is on
-            # and what it decided, so it is shown instead of the operation name.
-            run["progress"].append(
-                f"  → {op.get('message') or action}"
-            )
-        elif status == "skipped":
-            # A refusal, not a failure: the query was never run because it was
-            # unbounded or unsupported as asked, and it came back with a
-            # suggestion. Labelling it "failed" misreads a useful answer as a
-            # broken tool.
-            run["progress"].append(f"↷ {op.get('message') or action}")
-        elif status not in ("started", None):
-            run["progress"].append(f"{action} — failed")
-    elif etype == "subgraph_name":
-        run["progress"].append(f"Currently at stage: {content}")
-    elif etype == "stage":
-        run["progress"].append(f"Currently at stage: {content}")
-    elif etype == "thinking_delta":
-        key = event.get("id") or ""
-        if run.get("thinking_key") != key:
-            run["progress"].append("Thinking: ")
-            run["thinking_key"] = key
-            run["thinking_at"] = len(run["progress"]) - 1
-        run["progress"][run["thinking_at"]] += content
-    elif etype == "subgraph_message":
-        # Consolidated copy of the thought; the backend already keeps it in the
-        # run's persisted progress. Arriving here closes the open live thought so
-        # the next LLM call starts a new line.
-        run["thinking_key"] = None
+    """Fold one streamed event into the in-progress run's rendered state.
+
+    The shared reducer (``stream_events``) is also what the backend uses for the
+    progress it saves, so the live panel and the finished one agree.
+    """
+    apply_event(run, event, persist=False)
 
 
 def _annotate_last_user_turn(current_chat, **flags) -> None:

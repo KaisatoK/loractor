@@ -13,6 +13,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from stream_events import apply_event
+
 RUNNING = "running"
 DONE = "done"
 ERROR = "error"
@@ -226,32 +228,20 @@ class RunRegistry:
             run.condition.notify_all()
 
     def _track(self, run: RunState, event: dict) -> None:
-        """Derive answer/tool_results/progress from an event (UI parity)."""
-        etype = event.get("type")
-        content = event.get("content", "")
-        if etype == "messages":
-            run.answer = content
-        elif etype == "tool_results":
-            try:
-                run.tool_results = json.loads(content) or []
-            except (TypeError, ValueError):
-                run.tool_results = []
-        elif etype == "tool_progress":
-            try:
-                op = json.loads(content)
-            except (TypeError, ValueError):
-                return
-            action, status = op.get("operation", ""), op.get("status")
-            if status == "completed":
-                run.progress.append(f"✓ {action}")
-            elif status not in ("started", None):
-                run.progress.append(f"{action} — failed")
-        elif etype == "subgraph_name":
-            run.progress.append(f"Currently at stage: {content}")
-        elif etype == "stage":
-            run.progress.append(f"Currently at stage: {content}")
-        elif etype == "subgraph_message":
-            run.progress.append(f"Thinking: {content}")
+        """Derive the persisted answer/tool_results/progress from one event.
+
+        Uses the reducer the UI uses (``stream_events``), so what is saved matches
+        what was shown live; ``persist=True`` records consolidated thoughts.
+        """
+        state = {
+            "answer": run.answer,
+            "tool_results": run.tool_results,
+            "progress": run.progress,
+        }
+        apply_event(state, event, persist=True)
+        run.answer = state["answer"]
+        run.tool_results = state["tool_results"]
+        run.progress = state["progress"]
 
     def _finish(self, run: RunState) -> None:
         with self._lock:
