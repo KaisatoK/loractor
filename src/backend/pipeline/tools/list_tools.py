@@ -1,7 +1,14 @@
+"""Value-discovery tool.
+
+Replaces three unbounded ``SELECT DISTINCT`` helpers with one bounded,
+volume-ranked lookup. The agent uses this to find a real filter value before
+asking for a trend, so ranking by row count is what makes the answer useful.
+"""
+
 from langchain.tools import ToolRuntime, tool
 
-from backend.db import get_event_ids, get_pids, get_services
-from backend.db.config import TABLE_NAME
+from backend.db import get_field_values
+from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import GetTools
 
@@ -9,26 +16,22 @@ from backend.pipeline.tools.schemas import GetTools
 @tool(args_schema=GetTools)
 def get_data_tool(
     runtime: ToolRuntime,
+    start_time: str,
+    end_time: str,
     type: str,
-    table_name: str = TABLE_NAME,
+    dataset: str = DEFAULT_DATASET_ID,
+    limit: int = 50,
 ) -> dict:
-    """Get all data of a specific type (pid or service or event_id) in the log."""
-    match type:
-        case "pid":
-            return execute_database_tool(
-                runtime=runtime,
-                operation="list the known pids",
-                function=lambda: get_pids(table_name),
-            )
-        case "service":
-            return execute_database_tool(
-                runtime=runtime,
-                operation="list the known services",
-                function=lambda: get_services(table_name),
-            )
-        case "event_id":
-            return execute_database_tool(
-                runtime=runtime,
-                operation="list the known event ids",
-                function=lambda: get_event_ids(table_name),
-            )
+    """List the most common values of a field in a time window, with counts.
+
+    Use it to discover valid filter values before requesting a trend. Fields
+    whose distinct set is effectively unbounded (trace ids on the OTel corpus)
+    are refused with an alternative rather than attempted.
+    """
+    return execute_database_tool(
+        runtime=runtime,
+        operation=f"list the most common {type} values on {dataset}",
+        function=lambda: get_field_values(
+            start_time, end_time, type, dataset, limit
+        ),
+    )

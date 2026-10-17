@@ -20,16 +20,21 @@ from contextlib import contextmanager
 from typing import ParamSpec
 
 from backend.db.config import (
+    SERENEDB_BULK_TIMEOUT_MS,
     SERENEDB_DB,
     SERENEDB_HOST,
+    SERENEDB_INTERACTIVE_TIMEOUT_MS,
     SERENEDB_PASSWORD,
     SERENEDB_POOL_ACQUIRE_TIMEOUT,
     SERENEDB_POOL_MAX,
     SERENEDB_POOL_MIN,
     SERENEDB_PORT,
+    SERENEDB_SESSION_MEMORY_LIMIT,
     SERENEDB_STATEMENT_TIMEOUT_MS,
     SERENEDB_USER,
 )
+from backend.db.errors import QueryRefused
+from backend.db.stats import QueryClass, QueryResult, QueryStats
 
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")
@@ -39,6 +44,18 @@ _pool_lock = threading.Lock()
 
 
 def _connect_kwargs() -> dict:
+    # NOTE: ``statement_timeout`` passed through libpq ``options`` is **silently
+    # ignored** by SereneDB -- a connection opened with
+    # ``-c statement_timeout=30000`` still reports ``0``. It is kept here because
+    # it is harmless and correct against stock PostgreSQL, but it must not be
+    # relied on: the timeout that actually binds is the ``SET LOCAL`` issued per
+    # query class in :func:`query_runner`.
+    #
+    # ``memory_limit`` is deliberately NOT set here. It is a GLOBAL setting in
+    # SereneDB ("option \"memory_limit\" cannot be set locally"), so putting it
+    # in a connection string silently reconfigures the whole server for every
+    # other client. Use :func:`set_global_memory_limit` as an explicit operator
+    # action instead.
     return {
         "host": SERENEDB_HOST,
         "port": SERENEDB_PORT,
@@ -46,9 +63,44 @@ def _connect_kwargs() -> dict:
         "user": SERENEDB_USER,
         "password": SERENEDB_PASSWORD,
         "application_name": "ai-chatbot",
-        # Enforce a server-side ceiling on how long any single query may run.
         "options": f"-c statement_timeout={SERENEDB_STATEMENT_TIMEOUT_MS}",
     }
+
+
+def current_memory_limit() -> str:
+    """The server's global ``memory_limit``, as it reports it."""
+    with db_cursor() as cur:
+        cur.execute("SELECT current_setting('memory_limit') AS m")
+        return str(cur.fetchone()["m"])
+
+
+def set_global_memory_limit(limit: str = SERENEDB_SESSION_MEMORY_LIMIT) -> str:
+    """Lower the server's global memory ceiling. **Explicit operator action.**
+
+    Three measured facts make this a named function rather than a connection
+    setting:
+
+    * ``memory_limit`` cannot be scoped. ``SET LOCAL memory_limit`` fails with
+      *option "memory_limit" cannot be set locally*, so there is no per-session
+      or per-transaction form.
+    * A plain ``SET`` is **global and persistent** -- it changes the ceiling for
+      every other client of the server, and the new value survives the
+      connection that set it.
+    * Passing it through libpq ``options`` is unreliable; an explicit ``SET``
+      statement is what actually applies.
+
+    Worth doing on a host where index builds have proved fragile, because a
+    ceiling the planner respects turns an out-of-memory crash into a failed
+    query. But it reconfigures a shared server, so it is the operator's call --
+    which is exactly why it is not a side effect of opening a connection.
+
+    Returns the value the server reports afterwards, which may be rounded.
+    """
+    with db_cursor() as cur:
+        cur.execute(
+            sql.SQL("SET memory_limit = {limit}").format(limit=sql.Literal(limit))
+        )
+    return current_memory_limit()
 
 
 def _get_pool() -> ThreadedConnectionPool:
@@ -117,18 +169,77 @@ def db_cursor() -> Iterator[RealDictCursor]:
 
 
 def query_runner(
-    func: Callable[P, tuple[sql.Composable, list]],
-) -> Callable[P, list[dict]]:
-    """Turn a function that returns ``(query, params)`` into one that runs it."""
+    func: Callable[P, tuple] | None = None,
+    *,
+    query_class: QueryClass = QueryClass.INTERACTIVE,
+) -> Callable:
+    """Turn a function that returns ``(query, params)`` into one that runs it.
 
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> list[dict]:
-        logger.debug("Running %s args=%s kwargs=%s", func.__name__, args, kwargs)
-        query, params = func(*args, **kwargs)
+    Three things happen around the execution that the builders do not have to
+    think about:
 
-        with db_cursor() as cur:
-            cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
-            cur.execute(query, params)
-            return [dict(row) for row in cur.fetchall()]
+    * **Per-class timeout.** ``SET LOCAL statement_timeout`` inside the
+      transaction, so an interactive query and a bulk aggregate get different
+      ceilings without needing different connections.
+    * **Cost metering.** Wall clock is measured, and any
+      :class:`~backend.db.stats.QueryStats` the builder produced from metadata
+      pruning is attached to the result.
+    * **Refusal handling.** A builder that raises
+      :class:`~backend.db.errors.QueryRefused` never reaches SQL; the refusal
+      comes back as a result so the agent can narrow and retry.
 
-    return wrapper
+    A builder may return ``(query, params)`` or ``(query, params, stats)``.
+    """
+
+    def decorate(builder: Callable[P, tuple]) -> Callable[P, QueryResult]:
+        @functools.wraps(builder)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> QueryResult:
+            logger.debug(
+                "Running %s args=%s kwargs=%s", builder.__name__, args, kwargs
+            )
+            try:
+                built = builder(*args, **kwargs)
+            except QueryRefused as refused:
+                logger.info(
+                    "Refused %s: %s", builder.__name__, refused.refusal.reason
+                )
+                return QueryResult(
+                    [],
+                    QueryStats(query_class=str(query_class)),
+                    refusal=refused.refusal,
+                )
+
+            query, params, *rest = built
+            stats: QueryStats = rest[0] if rest else QueryStats()
+            stats.query_class = str(query_class)
+
+            timeout_ms = (
+                SERENEDB_BULK_TIMEOUT_MS
+                if query_class is QueryClass.BULK
+                else SERENEDB_INTERACTIVE_TIMEOUT_MS
+            )
+
+            started = time.monotonic()
+            with db_cursor() as cur:
+                cur.execute(
+                    sql.SQL("SET LOCAL statement_timeout = {ms}").format(
+                        ms=sql.Literal(timeout_ms)
+                    )
+                )
+                cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
+                cur.execute(query, params)
+                rows = [dict(row) for row in cur.fetchall()]
+
+            stats.elapsed_ms = int((time.monotonic() - started) * 1000)
+            return QueryResult(rows, stats)
+
+        return wrapper
+
+    if func is not None:
+        return decorate(func)
+    return decorate
+
+
+def bulk_query(func: Callable[P, tuple]) -> Callable[P, QueryResult]:
+    """``query_runner`` with the bulk timeout. For remote aggregates and builds."""
+    return query_runner(func, query_class=QueryClass.BULK)

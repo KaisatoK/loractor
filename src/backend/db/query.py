@@ -1,180 +1,203 @@
+"""Search and single-row fetch.
+
+Search has two shapes, chosen by declared capability rather than by dataset id:
+
+* **Hybrid** -- corpora with a per-row embedding column fuse a BM25 branch and a
+  vector branch with reciprocal rank fusion. This is the OpenStack path and it
+  is preserved exactly, down to the ``1/(60 + rank)`` weighting.
+* **Lexical** -- corpora with only an inverted index use the BM25 branch alone.
+  This is the OTel slice, which deliberately has no per-row embeddings: there is
+  no budget to embed a billion log bodies, and template-level embeddings
+  (:mod:`backend.db.templates`) cover semantic search instead.
+
+Search always runs against the **index relation**, never the base table or the
+remote files, so a text query never reaches S3.
+"""
+
+from __future__ import annotations
+
 import logging
 
 from psycopg2 import sql
 
-from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL, TABLE_NAME
+from backend.db import predicates as pred
+from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL
 from backend.db.connection import query_runner
+from backend.db.datasets import Capability, Dataset, resolve
+from backend.db.stats import QueryStats
 
 logger = logging.getLogger(__name__)
+
+# Rows each branch contributes to the fusion before ranking. 100 is the original
+# value and is kept so OpenStack results are unchanged.
+BRANCH_DEPTH = 100
+
+# Reciprocal-rank-fusion constant, also unchanged from the original.
+RRF_K = 60
+
+
+def _display_fields(dataset: Dataset) -> list[tuple[str, sql.Composable]]:
+    """The canonical fields a search result should show, in display order."""
+    wanted = ("ts", "severity", "service", "entity_id", "message", "event_id")
+    return [
+        (name, dataset.sql_for(name)) for name in wanted if dataset.has_field(name)
+    ]
 
 
 @query_runner
 def search_logs(
     query_text: str,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
+    dataset: str | None = None,
+    severity: str | None = None,
     limit: int = 10,
-) -> tuple[sql.Composable, list[str | int]]:
-    logger.debug(
-        'Getting top %s logs related to "%s" for category %s',
-        limit,
-        query_text,
-        category,
-    )
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Rank log lines by relevance to ``query_text``.
 
-    query = sql.SQL("""
-        WITH query_embedding AS (
-            SELECT ai_embed(%s, {embedding_model}, 'local_ai')::FLOAT[{embedding_dimension}] AS emb
-        ),
-        fused AS (
-            SELECT line_id,
-                ROW_NUMBER() OVER (ORDER BY s DESC) AS rank 
-            FROM (
-                SELECT line_id,
-                    BM25({index_name}.tableoid) AS s
-                FROM {index_name}
-                WHERE content @@ ts_levenshtein(%s, 1)
-                ORDER BY s DESC 
-                LIMIT 100
-            ) lex
-            UNION ALL
-            SELECT line_id,
-                ROW_NUMBER() OVER (ORDER BY dist) AS rank 
-            FROM (
-                SELECT line_id,
-                    embedding <=> q.emb AS dist
-                FROM {index_name}, query_embedding q
-                ORDER BY dist 
-                LIMIT 100
-            ) vec
-        )
-        SELECT t.log_timestamp, t.pid, t.category, t.service, t.content, t.event_id,
-            SUM(1.0 / (60 + f.rank)) AS relevance
-        FROM fused f
-        JOIN {table_name} t ON t.line_id = f.line_id
-        {category_filter}
-        GROUP BY t.log_timestamp, t.pid, t.category, t.service, t.content, t.event_id
-        ORDER BY SUM(1.0 / (60 + f.rank)) DESC
-        LIMIT %s
-    """).format(
-        embedding_model=sql.Literal(EMBEDDING_MODEL),
-        embedding_dimension=sql.Literal(EMBEDDING_DIMENSION),
-        index_name=sql.Identifier(f"{table_name}_idx"),
-        table_name=sql.Identifier(table_name),
-        category_filter=sql.SQL("WHERE t.category = %s") if category else sql.SQL(""),
-    )
-
-    params = [query_text, query_text] + ([category] if category else []) + [limit]
-    return query, params
-
-
-@query_runner
-def get_log_by_line_id(
-    line_id: int,
-    table_name: str = TABLE_NAME,
-) -> tuple[sql.Composable, list[str | int]]:
-    """Return the log row with this primary-key ``line_id``.
-
-    Only the meaningful fields are returned: the derived ``pid_text`` mirror, the
-    split ``log_date``/``log_time`` (covered by ``log_timestamp``) and the
-    ``embedding`` vector are omitted. An unknown id yields no rows.
+    No time window is required: this reads the inverted index, whose size is
+    already bounded by whatever built it, so there is no scan to constrain.
     """
-    logger.debug("Getting the log row with line_id %s", line_id)
+    ds = resolve(dataset)
+    pred.require(ds, Capability.BM25, "full-text search")
 
-    query = sql.SQL("""
-        SELECT line_id, log_record, log_timestamp, pid, category,
-               service, addr, content, event_id, event_template
-        FROM {table_name}
-        WHERE line_id = %s
-    """).format(table_name=sql.Identifier(table_name))
-
-    return query, [line_id]
-
-
-@query_runner
-def top_in_category_by_service(
-    start_time: str,
-    end_time: str,
-    table_name: str = TABLE_NAME,
-    category: str | None = None,
-    limit: int = 5,
-) -> tuple[sql.Composable, list[str | int]]:
+    stats = QueryStats(dataset=ds.id, approximate=False)
+    hybrid = ds.supports(Capability.VECTOR)
     logger.debug(
-        "Getting top %s service(s) for category %s from %s to %s",
-        limit,
-        category,
-        start_time,
-        end_time,
+        'Searching %s for "%s" (severity=%s, hybrid=%s)',
+        ds.id,
+        query_text,
+        severity,
+        hybrid,
     )
 
-    query = sql.SQL("""
-        SELECT service, COUNT(*) AS count
-        FROM {table_name}
-        WHERE log_timestamp >= %s::timestamp
-            AND log_timestamp <= %s::timestamp
-        {category_filter}
-        GROUP BY service
-        ORDER BY count DESC
-        LIMIT %s
+    record_id = ds.sql_for("record_id")
+    message = ds.sql_for("message")
+    index = ds.search_relation()
+    relation = ds.scan_relation()
+
+    lexical = sql.SQL("""
+        SELECT {record_id} AS rid,
+               ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
+        FROM (
+            SELECT {record_id}, BM25({index}.tableoid) AS s
+            FROM {index}
+            WHERE {message} @@ ts_levenshtein(%s, 1)
+            ORDER BY s DESC
+            LIMIT {depth}
+        ) lex
     """).format(
-        table_name=sql.Identifier(table_name),
-        category_filter=sql.SQL("AND category = %s") if category else sql.SQL(""),
+        record_id=record_id,
+        index=index,
+        message=message,
+        depth=sql.Literal(BRANCH_DEPTH),
     )
+    params: list = [query_text]
 
-    params = [start_time, end_time] + ([category] if category else []) + [limit]
-    return query, params
+    if hybrid:
+        # The embedding is computed inside SereneDB; the model name and
+        # dimension are code-owned configuration, not caller input.
+        fused = sql.SQL("""
+            WITH query_embedding AS (
+                SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
+            ),
+            fused AS (
+                {lexical}
+                UNION ALL
+                SELECT {record_id} AS rid,
+                       ROW_NUMBER() OVER (ORDER BY dist) AS rank
+                FROM (
+                    SELECT {record_id}, embedding <=> q.emb AS dist
+                    FROM {index}, query_embedding q
+                    ORDER BY dist
+                    LIMIT {depth}
+                ) vec
+            )
+        """).format(
+            model=sql.Literal(EMBEDDING_MODEL),
+            dim=sql.Literal(EMBEDDING_DIMENSION),
+            lexical=lexical,
+            record_id=record_id,
+            index=index,
+            depth=sql.Literal(BRANCH_DEPTH),
+        )
+        # ai_embed's placeholder comes first in the composed statement.
+        params = [query_text, query_text]
+    else:
+        fused = sql.SQL("WITH fused AS ({lexical})").format(lexical=lexical)
+
+    select_columns = [
+        sql.SQL("t.{col} AS {alias}").format(
+            col=column, alias=sql.Identifier(name)
+        )
+        if isinstance(column, sql.Identifier)
+        else sql.SQL("{col} AS {alias}").format(
+            col=column, alias=sql.Identifier(name)
+        )
+        for name, column in _display_fields(ds)
+    ]
+
+    severity_clause, severity_params = pred.severity_filter(ds, severity)
+    if severity_params:
+        severity_clause = sql.SQL("WHERE t.{col} = %s").format(
+            col=ds.sql_for("severity")
+        )
+
+    query = sql.SQL("""
+        {fused}
+        SELECT {columns},
+               SUM(1.0 / ({k} + f.rank)) AS relevance
+        FROM fused f
+        JOIN {relation} t ON t.{record_id} = f.rid
+        {severity_clause}
+        GROUP BY {columns_bare}
+        ORDER BY relevance DESC
+        {limit}
+    """).format(
+        fused=fused,
+        columns=sql.SQL(", ").join(select_columns),
+        k=sql.Literal(RRF_K),
+        relation=relation,
+        record_id=record_id,
+        severity_clause=severity_clause,
+        columns_bare=sql.SQL(", ").join(
+            sql.SQL("t.{col}").format(col=column)
+            for _, column in _display_fields(ds)
+        ),
+        limit=pred.bounded_limit(ds, limit),
+    )
+    return query, params + severity_params, stats
 
 
 @query_runner
-def compare_periods(
-    baseline_start: str,
-    baseline_end: str,
-    recent_start: str,
-    recent_end: str,
-    table_name: str = TABLE_NAME,
-    limit: int = 5,
-) -> tuple[sql.Composable, list[str | int]]:
-    logger.debug(
-        "Comparing top %s service between baseline (%s -> %s) and recent period (%s -> %s).",
-        limit,
-        baseline_start,
-        baseline_end,
-        recent_start,
-        recent_end,
-    )
+def get_log_by_record_id(
+    record_id: int,
+    dataset: str | None = None,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Fetch one complete row by its primary key.
+
+    Gated on :data:`~backend.db.datasets.Capability.RECORD_ID`: the raw OTel
+    corpus has no primary key, so asking for one there is refused with a pointer
+    to the datasets that do, rather than failing on a missing column.
+    """
+    ds = resolve(dataset)
+    pred.require(ds, Capability.RECORD_ID, "fetching a row by id")
+
+    logger.debug("Fetching %s record %s", ds.id, record_id)
+    columns = [
+        sql.SQL("{col} AS {alias}").format(col=column, alias=sql.Identifier(name))
+        for name, column in _display_fields(ds)
+    ]
+    if ds.has_field("template"):
+        columns.append(
+            sql.SQL("{col} AS template").format(col=ds.sql_for("template"))
+        )
 
     query = sql.SQL("""
-        WITH baseline AS (
-            SELECT service, category, COUNT(*) AS baseline_count
-            FROM {table_name}
-            WHERE log_timestamp >= %s::timestamp 
-                AND log_timestamp <= %s::timestamp
-            GROUP BY service, category
-        ),
-        recent AS (
-            SELECT service, category, COUNT(*) AS recent_count
-            FROM {table_name}
-            WHERE log_timestamp >= %s::timestamp 
-                AND log_timestamp <= %s::timestamp
-            GROUP BY service, category
-        )
-        SELECT 
-            COALESCE(r.service, b.service) AS service,
-            COALESCE(r.category, b.category) AS category,
-            COALESCE(b.baseline_count, 0) AS baseline_count,
-            COALESCE(r.recent_count, 0) AS recent_count,
-            (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) AS volume_change,
-            ROUND(
-                (COALESCE(r.recent_count, 0) - COALESCE(b.baseline_count, 0)) * 100.0 / 
-                NULLIF(b.baseline_count, 0), 2
-            ) AS percentage_change
-        FROM recent r
-        FULL OUTER JOIN baseline b 
-            ON r.service = b.service AND r.category = b.category
-        ORDER BY volume_change DESC
-        LIMIT %s
-    """).format(table_name=sql.Identifier(table_name))
-
-    params = [baseline_start, baseline_end, recent_start, recent_end, limit]
-
-    return query, params
+        SELECT {id_col} AS record_id, {columns}
+        FROM {relation}
+        WHERE {id_col} = %s
+    """).format(
+        id_col=ds.sql_for("record_id"),
+        columns=sql.SQL(", ").join(columns),
+        relation=ds.scan_relation(),
+    )
+    return query, [record_id], QueryStats(dataset=ds.id)

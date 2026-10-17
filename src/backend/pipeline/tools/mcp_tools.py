@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from langchain.tools import ToolRuntime, tool
 
-from backend.db.config import TABLE_NAME
+from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.schemas import (
@@ -17,73 +17,102 @@ from backend.pipeline.tools.schemas import (
 
 
 def _call(runtime: ToolRuntime, name: str, operation: str, arguments: dict) -> dict:
+    """Invoke an MCP tool and re-wrap its envelope for the local contract.
+
+    A refusal arriving over MCP is passed straight through rather than being
+    unwrapped as data, so the agent sees the same actionable refusal on both
+    transports. ``query_stats`` is likewise preserved.
+    """
     def invoke():
         payload = get_mcp_bridge().call_tool(name, arguments)
-        return payload.get("data", payload) if isinstance(payload, dict) else payload
+        if isinstance(payload, dict):
+            if payload.get("status") == "refused":
+                from backend.db.errors import Refusal, QueryRefused
+
+                raise QueryRefused(
+                    Refusal(
+                        reason=payload.get("reason", "refused"),
+                        suggestion=payload.get("suggestion", ""),
+                        code=payload.get("code", "refused"),
+                    )
+                )
+            return payload.get("data", payload)
+        return payload
 
     return execute_database_tool(
         runtime=runtime, operation=operation, function=invoke
     )
 
 
-@tool(args_schema=CountByCategory, description="Count log rows by category.")
+@tool(args_schema=CountByCategory, description="Count log rows by severity.")
 def count_by_category_tool(runtime: ToolRuntime, start_time: str, end_time: str,
-                          type: str, table_name: str = TABLE_NAME,
-                          category: str | None = None) -> dict:
-    return _call(runtime, "count_by_category_tool", f"count {type} by severity",
+                           type: str = "general", dataset: str = DEFAULT_DATASET_ID,
+                           category: str | None = None, limit: int = 50) -> dict:
+    return _call(runtime, "count_by_category_tool",
+                 f"count {type} on {dataset} by severity",
                  {"start_time": start_time, "end_time": end_time, "type": type,
-                  "table_name": table_name, "category": category})
+                  "dataset": dataset, "category": category, "limit": limit})
 
 
-@tool(args_schema=GetTools, description="List known log identifiers.")
-def get_data_tool(runtime: ToolRuntime, type: str,
-                  table_name: str = TABLE_NAME) -> dict:
-    return _call(runtime, "get_data_tool", f"list the known {type}s",
-                 {"type": type, "table_name": table_name})
+@tool(args_schema=GetTools, description="List a field's most common values.")
+def get_data_tool(runtime: ToolRuntime, start_time: str, end_time: str, type: str,
+                  dataset: str = DEFAULT_DATASET_ID, limit: int = 50) -> dict:
+    return _call(runtime, "get_data_tool",
+                 f"list the most common {type} values on {dataset}",
+                 {"start_time": start_time, "end_time": end_time, "type": type,
+                  "dataset": dataset, "limit": limit})
 
 
-@tool(args_schema=GetLogByLineId, description="Fetch a complete log row by line id.")
+@tool(args_schema=GetLogByLineId, description="Fetch one log row by id.")
 def get_log_by_line_id_tool(runtime: ToolRuntime, line_id: int,
-                           table_name: str = TABLE_NAME) -> dict:
-    return _call(runtime, "get_log_by_line_id_tool", f"fetch the log row with line_id {line_id}",
-                 {"line_id": line_id, "table_name": table_name})
+                            dataset: str = DEFAULT_DATASET_ID) -> dict:
+    return _call(runtime, "get_log_by_line_id_tool",
+                 f"fetch {dataset} row with id {line_id}",
+                 {"line_id": line_id, "dataset": dataset})
 
 
-@tool(args_schema=GetTrend, description="Get a log trend.")
+@tool(args_schema=GetTrend, description="Count one field value per time bucket.")
 def get_trend_tool(runtime: ToolRuntime, start_time: str, end_time: str,
-                   type: tuple[str, str], table_name: str = TABLE_NAME,
-                   category: str | None = None) -> dict:
-    return _call(runtime, "get_trend_tool", f"get the {type[0]} trend for '{type[1]}'",
-                 {"start_time": start_time, "end_time": end_time, "type": type,
-                  "table_name": table_name, "category": category})
+                   type: tuple[str, str], dataset: str = DEFAULT_DATASET_ID,
+                   bucket: str = "minute", category: str | None = None) -> dict:
+    return _call(runtime, "get_trend_tool",
+                 f"get the {type[0]} trend for '{type[1]}' on {dataset}",
+                 {"start_time": start_time, "end_time": end_time, "type": list(type),
+                  "dataset": dataset, "bucket": bucket, "category": category})
 
 
-@tool(args_schema=SearchLogs, description="Search log messages.")
+@tool(args_schema=SearchLogs, description="Search log message content.")
 def search_logs_tool(runtime: ToolRuntime, query_text: str,
-                     category: str | None = None, table_name: str = TABLE_NAME,
+                     category: str | None = None, dataset: str = DEFAULT_DATASET_ID,
                      limit: int = 10) -> dict:
-    return _call(runtime, "search_logs_tool", f"search log messages for '{query_text}'",
+    return _call(runtime, "search_logs_tool",
+                 f"search {dataset} messages for '{query_text}'",
                  {"query_text": query_text, "category": category,
-                  "table_name": table_name, "limit": limit})
+                  "dataset": dataset, "limit": limit})
 
 
-@tool(args_schema=TopInCategoryByService, description="Rank services by log volume.")
-def top_in_category_by_service_tool(runtime: ToolRuntime, start_time: str, end_time: str,
-                                    table_name: str = TABLE_NAME,
-                                    category: str | None = None, limit: int = 5) -> dict:
-    return _call(runtime, "top_in_category_by_service_tool", "rank services by log volume",
-                 {"start_time": start_time, "end_time": end_time, "table_name": table_name,
-                  "category": category, "limit": limit})
+@tool(args_schema=TopInCategoryByService,
+      description="Rank a field's values by log volume.")
+def top_in_category_by_service_tool(runtime: ToolRuntime, start_time: str,
+                                    end_time: str, field: str = "service",
+                                    dataset: str = DEFAULT_DATASET_ID,
+                                    category: str | None = None,
+                                    limit: int = 5) -> dict:
+    return _call(runtime, "top_in_category_by_service_tool",
+                 f"rank {dataset} {field} by log volume",
+                 {"start_time": start_time, "end_time": end_time, "field": field,
+                  "dataset": dataset, "category": category, "limit": limit})
 
 
-@tool(args_schema=ComparePeriods, description="Compare two log periods.")
+@tool(args_schema=ComparePeriods, description="Compare two time windows.")
 def compare_periods_tool(runtime: ToolRuntime, baseline_start: str, baseline_end: str,
-                         recent_start: str, recent_end: str,
-                         table_name: str = TABLE_NAME, limit: int = 5) -> dict:
-    return _call(runtime, "compare_periods_tool", "compare log volume across two time windows",
+                         recent_start: str, recent_end: str, field: str = "service",
+                         dataset: str = DEFAULT_DATASET_ID, limit: int = 5) -> dict:
+    return _call(runtime, "compare_periods_tool",
+                 f"compare {dataset} log volume across two time windows",
                  {"baseline_start": baseline_start, "baseline_end": baseline_end,
                   "recent_start": recent_start, "recent_end": recent_end,
-                  "table_name": table_name, "limit": limit})
+                  "field": field, "dataset": dataset, "limit": limit})
 
 
 @tool

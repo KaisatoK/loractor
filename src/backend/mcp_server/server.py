@@ -16,22 +16,15 @@ from fastmcp import FastMCP
 from backend.db import (
     auto_complete,
     compare_periods,
-    count_by_category,
-    count_event_id_by_category,
-    count_pid_by_category,
-    count_service_by_category,
-    get_event_id_trend_by_category,
-    get_event_ids,
-    get_log_by_line_id,
-    get_pid_trend_by_category,
-    get_pids,
-    get_service_trend_by_category,
-    get_services,
-    get_log_by_line_id as fetch_log,
+    count_by_field,
+    get_field_values,
+    get_log_by_record_id,
+    get_trend,
     search_logs,
-    top_in_category_by_service,
+    top_by_field,
 )
-from backend.db.config import TABLE_NAME
+from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.db.errors import QueryRefused
 from backend.pipeline.tools.schemas import (
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
     SearchLogs, TopInCategoryByService,
@@ -46,107 +39,133 @@ def _validated(model, **values: Any) -> dict[str, Any]:
 
 
 def _result(operation: str, data: Any) -> dict[str, Any]:
-    return {"status": "success", "operation": operation, "data": data}
+    """The same envelope the in-process tools return, including cost.
+
+    ``query_stats`` rides along so an MCP client gets the same cost accounting
+    as the local transport, and a refusal is reported as a refusal rather than
+    raised -- an external agent needs the suggestion just as much as ours does.
+    """
+    payload: dict[str, Any] = {
+        "status": "success",
+        "operation": operation,
+        "data": list(data),
+    }
+    stats = getattr(data, "stats", None)
+    if stats is not None:
+        payload["query_stats"] = stats.as_dict()
+    return payload
+
+
+def _run(operation: str, function) -> dict[str, Any]:
+    try:
+        return _result(operation, function())
+    except QueryRefused as refused:
+        return {"operation": operation, **refused.refusal.as_tool_result()}
 
 
 @mcp.tool(name="search_logs_tool")
 def search_logs_tool(query_text: str, category: str | None = None,
-                     table_name: str = TABLE_NAME, limit: int = 10) -> dict:
-    """Search log message content, optionally restricted to a severity."""
-    values = _validated(SearchLogs, query_text=query_text, category=category,
-                        table_name=table_name, limit=limit)
-    query_text, category, table_name, limit = (values[k] for k in ("query_text", "category", "table_name", "limit"))
-    operation = f"search log messages for '{query_text}'"
-    if category:
-        operation += f" with severity '{category}'"
-    return _result(operation, search_logs(query_text, table_name, category, limit))
+                     dataset: str = DEFAULT_DATASET_ID, limit: int = 10) -> dict:
+    """Search log message content on an indexed corpus."""
+    v = _validated(SearchLogs, query_text=query_text, category=category,
+                   dataset=dataset, limit=limit)
+    operation = f"search {v['dataset']} messages for '{v['query_text']}'"
+    if v["category"]:
+        operation += f" with severity '{v['category']}'"
+    return _run(operation, lambda: search_logs(
+        v["query_text"], v["dataset"], v["category"], v["limit"]))
 
 
 @mcp.tool(name="get_log_by_line_id_tool")
-def get_log_by_line_id_tool(line_id: int, table_name: str = TABLE_NAME) -> dict:
-    """Fetch one complete log row by its line_id."""
-    values = _validated(GetLogByLineId, line_id=line_id, table_name=table_name)
-    line_id, table_name = values["line_id"], values["table_name"]
-    return _result(f"fetch the log row with line_id {line_id}", fetch_log(line_id, table_name))
+def get_log_by_line_id_tool(line_id: int, dataset: str = DEFAULT_DATASET_ID) -> dict:
+    """Fetch one complete log row by its primary-key id."""
+    v = _validated(GetLogByLineId, line_id=line_id, dataset=dataset)
+    return _run(
+        f"fetch {v['dataset']} row with id {v['line_id']}",
+        lambda: get_log_by_record_id(v["line_id"], v["dataset"]),
+    )
 
 
 @mcp.tool(name="top_in_category_by_service_tool")
 def top_in_category_by_service_tool(start_time: str, end_time: str,
-                                    table_name: str = TABLE_NAME,
+                                    field: str = "service",
+                                    dataset: str = DEFAULT_DATASET_ID,
                                     category: str | None = None, limit: int = 5) -> dict:
-    values = _validated(TopInCategoryByService, start_time=start_time, end_time=end_time,
-                        table_name=table_name, category=category, limit=limit)
-    start_time, end_time, table_name = values["start_time"], values["end_time"], values["table_name"]
-    category, limit = values["category"], values["limit"]
-    return _result("rank services by log volume", top_in_category_by_service(
-        start_time, end_time, table_name, category, limit))
+    """Rank a field's values by log volume in a time window."""
+    v = _validated(TopInCategoryByService, start_time=start_time, end_time=end_time,
+                   field=field, dataset=dataset, category=category, limit=limit)
+    return _run(
+        f"rank {v['dataset']} {v['field']} by log volume",
+        lambda: top_by_field(v["start_time"], v["end_time"], v["field"],
+                             v["dataset"], v["category"], v["limit"]),
+    )
 
 
 @mcp.tool(name="compare_periods_tool")
 def compare_periods_tool(baseline_start: str, baseline_end: str,
                          recent_start: str, recent_end: str,
-                         table_name: str = TABLE_NAME, limit: int = 5) -> dict:
-    values = _validated(ComparePeriods, baseline_start=baseline_start, baseline_end=baseline_end,
-                        recent_start=recent_start, recent_end=recent_end,
-                        table_name=table_name, limit=limit)
-    baseline_start, baseline_end = values["baseline_start"], values["baseline_end"]
-    recent_start, recent_end = values["recent_start"], values["recent_end"]
-    table_name, limit = values["table_name"], values["limit"]
-    return _result("compare log volume across two time windows", compare_periods(
-        baseline_start, baseline_end, recent_start, recent_end, table_name, limit))
-
-
-def _count_operation(kind: str, category: str | None) -> str:
-    return f"count {kind} for '{category}' severity" if category else f"count {kind} by severity"
+                         field: str = "service",
+                         dataset: str = DEFAULT_DATASET_ID, limit: int = 5) -> dict:
+    """Compare counts between a baseline and a recent window."""
+    v = _validated(ComparePeriods, baseline_start=baseline_start,
+                   baseline_end=baseline_end, recent_start=recent_start,
+                   recent_end=recent_end, field=field, dataset=dataset, limit=limit)
+    return _run(
+        f"compare {v['dataset']} log volume across two time windows",
+        lambda: compare_periods(v["baseline_start"], v["baseline_end"],
+                                v["recent_start"], v["recent_end"],
+                                v["dataset"], v["field"], v["limit"]),
+    )
 
 
 @mcp.tool(name="count_by_category_tool")
-def count_by_category_tool(start_time: str, end_time: str, type: str,
-                           table_name: str = TABLE_NAME,
-                           category: str | None = None) -> dict:
-    values = _validated(CountByCategory, start_time=start_time, end_time=end_time,
-                        type=type, table_name=table_name, category=category)
-    start_time, end_time, type = values["start_time"], values["end_time"], values["type"]
-    table_name, category = values["table_name"], values["category"]
-    functions = {"pid": count_pid_by_category, "service": count_service_by_category,
-                 "event_id": count_event_id_by_category, "general": count_by_category}
-    if type not in functions:
-        raise ValueError("type must be pid, service, event_id, or general")
-    return _result(_count_operation(type, category), functions[type](
-        start_time, end_time, table_name, category))
+def count_by_category_tool(start_time: str, end_time: str, type: str = "general",
+                           dataset: str = DEFAULT_DATASET_ID,
+                           category: str | None = None, limit: int = 50) -> dict:
+    """Count log rows by severity, optionally broken down by another field."""
+    v = _validated(CountByCategory, start_time=start_time, end_time=end_time,
+                   type=type, dataset=dataset, category=category, limit=limit)
+    operation = f"count {v['type']} on {v['dataset']} by severity"
+    if v["category"]:
+        operation += f" for '{v['category']}'"
+    group_by = None if v["type"] == "general" else v["type"]
+    return _run(operation, lambda: count_by_field(
+        v["start_time"], v["end_time"], group_by, v["dataset"],
+        v["category"], v["limit"]))
 
 
 @mcp.tool(name="get_data_tool")
-def get_data_tool(type: str, table_name: str = TABLE_NAME) -> dict:
-    """Get all known pids, services, or event ids."""
-    values = _validated(GetTools, type=type, table_name=table_name)
-    type, table_name = values["type"], values["table_name"]
-    functions = {"pid": get_pids, "service": get_services, "event_id": get_event_ids}
-    if type not in functions:
-        raise ValueError("type must be pid, service, or event_id")
-    return _result(f"list the known {type}s", functions[type](table_name))
+def get_data_tool(start_time: str, end_time: str, type: str,
+                  dataset: str = DEFAULT_DATASET_ID, limit: int = 50) -> dict:
+    """List the most common values of a field in a time window, with counts."""
+    v = _validated(GetTools, start_time=start_time, end_time=end_time,
+                   type=type, dataset=dataset, limit=limit)
+    return _run(
+        f"list the most common {v['type']} values on {v['dataset']}",
+        lambda: get_field_values(v["start_time"], v["end_time"], v["type"],
+                                 v["dataset"], v["limit"]),
+    )
 
 
 @mcp.tool(name="get_trend_tool")
 def get_trend_tool(start_time: str, end_time: str, type: tuple[str, str],
-                  table_name: str = TABLE_NAME, category: str | None = None) -> dict:
-    """Count a known pid, service, or event id by minute."""
-    values = _validated(GetTrend, start_time=start_time, end_time=end_time, type=type,
-                        table_name=table_name, category=category)
-    start_time, end_time, type = values["start_time"], values["end_time"], values["type"]
-    table_name, category = values["table_name"], values["category"]
-    functions = {"pid": (get_pid_trend_by_category, lambda value: int(value)),
-                 "service": (get_service_trend_by_category, lambda value: value),
-                 "event_id": (get_event_id_trend_by_category, lambda value: value)}
-    fn, convert = functions[type[0]]
-    return _result(f"get the {type[0]} trend for '{type[1]}'", fn(
-        start_time, end_time, convert(type[1]), table_name, category))
+                   dataset: str = DEFAULT_DATASET_ID, bucket: str = "minute",
+                   category: str | None = None) -> dict:
+    """Count one known field value per time bucket."""
+    v = _validated(GetTrend, start_time=start_time, end_time=end_time, type=type,
+                   dataset=dataset, bucket=bucket, category=category)
+    field, value = v["type"][0], v["type"][1]
+    return _run(
+        f"get the {field} trend for '{value}' on {v['dataset']}",
+        lambda: get_trend(v["start_time"], v["end_time"], field, value,
+                          v["dataset"], v["bucket"], v["category"]),
+    )
 
 
 @mcp.tool(name="auto_complete")
-def auto_complete_tool(query: str, table_name: str = TABLE_NAME) -> dict:
+def auto_complete_tool(query: str, dataset: str = DEFAULT_DATASET_ID) -> dict:
     """Suggest indexed log values for a selector-prefixed query."""
-    return _result(f"auto-complete '{query}'", auto_complete(query, table_name))
+    return _run(f"auto-complete '{query}'", lambda: auto_complete(query, dataset))
 
 
 _SKILLS_ROOT = Path(MCP_SKILLS_ROOT) if MCP_SKILLS_ROOT else Path(__file__).resolve().parents[3] / "skills"

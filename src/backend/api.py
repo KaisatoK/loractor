@@ -16,6 +16,7 @@ from backend import jobs
 from backend.appdb import auth, chats
 from backend.appdb.auth import require_user
 from backend.db.auto_complete import auto_complete
+from backend.db.datasets import UnknownDatasetError
 from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import generate_answer
 from backend.pipeline.answers import serialize_answer
@@ -415,22 +416,33 @@ async def chat_test(
 
 
 @app.get("/auto-complete", dependencies=[Depends(require_user)])
-def get_auto_complete(query: str) -> dict:
-    """Type-ahead suggestions from the log index's field values.
+def get_auto_complete(query: str, dataset: str | None = None) -> dict:
+    """Type-ahead suggestions from a corpus' indexed field values.
 
-    ``query`` is required and must start with a selector scoping it to one column:
-    ``@`` for ``service``, ``#`` for ``event_id`` and ``$`` for ``event_template``.
-    A query with no leading selector returns no suggestions.
+    ``query`` must start with a selector scoping it to one field; a query with
+    no leading selector returns no suggestions. Which selectors are available
+    depends on the corpus, because the selector map lives in the dataset
+    registry: ``@`` service, ``#`` event id, ``^`` template, ``!`` entity id,
+    ``$`` message text.
+
+    ``dataset`` selects the corpus and defaults to the registry's default. An
+    unknown id, or a corpus with no inverted index, yields no suggestions rather
+    than an error -- a keystroke must never trigger a scan of object storage.
     """
     if os.getenv("TOOLS_TRANSPORT", "local").lower() == "mcp":
         try:
             from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
-            payload = get_mcp_bridge().call_tool("auto_complete", {"query": query})
+            payload = get_mcp_bridge().call_tool(
+                "auto_complete", {"query": query, "dataset": dataset}
+            )
             return {"suggestions": payload.get("data", payload)}
         except Exception:
             metrics.inc("mcp_failures_total")
             logger.warning("MCP auto-complete failed; using local query", exc_info=True)
-    return {"suggestions": auto_complete(query)}
+    try:
+        return {"suggestions": list(auto_complete(query, dataset))}
+    except UnknownDatasetError:
+        return {"suggestions": []}
 
 
 @app.post("/chat/reframe")

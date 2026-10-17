@@ -56,10 +56,11 @@ def test_auto_complete_returns_suggestions_for_authenticated_user(
     client, api_module, registered, monkeypatch
 ):
     # Stub the DB lookup: this exercises the route, not the query layer.
+    # The route now passes a dataset through, so the stub accepts it.
     monkeypatch.setattr(
         api_module,
         "auto_complete",
-        lambda query: [{"suggestion": f"match:{query}", "count": 2}],
+        lambda query, dataset=None: [{"suggestion": f"match:{query}", "count": 2}],
     )
     response = client.get(
         "/auto-complete", params={"query": "@nova"}, headers=registered["headers"]

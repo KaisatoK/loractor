@@ -34,13 +34,18 @@ def collect_tool_results(messages) -> list[dict[str, Any]]:
         if not data:
             continue
         name, args = calls.get(m.tool_call_id, (None, None))
-        records.append(
-            {
-                "id": f"R{len(records) + 1}",
-                "tool_name": name,
-                "arguments": args,
-                "row_count": len(data),
-                "rows": data[:MAX_RESULT_ROWS],
-            }
-        )
+        record = {
+            "id": f"R{len(records) + 1}",
+            "tool_name": name,
+            "arguments": args,
+            "row_count": len(data),
+            "rows": data[:MAX_RESULT_ROWS],
+        }
+        # The cost of producing this result, when the tool reported it. Carried
+        # beside row_count so the answer can state how much data was actually
+        # queried instead of the model estimating it.
+        stats = payload.get("query_stats")
+        if stats:
+            record["query_stats"] = stats
+        records.append(record)
     return records
