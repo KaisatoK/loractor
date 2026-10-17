@@ -22,7 +22,14 @@ from backend.db.windows import TimeWindow
 
 Bucket = Literal["second", "minute", "hour", "day"]
 
-BUCKETS: tuple[str, ...] = ("second", "minute", "hour", "day")
+# Ordered coarsest-last, because the trend builder suggests the next coarser
+# bucket when a window needs too many.
+#
+# ``week`` and ``month`` exist for corpora that span months. BGL covers seven
+# months, so at ``day`` a full-range trend needs 245 buckets and is refused --
+# leaving a corpus whose natural questions are long-range unable to answer any
+# of them. The cap is about result size, not about forbidding the question.
+BUCKETS: tuple[str, ...] = ("second", "minute", "hour", "day", "week", "month")
 
 
 def ts_filter(dataset: Dataset, window: TimeWindow) -> tuple[sql.Composable, list]:

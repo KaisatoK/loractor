@@ -28,6 +28,28 @@ logger = logging.getLogger(__name__)
 # and the result stops fitting in a tool result the model can read.
 MAX_BUCKETS = 240
 
+# Nominal seconds per bucket, used only to predict the result size. Months vary
+# in length, so the figure is an average -- close enough to decide whether a
+# query would return hundreds of rows.
+BUCKET_SECONDS = {
+    "second": 1,
+    "minute": 60,
+    "hour": 3_600,
+    "day": 86_400,
+    "week": 604_800,
+    "month": 2_629_746,
+}
+
+# What to suggest when a window needs too many buckets. Terminates at month,
+# where the only remaining advice is to narrow the window.
+COARSER_BUCKET = {
+    "second": "minute",
+    "minute": "hour",
+    "hour": "day",
+    "day": "week",
+    "week": "month",
+}
+
 
 @bulk_query
 def get_trend(
@@ -47,13 +69,13 @@ def get_trend(
     ds = resolve(dataset)
     window = build_window(ds, start_time, end_time)
 
-    bucket_seconds = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}[
-        bucket if bucket in ("second", "minute", "hour", "day") else "minute"
+    bucket_seconds = BUCKET_SECONDS[
+        bucket if bucket in BUCKET_SECONDS else "minute"
     ]
     if window.seconds / bucket_seconds > MAX_BUCKETS:
         from backend.db.errors import refuse
 
-        coarser = {"second": "minute", "minute": "hour", "hour": "day"}.get(bucket)
+        coarser = COARSER_BUCKET.get(bucket)
         raise refuse(
             f"A {window.seconds:.0f}-second window bucketed by {bucket} would "
             f"return over {MAX_BUCKETS} points.",

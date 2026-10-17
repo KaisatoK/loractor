@@ -552,6 +552,74 @@ def datasets_with(capability: Capability) -> tuple[Dataset, ...]:
 
 # The OTel registrations are applied here, once ``register`` exists. The Dataset
 # objects themselves are built above, next to the configuration that shapes them.
+# --- BGL: Blue Gene/L supercomputer RAS logs (loghub) ------------------------
+#
+# The third corpus, and the one that proves the registry is an abstraction
+# rather than a pair of special cases. It disagrees with both others:
+# severities are UPPERCASE where OTel's are lowercase, its timestamp arrives as
+# Unix epoch seconds, and its `Node` is high-cardinality enough to behave like a
+# trace id rather than a service. None of that required new query code.
+BGL_TABLE = "bgl"
+
+BGL = Dataset(
+    id="bgl",
+    kind=DatasetKind.NATIVE_TABLE,
+    description=(
+        "Blue Gene/L supercomputer RAS log (loghub, 2k rows). Local, exact, "
+        "fully indexed, with template-level embeddings. Spans seven months of "
+        "2005-2006, so it is the corpus for long-range questions."
+    ),
+    sources=(BGL_TABLE,),
+    fields=MappingProxyType(
+        {
+            TS: Field(column="Timestamp"),
+            SEVERITY: Field(column="Level", text_indexed=True),
+            SERVICE: Field(
+                column="Component", text_indexed=True, token_indexed=True
+            ),
+            MESSAGE: Field(column="Content", text_indexed=True),
+            ENTITY_ID: Field(column="Node", text_indexed=True, token_indexed=True),
+            TEMPLATE: Field(
+                column="EventTemplate", text_indexed=True, token_indexed=True
+            ),
+            EVENT_ID: Field(
+                column="EventId", text_indexed=True, token_indexed=True
+            ),
+            RECORD_ID: Field(column="LineId"),
+        }
+    ),
+    capabilities=frozenset(
+        {
+            Capability.BM25,
+            Capability.RECORD_ID,
+            Capability.EXACT_COUNTS,
+            Capability.TEMPLATES,
+            Capability.AUTO_COMPLETE,
+        }
+    ),
+    # UPPERCASE, unlike OTel. A global severity constant would have been wrong
+    # for one corpus or the other; the refusal names the right correction per
+    # dataset because the vocabulary belongs to the dataset.
+    severity_values=("INFO", "WARNING", "ERROR", "SEVERE", "FATAL"),
+    ts_cast="timestamptz",
+    index_name=f"{BGL_TABLE}_idx",
+    token_index_name=f"{BGL_TABLE}_token_idx",
+    selectors=MappingProxyType(
+        {
+            "@": SERVICE,
+            "#": EVENT_ID,
+            "^": TEMPLATE,
+            "!": ENTITY_ID,
+            "$": MESSAGE,
+        }
+    ),
+    default_window_seconds=86_400,
+    max_rows=1_000,
+    row_estimate=2_000,
+)
+
+register(BGL)
+
 register(OTEL_S3)
 register(OTEL_SLICE)
 
