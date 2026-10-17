@@ -120,6 +120,10 @@ def compute_priorities(
 
     rows = []
     for value, count in issue.items():
+        if not count:
+            # A value whose non-INFO rows all count 0 has nothing to rank (and
+            # would divide by zero in its error share).
+            continue
         parts = {
             "volume_share": count / total,
             "error_share": severe[value] / count if has_category else None,
@@ -185,8 +189,10 @@ def _trend_by_value(
             if half == 0:
                 continue
             trend_sources.append(record["id"])
-            baseline[str(value)] += sum(series[:half])
-            recent[str(value)] += sum(series[half:half * 2])
+            # Two equal-length halves ending at the newest bucket; on an odd
+            # length the OLDEST bucket is dropped, never the most recent one.
+            baseline[str(value)] += sum(series[-2 * half:-half])
+            recent[str(value)] += sum(series[-half:])
     result = {
         value: _clamp((recent[value] - baseline[value]) / max(baseline[value], 1))
         for value in set(baseline) | set(recent)

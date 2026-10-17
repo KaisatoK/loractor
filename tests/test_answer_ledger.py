@@ -218,3 +218,29 @@ def test_answer_node_adds_priority_for_manager_not_engineer(monkeypatch):
     # Role-specific answer rules (from the role skill) reach the prompt.
     assert "At most three priorities" in prompts_seen[0]
     assert "before/after timeline" in prompts_seen[1]
+
+
+def test_priority_skips_zero_count_values_instead_of_dividing_by_zero():
+    counts = _rec("R1", "aggregate", [
+        {"service": "a", "category": "ERROR", "count": 0},
+        {"service": "b", "category": "ERROR", "count": 5},
+    ])
+    ranking = compute_priorities([counts])
+    assert [r["service"] for r in ranking["rows"]] == ["b"]
+
+
+def test_priority_trend_keeps_the_newest_bucket_on_odd_length():
+    counts = _rec("R1", "aggregate", [
+        {"service": "a", "category": "WARNING", "count": 6},
+        {"service": "b", "category": "WARNING", "count": 6},
+    ])
+    # Odd length: the oldest bucket is dropped. a: 0 | 1 vs 1 (flat);
+    # b: 9 | 1 vs 5 (the newest bucket 5 must count, so b is rising).
+    trend_a = _rec("R2", "trend", [{"count": n} for n in (0, 1, 1)],
+                   tool="get_trend_tool", filters={"service": "a"})
+    trend_b = _rec("R3", "trend", [{"count": n} for n in (9, 1, 5)],
+                   tool="get_trend_tool", filters={"service": "b"})
+    ranking = compute_priorities([counts, trend_a, trend_b])
+    by_name = {r["service"]: r for r in ranking["rows"]}
+    assert by_name["a"]["trend_up"] == 0.0
+    assert by_name["b"]["trend_up"] == 1.0
