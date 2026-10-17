@@ -33,12 +33,20 @@ from backend.pipeline.priority import with_priority
 from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
+    MAX_CLARIFY_ROUNDS,
+    clarify_reasons,
     classifier,
     decide_confidence,
     decide_scope,
+    scope_assumption,
 )
+from backend.db.datasets import local_datasets
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
-from backend.pipeline.prompts.builders import build_result_catalog
+from backend.pipeline.prompts.builders import (
+    assumed_scope_line,
+    build_result_catalog,
+    round_two_question,
+)
 from backend.pipeline.state import PipelineState
 from backend.pipeline.tools.results import collect_tool_calls, collect_tool_results
 
@@ -95,22 +103,35 @@ def scope_node(state: PipelineState) -> PipelineState:
         # A role switch re-investigates an already-answered question for
         # another role: the user has authorized it, so no clarification.
         logger.info("scope=%s (forced by role switch)", forced)
-        return {**state, "scope": forced, "clarify_count": 0}
+        return {
+            **state,
+            "scope": forced,
+            "clarify_count": 0,
+            "scope_signals": {},
+            "clarify_reasons": [],
+            "assumed_scope": None,
+        }
+    signals: dict[str, float] = {}
+    reasons: list[str] = []
+    assumed = False
     try:
         response = classifier.invoke(prompts.scope_request(state))
         role_name = (state.get("role") or {}).get("name")
         scope = decide_scope(response, clarify_count, role_name)
-        proceed = response.nouls["proceed_without_clarification"].noul
-        overview = response.nouls.get("is_overview_request")
+        # Raw judgments are kept next to the code-derived policy outputs, so a
+        # wrong route can be traced to the input, the model or the code.
+        signals = {name: answer.noul for name, answer in response.nouls.items()}
+        reasons = clarify_reasons(response, role_name)
+        assumed = scope == "find_evidence" and scope_assumption(
+            response, clarify_count, role_name
+        )
         logger.info(
-            "scope=%s role=%s has_queryable_scope=%.3f is_log_request=%.3f proceed=%.3f needs_new_evidence=%.3f is_overview_request=%s clarify_count=%d model=%s",
+            "scope=%s role=%s signals=%s reasons=%s assumed_scope=%s clarify_count=%d model=%s",
             scope,
             role_name,
-            response.nouls["has_queryable_scope"].noul,
-            response.nouls["is_log_request"].noul,
-            proceed,
-            response.nouls["needs_new_evidence"].noul,
-            f"{overview.noul:.3f}" if overview is not None else "n/a",
+            {name: round(value, 3) for name, value in signals.items()},
+            reasons,
+            assumed,
             clarify_count,
             response.model,
         )
@@ -125,19 +146,43 @@ def scope_node(state: PipelineState) -> PipelineState:
     else:
         clarify_count = 0
 
-    return {**state, "scope": scope, "clarify_count": clarify_count}
+    return {
+        **state,
+        "scope": scope,
+        "clarify_count": clarify_count,
+        "scope_signals": signals,
+        "clarify_reasons": reasons,
+        # The budget ran out without a scope: investigate every local corpus
+        # (the remote tiers stay opt-in) and say so in the answer.
+        "assumed_scope": [ds.id for ds in local_datasets()] if assumed else None,
+    }
 
 
 def clarify_node(state: PipelineState) -> PipelineState:
-    result = clarify_agent.invoke(
-        {
-            "messages": [
-                {"role": "user", "content": prompts.clarify(state)},
-            ]
-        }
+    round_number = state.get("clarify_count", 1)
+    if round_number >= 2:
+        # The open question already failed once: from the second round the user
+        # gets one fixed closed question, built in code from the registry, so
+        # the model cannot reword the same question or guess a subset.
+        question = round_two_question()
+    else:
+        result = clarify_agent.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompts.clarify(state, max_rounds=MAX_CLARIFY_ROUNDS),
+                    },
+                ]
+            }
+        )
+        question = result["messages"][-1].text
+    logger.info(
+        "clarify: asking the user for more information (round %d of %d, reasons=%s)",
+        round_number,
+        MAX_CLARIFY_ROUNDS,
+        state.get("clarify_reasons"),
     )
-    question = result["messages"][-1].text
-    logger.info("clarify: asking the user for more information")
     return {**state, "answer": question}
 
 
@@ -235,6 +280,11 @@ def answer_node(state: PipelineState) -> PipelineState:
     answer = serialize_answer(
         structured, valid_ids, records, notes, cost_note=cost.get("note", "")
     )
+    # Rebuilt from the structured answer on every revision, so the line is
+    # present exactly once.
+    assumption = assumed_scope_line(state.get("assumed_scope"))
+    if assumption:
+        answer = f"{assumption}\n\n{answer}"
     # The answer agent drafts the optional follow-up; confidence decides whether
     # to show it, so keep the draft in state either way.
     if isinstance(structured, dict):

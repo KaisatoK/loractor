@@ -230,6 +230,18 @@ class Dataset:
     row_estimate: int | None = None
     """Approximate corpus size, for cost estimates and refusal messages."""
 
+    corpus: str | None = None
+    """The log corpus this dataset is a view of, for people (default: its id).
+
+    Several datasets can read one corpus: ``otel_s3`` (the Parquet files, read
+    in place) and ``otel_slice`` (a search index over those same files) are
+    both "OTel". Users are offered corpora; the agent picks the dataset.
+    """
+
+    @property
+    def corpus_name(self) -> str:
+        return self.corpus or self.id
+
     # --- capability helpers ------------------------------------------------
     def supports(self, capability: Capability) -> bool:
         return capability in self.capabilities
@@ -375,6 +387,7 @@ OPENSTACK_TABLE = "openstack"
 
 OPENSTACK = Dataset(
     id="openstack",
+    corpus="OpenStack",
     kind=DatasetKind.NATIVE_TABLE,
     description=(
         "OpenStack nova logs (loghub, 207,820 rows) from three runs -- two normal "
@@ -515,6 +528,7 @@ _OTEL_URLS = otel_part_urls()
 OTEL_S3 = (
     Dataset(
         id="otel_s3",
+        corpus="OTel",
         kind=DatasetKind.REMOTE_PARQUET,
         description=(
             "OpenTelemetry demo-app logs as Parquet in public S3, queried in "
@@ -557,6 +571,7 @@ OTEL_S3 = (
 OTEL_SLICE = (
     Dataset(
         id="otel_slice",
+        corpus="OTel",
         kind=DatasetKind.EXTERNAL_INDEX,
         description=(
             "Searchable slice of the OTel corpus: problem-severity rows from a "
@@ -678,6 +693,7 @@ BGL_TABLE = "bgl"
 
 BGL = Dataset(
     id="bgl",
+    corpus="BGL",
     kind=DatasetKind.NATIVE_TABLE,
     description=(
         "Blue Gene/L supercomputer RAS log (loghub, 4.7M rows). Local, exact, "
@@ -762,6 +778,15 @@ def catalog() -> dict[str, dict]:
             "fields": sorted(d.fields),
             "capabilities": sorted(str(c) for c in d.capabilities),
             "exact_counts": d.exact_counts,
+            "corpus": d.corpus_name,
         }
         for d in all_datasets()
     }
+
+
+def corpora() -> dict[str, tuple[str, ...]]:
+    """Corpus name -> the ids of the datasets that read it, in registry order."""
+    grouped: dict[str, list[str]] = {}
+    for d in all_datasets():
+        grouped.setdefault(d.corpus_name, []).append(d.id)
+    return {name: tuple(ids) for name, ids in grouped.items()}

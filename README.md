@@ -34,7 +34,14 @@ whether new log evidence is needed, and whether the request is a dataset-wide
 overview. Code owns the policy: non-log requests go to a general reply; vague log
 requests are clarified unless authorized, out of clarification budget, or (for
 the team lead and manager only) an overview of the whole dataset; otherwise `needs_new_evidence` selects a direct answer or
-investigation. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
+investigation. The clarifier sees the same dataset catalog the classifier judged
+against and is told which gate failed. The second round is a fixed question built
+in code from the registry: one choice per corpus (openstack, bgl, OTel -- `otel_s3`
+and `otel_slice` are two views of the OTel corpus, and the agent picks between
+them), or all of them. Once the
+budget is spent, a reply that needs new evidence is investigated over every local
+corpus and the answer opens with an "Assumed scope" line; one that does not (such as
+"what?") gets a direct answer without the role's evidence sections. The **evidence stage** (`find_evidence`) is a deep agent: it plans the
 investigation and calls the database tools itself, then submits a free-text summary
 of its findings. The report of `summary` plus `evidence` (and optional
 `hypotheses`) is assembled off-agent: code builds one evidence item per tool call
@@ -648,6 +655,7 @@ confidence tests below are skipped unless enabled.
 | `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
 | `test_chat_box_stop.py` / `test_chat_stop_ui.py` / `test_stopped_turns.py` | chat box lock and stop button, stopped/failed runs in the UI, the stored `stopped` flag and the transcript label |
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
+| `test_clarify_and_assumed_scope.py` | what the clarifier is shown, the code-built options line, the assumed-scope line, the no-evidence answer rules |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_stream_events.py` | the shared event reducer: backend-saved and live progress agree, refusals never saved as failures, malformed payloads |
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
@@ -667,7 +675,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 746 passed, 57 skipped`. Three failures
+> The offline suite reports `5 failed, 818 passed, 71 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and

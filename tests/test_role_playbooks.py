@@ -79,7 +79,10 @@ def test_role_answer_rules_exclude_evidence_plan():
 
 def test_answer_prompt_carries_the_roles_rules():
     prompts = PipelinePrompts()
-    state = lambda role: {**_state(role), "evidence_report": {}, "tool_results": []}  # noqa: E731
+    # One result in state: with no evidence at all the no-evidence rules apply
+    # (tests/test_clarify_and_assumed_scope.py).
+    record = {"id": "R1", "tool_name": "search_logs_tool", "rows": [], "row_count": 0}
+    state = lambda role: {**_state(role), "evidence_report": {}, "tool_results": [record]}  # noqa: E731
     for role in ROLE_SKILLS:
         prompt = prompts.answer(state(role))
         assert playbooks.role_answer_rules(role) in prompt

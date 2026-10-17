@@ -48,6 +48,33 @@ OVERVIEW_ROLES = frozenset({"team_lead", "manager"})
 classifier = TypeSafeClassifier()
 
 
+def _is_log_request(response: ClassifierResponse) -> bool:
+    return response.nouls["is_log_request"].noul >= LOG_REQUEST_THRESHOLD
+
+
+def _names_target(response: ClassifierResponse) -> bool:
+    return response.nouls["has_queryable_scope"].noul >= QUERYABLE_SCOPE_THRESHOLD
+
+
+def _is_overview(response: ClassifierResponse) -> bool:
+    overview = response.nouls.get("is_overview_request")
+    return overview is not None and overview.noul >= OVERVIEW_THRESHOLD
+
+
+def _scoped(response: ClassifierResponse, role: str | None) -> bool:
+    """A target is named, or an overview is a valid default scope for the role."""
+    return _names_target(response) or (role in OVERVIEW_ROLES and _is_overview(response))
+
+
+def _authorized(response: ClassifierResponse) -> bool:
+    return response.nouls["proceed_without_clarification"].noul >= PROCEED_THRESHOLD
+
+
+def _evidence_route(response: ClassifierResponse) -> str:
+    needs_evidence = response.nouls["needs_new_evidence"].noul
+    return "find_evidence" if needs_evidence >= NEW_EVIDENCE_THRESHOLD else "direct_answer"
+
+
 def decide_scope(
     response: ClassifierResponse, clarify_count: int, role: str | None = None
 ) -> str:
@@ -56,26 +83,51 @@ def decide_scope(
     Non-log requests go to ``general``. Log requests without a queryable target
     are clarified unless the user authorized proceeding, the clarify budget is
     spent, or the request is a dataset-wide overview from a role whose default
-    scope is the whole dataset (``OVERVIEW_ROLES``). Once that gate is passed,
-    ``needs_new_evidence`` selects between a direct answer and evidence
-    retrieval. The role is applied here, in code; the Nouls never see it.
+    scope is the whole dataset (``OVERVIEW_ROLES``). Past that gate -- including
+    a spent clarify budget -- ``needs_new_evidence`` selects between a direct
+    answer and evidence retrieval, so a question about the conversation itself
+    is never forced into an investigation. The role is applied here, in code;
+    the Nouls never see it.
     """
-    if response.nouls["is_log_request"].noul < LOG_REQUEST_THRESHOLD:
+    if not _is_log_request(response):
         return "general"
+    if not _scoped(response, role) and not _authorized(response):
+        if clarify_count < MAX_CLARIFY_ROUNDS:
+            return "clarify"
+    return _evidence_route(response)
 
-    scoped = response.nouls["has_queryable_scope"].noul >= QUERYABLE_SCOPE_THRESHOLD
-    if not scoped and role in OVERVIEW_ROLES:
-        overview = response.nouls.get("is_overview_request")
-        scoped = overview is not None and overview.noul >= OVERVIEW_THRESHOLD
-    if not scoped:
-        authorized = (
-            response.nouls["proceed_without_clarification"].noul >= PROCEED_THRESHOLD
-        )
-        if not authorized:
-            return "clarify" if clarify_count < MAX_CLARIFY_ROUNDS else "find_evidence"
 
-    needs_evidence = response.nouls["needs_new_evidence"].noul
-    return "find_evidence" if needs_evidence >= NEW_EVIDENCE_THRESHOLD else "direct_answer"
+def scope_assumption(
+    response: ClassifierResponse, clarify_count: int, role: str | None = None
+) -> bool:
+    """Whether the route was reached only because the clarify budget is spent.
+
+    True when the request is a log request with no usable scope and no
+    authorization, and asking again is no longer allowed. Code then fills in an
+    assumed scope (see ``graph.scope_node``) and states it in the answer.
+    """
+    return (
+        _is_log_request(response)
+        and not _scoped(response, role)
+        and not _authorized(response)
+        and clarify_count >= MAX_CLARIFY_ROUNDS
+    )
+
+
+def clarify_reasons(response: ClassifierResponse, role: str | None = None) -> list[str]:
+    """Which gates failed, in plain words, for the clarifier to ask about.
+
+    Derived in code from the same thresholds as ``decide_scope``; the clarifier
+    is told why it was called instead of guessing the missing detail.
+    """
+    reasons: list[str] = []
+    if not _names_target(response):
+        reasons.append("queryable target missing")
+        if role not in OVERVIEW_ROLES and _is_overview(response):
+            reasons.append("a dataset-wide overview needs a target for this role")
+    if not _authorized(response):
+        reasons.append("no authorization to proceed")
+    return reasons
 
 
 def _signal(response: ClassifierResponse, name: str) -> float:

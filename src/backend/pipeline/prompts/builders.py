@@ -5,6 +5,7 @@ in ``decision.py`` owns routing and revision policy; Jev supplies only the
 narrow semantic signals that code cannot derive reliably from text.
 """
 
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -298,6 +299,83 @@ def dataset_catalog() -> dict:
     return catalog()
 
 
+def clarify_choices() -> list[str]:
+    """What a user can pick: one entry per corpus, never per dataset.
+
+    A corpus read through one dataset is offered by that dataset's id; one read
+    through several (OTel: ``otel_s3`` and ``otel_slice``) by its corpus name,
+    so a user never has to know about the views -- the agent picks between them.
+    """
+    from backend.db.datasets import corpora
+
+    return [
+        ids[0] if len(ids) == 1 else name for name, ids in corpora().items()
+    ]
+
+
+def clarify_options() -> str:
+    """The closed choices offered from the second clarification on.
+
+    Built in code from the registry (select instead of generate), so a choice
+    can never name a dataset that does not exist or a subset nobody asked for.
+    """
+    return f"Pick one: {', '.join(clarify_choices())}, or all of them."
+
+
+def round_two_question() -> str:
+    """The second clarification, fixed in code: the open question already failed
+    once, so asking the model again would only reword it."""
+    return f"I still can't tell which logs you mean. {clarify_options()}"
+
+
+def assumed_scope_line(assumed_scope: Sequence[str] | None) -> str:
+    """The code-rendered first line of an answer whose scope was assumed.
+
+    Rendered in code, like the cost note, so the model cannot drop it; empty
+    when the user chose the scope.
+    """
+    if not assumed_scope:
+        return ""
+    others = [d for d in dataset_catalog() if d not in assumed_scope]
+    skipped = f"; {', '.join(others)} not searched" if others else ""
+    return (
+        f"Assumed scope: {', '.join(assumed_scope)} (all local corpora, "
+        f"because no dataset was chosen{skipped})."
+    )
+
+
+def assumed_scope_block(assumed_scope: Sequence[str] | None) -> str:
+    """The evidence-prompt block restricting an assumed-scope investigation."""
+    if not assumed_scope:
+        return ""
+    return (
+        "<assumed scope>\n"
+        f"Investigate only these datasets: {', '.join(assumed_scope)}. The user "
+        "did not choose a dataset after being asked, so this scope is an "
+        "assumption: cover each of them, and say in the summary that the scope "
+        "was assumed.\n"
+        "</assumed scope>\n"
+    )
+
+
+# The answer rules when no evidence exists in this conversation turn: no tool
+# was called and no earlier result is in state, so nothing can be measured.
+NO_EVIDENCE_SECTIONS = ("Question this role asks", "Never")
+NO_EVIDENCE_RULE = (
+    "## No evidence available\n"
+    "No log evidence was collected for this request. Answer the latest message "
+    "directly from the conversation, briefly. Produce no findings and no "
+    "recommendations, and do not write the role's evidence sections (no "
+    "'what failed', timeline, counts or priorities): there is nothing measured "
+    "to put in them. If the user needs to name a scope, say what they can choose."
+)
+
+
+def has_evidence(state: PipelineState) -> bool:
+    """Whether any tool result or tool call is available to ground an answer."""
+    return bool(state.get("tool_results")) or bool(state.get("tool_calls"))
+
+
 def summarized_attempts(tool_results: object, tool_calls: object = None) -> list[dict]:
     """Compact summaries of the tool calls already attempted this turn.
 
@@ -373,6 +451,20 @@ class PipelinePrompts:
     def role_context(self, role: Role) -> str:
         return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
 
+    def queryable_context(self) -> dict:
+        """What can be queried, as named fields.
+
+        One builder for every stage that has to know what a valid target is:
+        the scope gate judges against it and the clarifier offers from it, so
+        the two can never see different catalogs.
+        """
+        return {
+            "mission": PIPELINE_MISSION,
+            "queryable_targets": QUERYABLE_TARGETS,
+            "datasets": dataset_catalog(),
+            "tool_catalog": TOOL_CATALOG,
+        }
+
     def scope_request(self, state: PipelineState) -> ClassifierRequest:
         # Use raw messages, not the normalizer's rewrite: target wording must
         # remain visible to the scope judgments.
@@ -381,10 +473,7 @@ class PipelinePrompts:
                 "latest_message": state["latest_message"],
                 "transcript": state.get("messages", []),
                 "latest_answer": state["latest_answer"],
-                "mission": PIPELINE_MISSION,
-                "queryable_targets": QUERYABLE_TARGETS,
-                "datasets": dataset_catalog(),
-                "tool_catalog": TOOL_CATALOG,
+                **self.queryable_context(),
             },
             "questions": {
                 "is_log_request": self.is_log_request_question(),
@@ -612,11 +701,24 @@ class PipelinePrompts:
             ),
         )
 
-    def clarify(self, state: PipelineState) -> str:
+    def clarify(self, state: PipelineState, *, max_rounds: int) -> str:
+        # The clarifier sees the same queryable context the scope gate judged
+        # against, plus the code-derived reasons it was called and the round,
+        # so it can name real options instead of re-asking the same question.
+        reasons = state.get("clarify_reasons") or ["queryable target missing"]
         return (
             "<role context>\n"
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
+            "<queryable context>\n"
+            f"{json.dumps(self.queryable_context(), indent=2, default=str)}\n"
+            "</queryable context>\n"
+            "<missing>\n"
+            + "\n".join(f"- {reason}" for reason in reasons)
+            + "\n</missing>\n"
+            "<clarify round>\n"
+            f"clarify round: {state.get('clarify_count', 1)} of {max_rounds}\n"
+            "</clarify round>\n"
             "<request>\n"
             f"{state['normalized']}\n"
             "</request>\n"
@@ -686,6 +788,7 @@ class PipelinePrompts:
             "<request>\n"
             f"{state['normalized']}\n"
             "</request>\n"
+            f"{assumed_scope_block(state.get('assumed_scope'))}"
             "<previous evidence report>\n"
             f"{previous_report}\n"
             "</previous evidence report>\n"
@@ -706,6 +809,15 @@ class PipelinePrompts:
         catalog = build_result_catalog(state.get("tool_results", []) or [])
         tool_result_catalog = catalog.text
         role_name = state["role"]["name"]
+        if has_evidence(state):
+            answer_rules = role_answer_rules(role_name)
+        else:
+            # Nothing was measured, so the role's evidence sections ("What
+            # failed", "Timeline", ...) would only be filled with "nothing".
+            answer_rules = (
+                f"{NO_EVIDENCE_RULE}\n\n"
+                f"{role_answer_rules(role_name, NO_EVIDENCE_SECTIONS)}"
+            )
 
         return (
             "<grounding rules>\n"
@@ -715,7 +827,7 @@ class PipelinePrompts:
             f"{self.role_context(state['role'])}\n"
             "</role context>\n"
             "<role answer rules>\n"
-            f"{role_answer_rules(role_name)}\n"
+            f"{answer_rules}\n"
             "</role answer rules>\n"
             "<team ownership>\n"
             f"{ownership_context()}\n"

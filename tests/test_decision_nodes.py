@@ -14,8 +14,10 @@ from backend.pipeline.decision import (
     OVERVIEW_THRESHOLD,
     PROCEED_THRESHOLD,
     QUERYABLE_SCOPE_THRESHOLD,
+    clarify_reasons,
     decide_confidence,
     decide_scope,
+    scope_assumption,
 )
 
 
@@ -75,14 +77,48 @@ def test_scope_clarifies_when_no_queryable_scope_and_budget_remains():
     assert decide_scope(_scope_response(0.0), clarify_count=0) == "clarify"
 
 
-def test_scope_finds_evidence_when_clarify_budget_spent():
-    assert (
-        decide_scope(
-            _scope_response(0.0, needs_new_evidence=0.0),
-            clarify_count=MAX_CLARIFY_ROUNDS,
-        )
-        == "find_evidence"
-    )
+def test_scope_answers_directly_when_clarify_budget_spent_and_no_evidence_needed():
+    # "what?" after two clarifications is a question about the conversation:
+    # a spent budget must not force it into an investigation.
+    response = _scope_response(0.0, needs_new_evidence=NEW_EVIDENCE_THRESHOLD - 0.01)
+    assert decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "direct_answer"
+    assert scope_assumption(response, MAX_CLARIFY_ROUNDS)
+
+
+def test_scope_finds_evidence_when_clarify_budget_spent_and_evidence_needed():
+    response = _scope_response(0.0, needs_new_evidence=NEW_EVIDENCE_THRESHOLD)
+    assert decide_scope(response, clarify_count=MAX_CLARIFY_ROUNDS) == "find_evidence"
+    assert scope_assumption(response, MAX_CLARIFY_ROUNDS)
+
+
+def test_scope_assumption_is_false_when_budget_remains():
+    assert not scope_assumption(_scope_response(0.0), MAX_CLARIFY_ROUNDS - 1)
+
+
+def test_scope_assumption_is_false_when_scoped_authorized_overview_or_general():
+    spent = MAX_CLARIFY_ROUNDS
+    assert not scope_assumption(_scope_response(QUERYABLE_SCOPE_THRESHOLD), spent)
+    assert not scope_assumption(_scope_response(0.0, proceed=PROCEED_THRESHOLD), spent)
+    overview = _scope_response(0.0, is_overview_request=OVERVIEW_THRESHOLD)
+    assert not scope_assumption(overview, spent, role="team_lead")
+    assert scope_assumption(overview, spent, role="engineer")
+    assert not scope_assumption(_scope_response(0.0, is_log_request=0.0), spent)
+
+
+def test_clarify_reasons_name_the_failed_gates():
+    response = _scope_response(0.0, proceed=0.0, is_overview_request=0.9)
+    assert clarify_reasons(response, "engineer") == [
+        "queryable target missing",
+        "a dataset-wide overview needs a target for this role",
+        "no authorization to proceed",
+    ]
+    # For a role whose default scope is the whole dataset the overview is not a gap.
+    assert clarify_reasons(response, "team_lead") == [
+        "queryable target missing",
+        "no authorization to proceed",
+    ]
+    named = _scope_response(QUERYABLE_SCOPE_THRESHOLD, proceed=PROCEED_THRESHOLD)
+    assert clarify_reasons(named, "engineer") == []
 
 
 def test_scope_routes_direct_answer_at_new_evidence_boundary_below():
@@ -308,4 +344,71 @@ def test_scope_node_persists_no_authorization_signal(monkeypatch):
     out = graph.scope_node(state)
 
     assert out["scope"] == "find_evidence"
-    assert set(out) - set(state) == {"scope", "clarify_count"}
+    # Only routing bookkeeping is added; nothing records the authorization itself.
+    assert set(out) - set(state) == {
+        "scope",
+        "clarify_count",
+        "scope_signals",
+        "clarify_reasons",
+        "assumed_scope",
+    }
+    assert out["assumed_scope"] is None
+
+
+def _stub_scope(monkeypatch, response):
+    from backend.pipeline import graph
+
+    class _StubClassifier:
+        def invoke(self, request):
+            return response
+
+    monkeypatch.setattr(graph, "classifier", _StubClassifier())
+    return graph
+
+
+def _vague_state(clarify_count, role="engineer"):
+    return {
+        "conversation": "user: What recurring problem do we have across 3 table?",
+        "normalized": "What recurring problem do we have across 3 tables?",
+        "latest_message": "three log table",
+        "latest_answer": "Which three tables should I look at?",
+        "messages": [],
+        "role": {"name": role, "objective": "x"},
+        "clarify_count": clarify_count,
+    }
+
+
+def test_scope_node_keeps_raw_signals_and_reasons_when_clarifying(monkeypatch):
+    response = _scope_response(0.21, proceed=0.08, is_overview_request=0.82)
+    graph = _stub_scope(monkeypatch, response)
+    out = graph.scope_node(_vague_state(0))
+    assert out["scope"] == "clarify" and out["clarify_count"] == 1
+    assert out["scope_signals"]["has_queryable_scope"] == 0.21
+    assert out["scope_signals"]["is_overview_request"] == 0.82
+    assert out["clarify_reasons"] == clarify_reasons(response, "engineer")
+    assert out["assumed_scope"] is None
+
+
+def test_scope_node_assumes_every_local_corpus_when_the_budget_is_spent(monkeypatch):
+    from backend.db.datasets import local_datasets
+
+    graph = _stub_scope(monkeypatch, _scope_response(0.2, needs_new_evidence=0.9))
+    out = graph.scope_node(_vague_state(MAX_CLARIFY_ROUNDS))
+    assert out["scope"] == "find_evidence"
+    assert out["assumed_scope"] == [ds.id for ds in local_datasets()]
+    assert out["clarify_count"] == 0
+
+
+def test_scope_node_answers_directly_without_assumption_when_no_evidence_needed(
+    monkeypatch,
+):
+    graph = _stub_scope(monkeypatch, _scope_response(0.2, needs_new_evidence=0.19))
+    out = graph.scope_node(_vague_state(MAX_CLARIFY_ROUNDS))
+    assert out["scope"] == "direct_answer"
+    assert out["assumed_scope"] is None
+
+
+def test_scope_node_does_not_carry_an_assumption_into_the_next_turn(monkeypatch):
+    graph = _stub_scope(monkeypatch, _scope_response(QUERYABLE_SCOPE_THRESHOLD))
+    state = {**_vague_state(0), "assumed_scope": ["openstack", "bgl"]}
+    assert graph.scope_node(state)["assumed_scope"] is None

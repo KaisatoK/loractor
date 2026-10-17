@@ -63,6 +63,24 @@ def test_scope_request_contains_only_code_owned_scope_context():
     assert "clarify_count" not in payload
 
 
+def test_scope_request_state_is_unchanged_by_the_shared_context_builder():
+    # The exact payload (keys, order and values) the scope classifier saw before
+    # ``queryable_context`` was factored out; the clarifier reuses that builder.
+    from backend.db.datasets import catalog
+
+    state = _state()
+    payload = PipelinePrompts().scope_request(state)["state"]
+    assert list(payload.items()) == [
+        ("latest_message", state["latest_message"]),
+        ("transcript", state["messages"]),
+        ("latest_answer", state["latest_answer"]),
+        ("mission", PIPELINE_MISSION),
+        ("queryable_targets", QUERYABLE_TARGETS),
+        ("datasets", catalog()),
+        ("tool_catalog", TOOL_CATALOG),
+    ]
+
+
 def test_scope_request_has_atomic_questions():
     questions = PipelinePrompts().scope_request(_state())["questions"]
     assert set(questions) == {

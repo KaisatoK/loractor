@@ -28,9 +28,11 @@ sanity test runs; the module is safe to import offline.
 Cost & latency
 --------------
 Each asserted ``user`` turn costs two live calls — ``normalize_node`` (a real
-model call) and the scope classifier — so a run needs network access plus real
-keys and takes roughly a minute or two. Context-only lines (``assistant`` turns
-and route-less ``user`` turns) are never classified and cost nothing.
+model call) and the scope classifier — plus one more when the turn routes to
+``clarify``: the real ``clarify_node`` runs so the report shows its question, and
+the code-built options line is asserted from round 2 on. A run needs network
+access plus real keys and takes a few minutes. Context-only lines (``assistant``
+turns and route-less ``user`` turns) are never classified and cost nothing.
 
 Stochasticity
 -------------
@@ -78,15 +80,19 @@ import pytest
 
 from backend.pipeline.decision import (
     LOG_REQUEST_THRESHOLD,
+    MAX_CLARIFY_ROUNDS,
     NEW_EVIDENCE_THRESHOLD,
     OVERVIEW_THRESHOLD,
     PROCEED_THRESHOLD,
     QUERYABLE_SCOPE_THRESHOLD,
+    clarify_reasons,
     classifier,
     decide_scope,
+    scope_assumption,
 )
-from backend.pipeline.graph import normalize_node
+from backend.pipeline.graph import clarify_node, normalize_node
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
+from backend.pipeline.prompts.builders import round_two_question
 from backend.pipeline.roles import ROLE_OBJECTIVES
 from backend.pipeline.transcript import label_stopped
 
@@ -101,14 +107,31 @@ prompts = PipelinePrompts()
 @dataclass(frozen=True)
 class Conversation:
     id: str
-    # ("user", text, expected_route) -> asserted; ("user", text) -> context only
+    # ("user", text, expected_route) -> asserted; expected_route may be a tuple
+    # when several routes are equally correct (the turn passes on any of them);
+    # ("user", text) -> context only
     # (NOT classified); ("assistant", text) -> context only; ("user_stopped", text)
     # -> a user turn whose investigation the user stopped (context only, shown to
     # the classifiers with the stopped label, exactly as ``api.py`` renders it).
-    messages: list[tuple[str, str] | tuple[str, str, str]]
+    messages: list[tuple[str, str] | tuple[str, str, str | tuple[str, ...]]]
     # The user's role; ``decide_scope`` applies it in code (overview requests
     # are scoped for team_lead/manager). The Nouls never see it.
     role: str = "engineer"
+
+
+# The shared opening of the "three tables" cases: two vague turns, each clarified.
+# Round 1 is a model question (authored here to match the clarifier's rules: list
+# every corpus, pick no subset); round 2 is the fixed question built in code.
+THREE_TABLES_OPENING = [
+    ("user", "What recurring problem do we have across 3 table?", "clarify"),
+    (
+        "assistant",
+        "Which three should I compare? The log corpora are openstack, bgl and OTel "
+        "- or do you mean all of them?",
+    ),
+    ("user", "three log table", "clarify"),
+    ("assistant", round_two_question()),
+]
 
 
 CONVERSATIONS = [
@@ -196,6 +219,25 @@ CONVERSATIONS = [
             ("user", "What was my whole question again?", "general"),
         ],
     ),
+    # The "three tables" conversation, as an engineer (an overview needs a target
+    # for this role). The reply after round 2 picks from its fixed choices.
+    Conversation(
+        id="three-tables-named",
+        messages=[*THREE_TABLES_OPENING, ("user", "openstack and bgl", "find_evidence")],
+    ),
+    Conversation(
+        id="three-tables-all",
+        messages=[*THREE_TABLES_OPENING, ("user", "all of them", "find_evidence")],
+    ),
+    # "what?" asks about the clarification itself. A general reply and a direct
+    # answer are both right; what must not happen is an investigation.
+    Conversation(
+        id="question-about-the-clarification",
+        messages=[
+            *THREE_TABLES_OPENING,
+            ("user", "what?", ("general", "direct_answer")),
+        ],
+    ),
 ]
 
 
@@ -260,6 +302,8 @@ def _report_row(row: dict) -> str:
             "",
             "",
             "",
+            "",
+            "",
         ]
         return '<tr class="context">' + "".join(cell(value) for value in values) + "</tr>"
 
@@ -275,6 +319,8 @@ def _report_row(row: dict) -> str:
         f"{row['needs_new_evidence']:.3f} (thr {NEW_EVIDENCE_THRESHOLD:.2f})",
         f"{row['is_overview_request']:.3f} (thr {OVERVIEW_THRESHOLD:.2f}, role {row['role']})",
         str(row["clarify_count"]),
+        "yes" if row["assumed"] else "",
+        row["question"],
         row["normalized"],
         row["transcript"],
     ]
@@ -298,6 +344,8 @@ def _render_report_html() -> str:
         f"needs_new_evidence (≥ {NEW_EVIDENCE_THRESHOLD:.2f})",
         f"is_overview_request (≥ {OVERVIEW_THRESHOLD:.2f}, team_lead/manager)",
         "clarify_count",
+        "assumed scope",
+        "clarifier question",
         "normalized",
         "transcript",
     )
@@ -423,9 +471,31 @@ def run_conversation(conversation: Conversation) -> None:
             needs_new_evidence = response.nouls["needs_new_evidence"].noul
             overview = response.nouls["is_overview_request"].noul
             route = decide_scope(response, clarify_count, conversation.role)
+            assumed = route == "find_evidence" and scope_assumption(
+                response, clarify_count, conversation.role
+            )
 
+            # A clarify turn also runs the REAL clarifier with what scope_node
+            # hands it (reasons and round), so the report shows the question the
+            # user would get. Only the code-owned part is asserted: round 2 is
+            # exactly the fixed question, round 1 is not. The authored assistant
+            # line that follows stays the transcript, so later turns replay.
+            question = ""
+            options_ok = True
+            if route == "clarify":
+                round_number = clarify_count + 1
+                question = clarify_node(
+                    {
+                        **state,
+                        "clarify_count": round_number,
+                        "clarify_reasons": clarify_reasons(response, conversation.role),
+                    }
+                )["answer"]
+                options_ok = (question == round_two_question()) == (round_number >= 2)
+
+            accepted = expected if isinstance(expected, tuple) else (expected,)
             asserted_total += 1
-            matched = route == expected
+            matched = route in accepted and options_ok
             if matched:
                 asserted_matched += 1
             rows.append(
@@ -434,7 +504,7 @@ def run_conversation(conversation: Conversation) -> None:
                     "message": f"{role}: {text}",
                     "context": False,
                     "route": route,
-                    "expected": expected,
+                    "expected": " | ".join(accepted),
                     "ok": matched,
                     "has_queryable_scope": has_queryable_scope,
                     "is_log_request": is_log_request,
@@ -443,12 +513,14 @@ def run_conversation(conversation: Conversation) -> None:
                     "is_overview_request": overview,
                     "role": conversation.role,
                     "clarify_count": clarify_count,
+                    "assumed": assumed,
+                    "question": question,
                     "normalized": json.dumps(state["normalized"], default=str),
                     "transcript": json.dumps(state["messages"], default=str),
                 }
             )
 
-            assert route == expected, (
+            assert route in accepted, (
                 f"[{conversation.id}] turn {index} {text!r}: expected {expected!r}, "
                 f"got {route!r} (has_queryable_scope={has_queryable_scope:.3f}, "
                 f"needs_new_evidence={needs_new_evidence:.3f}, "
@@ -456,6 +528,12 @@ def run_conversation(conversation: Conversation) -> None:
                 f"is_overview_request={overview:.3f}, role={conversation.role}). "
                 "Borderline wording can flip run-to-run — re-run before treating "
                 "this as a regression."
+            )
+            assert options_ok, (
+                f"[{conversation.id}] turn {index}: clarify round "
+                f"{clarify_count + 1} of {MAX_CLARIFY_ROUNDS} must "
+                f"{'' if clarify_count + 1 >= 2 else 'not '}be the fixed question; "
+                f"got {question!r}"
             )
 
             clarify_count = clarify_count + 1 if route == "clarify" else 0
@@ -513,7 +591,8 @@ def test_case_data_is_valid():
                 assert role == "user", (
                     f"[{conversation.id}] expected route on a non-user message {message!r}"
                 )
-                assert message[2] in ROUTES, (
+                accepted = message[2] if isinstance(message[2], tuple) else (message[2],)
+                assert accepted and all(route in ROUTES for route in accepted), (
                     f"[{conversation.id}] unknown route {message[2]!r}"
                 )
                 asserted += 1
@@ -521,3 +600,9 @@ def test_case_data_is_valid():
         assert asserted >= 1, (
             f"[{conversation.id}] has no asserted user turn"
         )
+
+
+def test_round_two_authored_line_is_the_fixed_question():
+    # The authored round-2 assistant line must be exactly what clarify_node
+    # emits; otherwise later turns replay a stale prompt.
+    assert THREE_TABLES_OPENING[3] == ("assistant", round_two_question())

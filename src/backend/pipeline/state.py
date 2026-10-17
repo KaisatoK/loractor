@@ -48,6 +48,15 @@ class PipelineState(TypedDict):
     follow_up: str | None
     # Consecutive clarification turns, used to break clarification loops.
     clarify_count: int
+    # Raw scope Noul probabilities of this turn, kept for tracing a route.
+    scope_signals: dict[str, float]
+    # Why this turn was not scoped, derived in code (decision.clarify_reasons);
+    # the clarifier asks about exactly these.
+    clarify_reasons: list[str]
+    # Dataset ids the investigation was restricted to because the clarify budget
+    # ran out without a scope (decision.scope_assumption); None otherwise. The
+    # answer states it in a code-rendered line.
+    assumed_scope: list[str] | None
     # Iterations spent in the confidence revision loop within the current turn.
     revision_count: int
     # Set only by a role-switch run (its own graph thread): skips the scope

@@ -39,7 +39,16 @@ CLARIFY_SYSTEM_PROMPT = (
     "- Do not answer the question, do not guess, and do not explain your reasoning.\n"
     "- Do not list multiple questions and do not restate the user's request.\n"
     "- If earlier context already makes the request answerable, ask for the single "
-    "most useful clarification only."
+    "most useful clarification only.\n"
+    "- Ask about what <missing> lists, not about something else.\n"
+    "- Name real options from <queryable context> when you offer choices; never "
+    "invent a dataset, table or field. Datasets that share a `corpus` are views "
+    "of one corpus: offer the corpus once, by its name.\n"
+    "- Never pick a subset of corpora for the user. If they gave a number (for "
+    "example 'three tables'), ask which ones and list every corpus, or ask "
+    "whether they mean all of them.\n"
+    "- Never repeat a clarification already asked in <conversation>, even in other "
+    "words."
 )
 
 NORMALIZE_SYSTEM_PROMPT = (
