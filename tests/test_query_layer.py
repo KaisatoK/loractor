@@ -251,22 +251,49 @@ def test_search_is_refused_on_a_corpus_with_no_index():
     assert excinfo.value.refusal.code == "unsupported_capability"
 
 
-def test_hybrid_search_only_where_embeddings_exist():
+def test_search_shape_follows_the_corpus_not_its_name(monkeypatch):
+    """Three shapes: per-row vectors, template vectors, or BM25 alone.
+
+    Pinned explicitly rather than left to live state. Template-vector
+    availability is a build-time fact, so the query layer caches it; these
+    assertions set it directly so the composed SQL is the same on any machine.
+    """
+    from backend.db import templates
+
+    templates.clear_vector_cache()
+
+    # Per-row embeddings: OpenStack, unchanged.
     hybrid, params, _ = build(db.search_logs, "oom", dataset="openstack")
     assert "ai_embed" in normalized(hybrid)
+    assert "openstack_templates" not in normalized(hybrid)
     assert params == ["oom", "oom"]
 
+    # No template vectors built yet: lexical only.
+    templates.set_vector_cache("otel_slice", False)
     lexical, params, _ = build(db.search_logs, "oom", dataset="otel_slice")
     assert "ai_embed" not in normalized(lexical)
     assert "BM25" in normalized(lexical)
-    assert params == ["oom"]
+
+    # Template vectors available: semantic branch fused with BM25.
+    templates.set_vector_cache("otel_slice", True)
+    templated, params, _ = build(db.search_logs, "oom", dataset="otel_slice")
+    assert "otel_slice_templates" in normalized(templated)
+    assert "BM25" in normalized(templated)
+
+    templates.clear_vector_cache()
 
 
 def test_search_reads_the_index_relation_never_the_remote_files():
-    query, _, _ = build(db.search_logs, "oom", dataset="otel_slice")
-    rendered = normalized(query)
-    assert "read_parquet" not in rendered
-    assert '"otel_slice_idx"' in rendered
+    """True in both search shapes: a text query must never reach S3."""
+    from backend.db import templates
+
+    for available in (False, True):
+        templates.set_vector_cache("otel_slice", available)
+        query, _, _ = build(db.search_logs, "oom", dataset="otel_slice")
+        rendered = normalized(query)
+        assert "read_parquet" not in rendered
+        assert '"otel_slice_idx"' in rendered
+    templates.clear_vector_cache()
 
 
 def test_high_cardinality_field_listing_is_refused():

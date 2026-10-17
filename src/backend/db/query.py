@@ -25,6 +25,7 @@ from backend.db import predicates as pred
 from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL
 from backend.db.connection import query_runner
 from backend.db.datasets import Capability, Dataset, resolve
+from backend.db import templates
 from backend.db.errors import refuse
 from backend.db.stats import QueryStats
 
@@ -104,13 +105,22 @@ def search_logs(
     pred.require(ds, Capability.BM25, "full-text search")
 
     stats = QueryStats(dataset=ds.id, approximate=False)
+
+    # Three search shapes, chosen by what the corpus actually has rather than by
+    # its name. Per-row embeddings win when they exist; template embeddings are
+    # the affordable substitute at scale; BM25 alone is the floor.
     hybrid = ds.supports(Capability.VECTOR)
+    templated = (
+        not hybrid
+        and ds.supports(Capability.TEMPLATES)
+        and templates.has_template_vectors(ds)
+    )
     logger.debug(
-        'Searching %s for "%s" (severity=%s, hybrid=%s)',
+        'Searching %s for "%s" (severity=%s, mode=%s)',
         ds.id,
         query_text,
         severity,
-        hybrid,
+        "hybrid" if hybrid else "template" if templated else "lexical",
     )
 
     record_id = ds.sql_for("record_id")
@@ -193,6 +203,35 @@ def search_logs(
         # ai_embed's placeholder comes first in the composed statement, then
         # one placeholder per lexical term.
         params = [query_text, *terms]
+    elif templated:
+        # Template-level semantic branch: the query is matched against the
+        # *shapes* of messages, then every row of a matching shape is retrieved.
+        #
+        # Same reciprocal-rank fusion as the per-row path, because the two
+        # branches answer different questions and both are wanted. The template
+        # branch generalises -- 'money conversion problem' finds 'failed to
+        # convert shipping cost', which shares no words with the query and so is
+        # invisible to BM25. The lexical branch discriminates -- it sees each
+        # row's full text, which a template cannot, since all rows of one
+        # template look identical to it.
+        template_sql, _ = templates.template_branch(ds)
+        fused = sql.SQL("""
+            WITH query_embedding AS (
+                SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
+            ),
+            fused AS (
+                {lexical}
+                UNION ALL
+                {template_branch}
+            )
+        """).format(
+            model=sql.Literal(EMBEDDING_MODEL),
+            dim=sql.Literal(EMBEDDING_DIMENSION),
+            lexical=lexical,
+            template_branch=template_sql,
+        )
+        params = [query_text, *terms]
+        stats.notes.append("semantic matching is template-level, not per-row")
     else:
         fused = sql.SQL("WITH fused AS ({lexical})").format(lexical=lexical)
 
