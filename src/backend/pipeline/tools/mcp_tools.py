@@ -174,4 +174,6 @@ MCP_DB_TOOLS = [
     count_by_category_tool, get_data_tool, get_log_by_line_id_tool, get_trend_tool,
     search_logs_tool, top_in_category_by_service_tool, compare_periods_tool,
     sweep_chunks_tool, investigate_chunk_tool,
+    # Planned, not registered yet (schemas GetNearbyEvents / CountByTeam):
+    # get_nearby_events_tool (T2), count_by_team_tool (T3).
 ]

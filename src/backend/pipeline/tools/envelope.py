@@ -65,6 +65,9 @@ TOOL_KINDS: dict[str, str] = {
     "top_in_category_by_service_tool": "aggregate",
     "compare_periods_tool": "aggregate",
     "get_trend_tool": "trend",
+    # Planned (docs/tool_requests.md T2, T3); stubs in planned_tools.py.
+    "get_nearby_events_tool": "context",
+    "count_by_team_tool": "aggregate",
     # The sweep ranks chunks from profiles and samples and digests the ones it
     # reads: examples and coverage, never a frequency over the corpus.
     "sweep_chunks_tool": "search",

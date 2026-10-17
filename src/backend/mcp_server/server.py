@@ -15,6 +15,8 @@ never a table name, and rows use the canonical field names (``ts``,
 ``event_id``, ``record_id``) whatever the corpus calls them.
 
 New tools must use ``_result`` too; see AGENTS.md "Integrating new tools and tables".
+Planned, not served yet: ``get_nearby_events_tool`` (T2) and ``count_by_team_tool``
+(T3); their schemas and descriptions are in ``pipeline/tools/schemas.py``.
 """
 
 from __future__ import annotations

@@ -32,6 +32,8 @@ LOCAL_DB_TOOLS = [
     # reaches the UI from depth <= 1, and a sweep that reports nothing while it
     # runs for minutes is worse than no sweep.
     local_sweep_chunks_tool, local_investigate_chunk_tool,
+    # Planned, not registered yet (stubs in planned_tools.py, docs/tool_requests.md):
+    # get_nearby_events_tool (T2), count_by_team_tool (T3).
 ]
 
 
