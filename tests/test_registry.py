@@ -35,3 +35,14 @@ def test_local_transport_is_default(monkeypatch):
     tools, mcp_enabled = get_db_tools()
     assert mcp_enabled is False
     assert len(tools) == 11
+
+
+def test_no_tool_has_an_empty_args_schema():
+    """langchain-core calls a tool whose args_schema has no fields with no
+    arguments at all, dropping the injected runtime: list_datasets_tool failed
+    every real call with "missing 1 required positional argument: 'runtime'".
+    A tool without model arguments must let its schema be inferred instead."""
+    for tool in [*LOCAL_DB_TOOLS, *MCP_DB_TOOLS]:
+        assert tool.args_schema.model_fields, tool.name
+        assert "runtime" in tool._injected_args_keys, tool.name
+        assert "runtime" not in tool.tool_call_schema.model_fields, tool.name

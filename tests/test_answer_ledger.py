@@ -246,6 +246,34 @@ def test_priority_trend_keeps_the_newest_bucket_on_odd_length():
     assert by_name["b"]["trend_up"] == 1.0
 
 
+def test_priority_trend_sums_a_per_severity_series_per_bucket_without_info():
+    counts = _rec("R1", "aggregate", [
+        {"service": "a", "category": "WARNING", "count": 6},
+    ])
+    # group_by="severity": two rows per bucket. INFO is ignored, so the
+    # problem series is 1, 1 | 2, 4 -> baseline 2, recent 6 -> rising.
+    rows = [
+        {"bucket": f"2017-05-1{d} 00:00:00", "severity": sev, "count": n}
+        for d, (warn, info) in enumerate([(1, 100), (1, 0), (2, 100), (4, 0)])
+        for sev, n in (("WARNING", warn), ("INFO", info))
+    ]
+    trend = _rec("R2", "trend", rows, tool="get_trend_tool", filters={"service": "a"})
+    ranking = compute_priorities([counts, trend])
+    assert ranking["rows"][0]["trend_up"] == 1.0
+    assert "R2" in ranking["source_ids"]
+
+
+def test_priority_ignores_a_trend_whose_rows_were_cut():
+    counts = _rec("R1", "aggregate", [
+        {"service": "a", "category": "WARNING", "count": 6},
+    ])
+    trend = _rec("R2", "trend", [{"count": n} for n in (0, 9)],
+                 tool="get_trend_tool", filters={"service": "a"}, rows_capped=True)
+    ranking = compute_priorities([counts, trend])
+    assert ranking["rows"][0]["trend_up"] == "n/a"
+    assert "R2" not in ranking["source_ids"]
+
+
 def test_priority_reads_the_registry_severity_column():
     # The dataset registry returns canonical ``severity`` (not ``category``) and
     # ``entity_id`` (not ``pid``); INFO rows must still be ignored.

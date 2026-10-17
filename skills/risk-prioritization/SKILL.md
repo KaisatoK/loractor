@@ -23,7 +23,8 @@ Which observed problems deserve attention first, and what should happen next?
    for each whole local dataset in one call.
 3. **Trend direction.** `compare_periods_tool` (first half vs second half of the
    scope) or `get_trend_tool` for the top two or three candidates, to see which
-   problems are growing.
+   problems are growing. If a trend is refused for too many buckets, take the
+   suggested coarser bucket; a split period must split on whole buckets.
 4. **Breadth.** From the counts, how many components (and owning teams, from the
    team-ownership mapping) each problem touches.
 5. Optional: one `search_logs_tool` example (limit 1) for the top priority so the

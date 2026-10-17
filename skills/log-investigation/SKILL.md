@@ -35,6 +35,15 @@ count, then search inside it.
    nothing, which proves nothing. When `whole_span_fits_one_window` is false,
    split the span into windows of at most `max_window_seconds`.
 
+   **Split on bucket boundaries.** When a span is split into several windows —
+   for the window limit, or to keep a finer trend bucket — start and end every
+   window on a whole bucket: on the hour for hour buckets, at midnight for day
+   buckets. A boundary inside a bucket (for example 19:39:01 with hour
+   buckets) cuts that bucket in two, so it appears in both results with part of
+   its count each; neither row is that hour's count. Round the first window's
+   start down and the last window's end up to the bucket, and make each window
+   end exactly where the next one starts.
+
 1. **Start with a count, not a search.** `count_by_category_tool` is the
    cheapest aggregate there is — it never touches message text. Use it to find
    which minute, service, or severity actually matters.
@@ -60,6 +69,10 @@ the line of enquiry, and do not report a refusal as evidence of absence.
 
 Common ones:
 - *window too wide* — narrow it to the stated limit and retry.
+- *too many buckets* — a trend would return more points than allowed. Retry
+  with the suggested coarser bucket. Split the window instead only when the
+  finer bucket matters to the question, and then split on bucket boundaries
+  (see above).
 - *severity case* — the corpus uses its own casing; use the value named.
 - *unsupported capability* — that corpus has no index or no primary key; use a
   dataset that does, as named in the suggestion.

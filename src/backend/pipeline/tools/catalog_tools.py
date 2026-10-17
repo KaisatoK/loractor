@@ -11,12 +11,17 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db import list_datasets
 from backend.pipeline.tools.executor import execute_database_tool
-from backend.pipeline.tools.schemas import ListDatasets
 
 OPERATION = "list every dataset with its rows, time span and severity levels"
 
 
-@tool(args_schema=ListDatasets)
+# No ``args_schema``, deliberately. The tool takes no model arguments, and
+# langchain-core short-circuits a schema with no fields to "call with no
+# arguments" (``BaseTool._to_args_and_kwargs``), dropping the injected
+# ``runtime``: every call failed with "missing 1 required positional argument:
+# 'runtime'". Inferred from the signature instead, the schema keeps ``runtime``
+# as an injected argument and shows the model no fields at all.
+@tool
 def list_datasets_tool(runtime: ToolRuntime) -> dict:
     """List every dataset's rows, time span and severity levels, measured now.
 

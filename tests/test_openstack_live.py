@@ -116,6 +116,54 @@ def test_a_minute_bucketed_full_range_trend_is_refused(loaded):
     assert rows.refusal.code == "too_many_buckets"
 
 
+def test_the_trend_lists_every_bucket_including_the_silent_ones(loaded):
+    """The three runs leave gaps (05-14 21:27 to 05-16 00:00, 05-16 06:25 to
+    15:15). Each hour of the window is a row, the gaps are 0, and the counts still
+    add up to the measured total."""
+    rows = db.get_trend(
+        *WINDOW, "service", "nova.compute.manager", dataset="openstack", bucket="hour"
+    )
+    assert not rows.refused
+    assert len(rows) == 96  # 2017-05-14 00:00 .. 2017-05-18 00:00, hourly
+    buckets = [str(r["bucket"]) for r in rows]
+    assert buckets == sorted(buckets)
+    assert any(r["count"] == 0 for r in rows)
+    # 2017-05-15 is between runs: every one of its 24 hours is an empty bucket.
+    assert all(r["count"] == 0 for r in rows if str(r["bucket"]).startswith("2017-05-15"))
+
+    totals = db.top_by_field(*WINDOW, field="service", dataset="openstack", limit=100)
+    measured = next(r["count"] for r in totals if r["service"] == "nova.compute.manager")
+    assert sum(r["count"] for r in rows) == measured
+
+
+def test_an_omitted_bucket_is_chosen_from_the_window(loaded):
+    rows = db.get_trend(*WINDOW, "service", "nova.compute.manager", dataset="openstack")
+    assert not rows.refused
+    assert len(rows) == 96
+    assert any("hour (chosen from the window length)" in n for n in rows.stats.notes)
+
+
+def test_a_per_severity_trend_has_one_zero_filled_series_per_level(loaded):
+    rows = db.get_trend(
+        *WINDOW, "service", "nova.compute.manager", dataset="openstack",
+        bucket="day", group_by="severity",
+    )
+    assert not rows.refused
+    levels = {r["severity"] for r in rows}
+    days = {str(r["bucket"]) for r in rows}
+    assert len(days) == 4
+    # Every (day, level) pair exists, 0 where that level was silent.
+    assert len(rows) == len(days) * len(levels)
+    by_level: dict[str, int] = {}
+    for r in rows:
+        by_level[r["severity"]] = by_level.get(r["severity"], 0) + r["count"]
+    counted = db.count_by_field(*WINDOW, group_by="service", dataset="openstack", limit=200)
+    expected = {
+        r["severity"]: r["count"] for r in counted if r["service"] == "nova.compute.manager"
+    }
+    assert by_level == expected
+
+
 def test_lexical_search_finds_an_exact_phrase(loaded):
     rows = db.search_logs("Instance spawned successfully", dataset="openstack", limit=5)
     assert len(rows) > 0

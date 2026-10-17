@@ -27,6 +27,11 @@ Which problems recur, how often, and which components or teams are involved?
    counts up yourself.
 4. **Trend.** `get_trend_tool` for the top one to three recurring templates or
    services over the same period, to show whether each is rising, flat or bursty.
+   Omit `bucket` and the window picks one; every bucket is returned, 0 where
+   nothing was logged, so a burst and a gap are both visible. If a trend is
+   refused for too many buckets, take the suggested coarser bucket; if you
+   split the period instead, split on whole buckets (on the hour for hour
+   buckets), never at the dataset's first timestamp plus a duration.
    `compare_periods_tool` (first half vs second half) is an alternative.
 5. **One example per pattern** with `search_logs_tool` (limit 1-3), only to show
    what the message looks like.

@@ -35,7 +35,10 @@ _DATASET_DESCRIPTION = (
 )
 
 CanonicalField = Literal["service", "entity_id", "event_id", "template", "severity"]
-Bucket = Literal["second", "minute", "hour", "day"]
+# Every bucket the query layer supports (``predicates.BUCKETS``). The schema
+# used to stop at 'day', so a trend refused with "bucket by week instead" could
+# not follow its own suggestion.
+Bucket = Literal["second", "minute", "hour", "day", "week", "month"]
 
 
 class _DatasetScoped(BaseModel):
@@ -126,15 +129,27 @@ class GetTrend(_Windowed):
         ),
     ]
     bucket: Annotated[
-        Bucket,
+        Bucket | None,
         Field(
             description=(
-                "Bucket width. Replaces the old minute-only behaviour, so a "
-                "trend can span seconds or days."
+                "Bucket width. Omit it to let the window decide: the finest "
+                "bucket that keeps the series to about 100 points. A window "
+                "that would need more than 240 points is refused with a "
+                "coarser bucket suggested."
             )
         ),
-    ] = "minute"
+    ] = None
     category: str | None = None
+    group_by: Annotated[
+        Literal["severity"] | None,
+        Field(
+            description=(
+                "'severity' returns one series per severity level that occurs "
+                "in the window (rows gain a severity column), each with its own "
+                "direction of travel. Omit for a single series."
+            )
+        ),
+    ] = None
 
 
 class SearchLogs(_DatasetScoped):
@@ -225,14 +240,6 @@ class GetTools(_Windowed):
         ),
     ]
     limit: Annotated[int, Field(ge=1, le=200)] = 50
-
-
-class ListDatasets(BaseModel):
-    """No arguments: the catalog always covers every registered dataset.
-
-    Deliberately not ``_DatasetScoped`` -- its purpose is to tell the agent
-    which datasets exist and what they hold *before* it picks one.
-    """
 
 
 class CountByDataset(BaseModel):

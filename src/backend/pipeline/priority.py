@@ -196,9 +196,26 @@ def _trend_by_value(
                 recent[str(row[dimension])] += int(row["recent_count"] or 0)
         elif record.get("kind") == "trend" and "count" in first:
             value = (record.get("filters") or {}).get(dimension)
-            if value is None or _category(first, record) in INFO_LEVELS:
+            if value is None or record.get("rows_capped"):
+                # A cut series holds only its oldest buckets, so its halves
+                # would not end at the newest bucket.
                 continue
-            series = [int(row.get("count") or 0) for row in rows]
+            # One count per bucket, non-INFO rows only. A per-severity trend
+            # (group_by="severity") has one row per bucket and level; a single
+            # series takes its level from the call's filter.
+            per_bucket: dict[object, int] = {}
+            counted = False
+            for index, row in enumerate(rows):
+                # A row without a bucket (older records) is its own bucket.
+                key = str(row["bucket"]) if "bucket" in row else index
+                per_bucket.setdefault(key, 0)
+                if _category(row, record) not in INFO_LEVELS:
+                    counted = True
+                    per_bucket[key] += int(row.get("count") or 0)
+            if not counted:
+                # Only informational rows: not a problem trend.
+                continue
+            series = list(per_bucket.values())
             half = len(series) // 2
             if half == 0:
                 continue

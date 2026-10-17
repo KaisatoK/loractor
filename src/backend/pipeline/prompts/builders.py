@@ -60,7 +60,10 @@ TOOL_CATALOG = {
     "get_trend_tool": (
         "TIER index|remote. Counts one known service/entity/event per time "
         "bucket; params: dataset, start_time, end_time, type=(field, exact "
-        "value), bucket (second|minute|hour|day), category (severity). "
+        "value), bucket (second|minute|hour|day|week|month; omit it and the "
+        "window picks one), category (severity), group_by ('severity' for one "
+        "series per level). Every bucket in the window is returned, 0 where "
+        "nothing was logged, so a gap shows as a gap. "
         "Use to see how one known entity's volume moves over time."
     ),
     "count_by_category_tool": (

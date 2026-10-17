@@ -19,6 +19,7 @@ from backend.db.external import ExternalIndexPlan, record_build_statements
 from backend.db.stats import QueryResult
 from backend.pipeline.tools.envelope import TOOL_KINDS, run_enveloped
 from sql_render import normalized
+from tool_invoke import tool_call as _tool_call
 
 UTC = dt.timezone.utc
 
@@ -294,22 +295,32 @@ def test_the_envelope_is_a_complete_json_safe_catalog(monkeypatch):
 
 # --- The tool on both transports --------------------------------------------------
 def test_the_local_tool_takes_no_arguments_and_returns_the_catalog(monkeypatch):
+    """Invoked as the agent's ToolNode does: no model arguments, runtime
+    injected. Calling ``.func`` directly hid a bug where an empty args_schema
+    made langchain-core drop the runtime, so every real call failed."""
     from backend.pipeline.tools import catalog_tools
 
     _stub_catalog(monkeypatch, present={"openstack", "bgl"})
     monkeypatch.setattr(catalog_tools, "list_datasets", cq.list_datasets)
 
-    class _Runtime:
-        def __init__(self):
-            self.events = []
-            self.stream_writer = self.events.append
-
-    runtime = _Runtime()
-    result = catalog_tools.list_datasets_tool.func(runtime=runtime)
+    events: list = []
+    message = catalog_tools.list_datasets_tool.invoke(
+        _tool_call(catalog_tools.list_datasets_tool, events)
+    )
+    result = json.loads(message.content)
 
     assert result["kind"] == "catalog"
     assert {r["dataset"] for r in result["data"]} >= {"openstack", "bgl"}
-    assert [e["status"] for e in runtime.events] == ["started", "completed"]
+    assert [e["status"] for e in events] == ["started", "completed"]
+
+
+@pytest.mark.parametrize("transport", ["local", "mcp"])
+def test_the_model_sees_no_arguments_and_runtime_stays_injected(transport):
+    from backend.pipeline.tools import catalog_tools, mcp_tools
+
+    tool = (catalog_tools if transport == "local" else mcp_tools).list_datasets_tool
+    assert list(tool.tool_call_schema.model_fields) == []
+    assert "runtime" in tool._injected_args_keys
 
 
 def test_the_mcp_server_offers_the_catalog_with_no_inputs():

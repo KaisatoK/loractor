@@ -47,6 +47,7 @@ from backend.pipeline.sweep import (
 )
 from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import run_enveloped
+from backend.pipeline.tools.trend_tools import trend_filters, trend_operation
 from backend.pipeline.tools.schemas import (
     CountByDataset,
     InvestigateChunk,
@@ -253,25 +254,31 @@ def get_data_tool(start_time: str, end_time: str, type: str,
 
 @mcp.tool(name="get_trend_tool")
 def get_trend_tool(start_time: str, end_time: str, type: tuple[str, str],
-                   dataset: str = DEFAULT_DATASET_ID, bucket: str = "minute",
-                   category: str | None = None) -> dict:
-    """Count one known field value per time bucket in a window.
+                   dataset: str = DEFAULT_DATASET_ID, bucket: str | None = None,
+                   category: str | None = None,
+                   group_by: str | None = None) -> dict:
+    """Count one known field value per time bucket in a window, every bucket included.
 
     Inputs: start_time < end_time ('YYYY-MM-DD HH:MM:SS'), type ([canonical field,
-    exact value]), dataset, bucket (second|minute|hour|day; too many buckets are
-    refused with a coarser one suggested), category (optional). Returns kind=trend
-    rows {bucket, count, prev_count, trend}.
+    exact value]), dataset, bucket (second|minute|hour|day|week|month; omit to let
+    the window choose, about 100 points at most; over 240 points is refused with a
+    coarser one suggested), category (optional severity filter), group_by
+    ('severity' for one series per severity level present; optional). Returns
+    kind=trend rows {bucket, [severity,] count, prev_count, trend} for EVERY bucket
+    in the window, with count 0 where nothing was logged; query_stats.notes names
+    the bucket used.
     """
     v = _validated(GetTrend, start_time=start_time, end_time=end_time, type=type,
-                   dataset=dataset, bucket=bucket, category=category)
+                   dataset=dataset, bucket=bucket, category=category,
+                   group_by=group_by)
     field, value = v["type"][0], v["type"][1]
     return _result(
-        f"get the {field} trend for '{value}' on {v['dataset']}",
+        trend_operation(field, value, v["dataset"], v["category"], v["group_by"]),
         lambda: get_trend(v["start_time"], v["end_time"], field, value,
-                          v["dataset"], v["bucket"], v["category"]),
+                          v["dataset"], v["bucket"], v["category"], v["group_by"]),
         kind="trend", dataset=v["dataset"], complete=True,
-        filters={"start_time": v["start_time"], "end_time": v["end_time"],
-                 field: value, "category": v["category"], "bucket": v["bucket"]},
+        filters=trend_filters(v["start_time"], v["end_time"], field, value,
+                              v["category"], v["bucket"], v["group_by"]),
     )
 
 

@@ -21,6 +21,7 @@ from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.tools.envelope import MEASURED_KINDS, TOOL_KINDS
 from backend.pipeline.tools.schemas import CountByDataset
 from sql_render import normalized
+from tool_invoke import tool_call as _tool_call
 
 
 @pytest.fixture
@@ -98,12 +99,14 @@ def test_the_result_is_a_measured_complete_aggregate(monkeypatch):
     ])
     monkeypatch.setattr(count_tools, "count_by_dataset", lambda datasets: rows)
 
-    class _Runtime:
-        def __init__(self):
-            self.events = []
-            self.stream_writer = self.events.append
-
-    result = count_tools.count_by_dataset_tool.func(runtime=_Runtime(), datasets=None)
+    # Invoked the way the agent's ToolNode does, so the injected runtime takes
+    # the real path (a direct ``.func`` call hid a dropped runtime before).
+    events: list = []
+    message = count_tools.count_by_dataset_tool.invoke(
+        _tool_call(count_tools.count_by_dataset_tool, events)
+    )
+    result = json.loads(message.content)
+    assert [e["status"] for e in events] == ["started", "completed"]
     assert result["kind"] == "aggregate" == TOOL_KINDS["count_by_dataset_tool"]
     assert result["kind"] in MEASURED_KINDS
     assert result["truncated"] is False

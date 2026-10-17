@@ -12,11 +12,11 @@ from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
+from backend.pipeline.tools.trend_tools import trend_operation
 from backend.pipeline.tools.schemas import (
     CountByDataset,
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
     InvestigateChunk,
-    ListDatasets,
     SearchLogs, TopInCategoryByService,
     SweepChunks,
 )
@@ -43,8 +43,9 @@ def _call(runtime: ToolRuntime, name: str, operation: str, arguments: dict) -> d
     )
 
 
-@tool(args_schema=ListDatasets,
-      description="List every dataset's rows, time span and severity levels.")
+# No args_schema: an empty one makes langchain-core drop the injected runtime
+# (see catalog_tools.list_datasets_tool).
+@tool(description="List every dataset's rows, time span and severity levels.")
 def list_datasets_tool(runtime: ToolRuntime) -> dict:
     return _call(runtime, "list_datasets_tool",
                  "list every dataset with its rows, time span and severity levels",
@@ -89,11 +90,13 @@ def get_log_by_line_id_tool(runtime: ToolRuntime, line_id: int,
 @tool(args_schema=GetTrend, description="Count one field value per time bucket.")
 def get_trend_tool(runtime: ToolRuntime, start_time: str, end_time: str,
                    type: tuple[str, str], dataset: str = DEFAULT_DATASET_ID,
-                   bucket: str = "minute", category: str | None = None) -> dict:
+                   bucket: str | None = None, category: str | None = None,
+                   group_by: str | None = None) -> dict:
     return _call(runtime, "get_trend_tool",
-                 f"get the {type[0]} trend for '{type[1]}' on {dataset}",
+                 trend_operation(type[0], type[1], dataset, category, group_by),
                  {"start_time": start_time, "end_time": end_time, "type": list(type),
-                  "dataset": dataset, "bucket": bucket, "category": category})
+                  "dataset": dataset, "bucket": bucket, "category": category,
+                  "group_by": group_by})
 
 
 @tool(args_schema=SearchLogs, description="Search log message content.")

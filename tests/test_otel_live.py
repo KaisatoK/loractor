@@ -252,3 +252,37 @@ def test_the_catalog_reports_the_index_build_window():
     assert row["available"] is True
     assert row["timestamp_source"] in {"index_build_record", "index_view_definition"}
     assert row["window_start"] and row["window_end"]
+
+
+# --- Zero-filled trend on the remote corpus -----------------------------------
+def test_the_remote_trend_lists_every_second_of_the_window():
+    """Nanosecond timestamps are truncated and cast, so generated buckets and
+    row buckets join; every second of a 10-second window is one row."""
+    import backend.db as db
+
+    lo, hi = "2025-09-23 00:00:00+00", "2025-09-23 00:00:10+00"
+    values = db.get_field_values(lo, hi, "service", dataset="otel_s3", limit=1)
+    assert values and not values.refused
+    service = values[0]["value"]
+
+    rows = db.get_trend(lo, hi, "service", service, dataset="otel_s3", bucket="second")
+    assert not rows.refused
+    assert len(rows) == 10
+    assert sum(r["count"] for r in rows) == values[0]["count"]
+
+
+# --- Zero-filled trend on the remote corpus -----------------------------------
+def test_the_remote_trend_lists_every_second_of_the_window():
+    """Nanosecond timestamps are truncated and cast, so generated buckets and
+    row buckets join; every second of a 10-second window is one row."""
+    import backend.db as db
+
+    lo, hi = "2025-09-23 00:00:00+00", "2025-09-23 00:00:10+00"
+    values = db.get_field_values(lo, hi, "service", dataset="otel_s3", limit=1)
+    assert values and not values.refused
+    service = values[0]["value"]
+
+    rows = db.get_trend(lo, hi, "service", service, dataset="otel_s3", bucket="second")
+    assert not rows.refused
+    assert len(rows) == 10
+    assert sum(r["count"] for r in rows) == values[0]["count"]
