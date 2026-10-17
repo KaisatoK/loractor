@@ -262,8 +262,9 @@ def test_the_tool_passes_the_window_and_reports_total_matches(monkeypatch, trans
         class _Bridge:
             def call_tool(self, name, arguments):
                 assert name == "search_logs_tool"
-                # The server function behind @mcp.tool, called in-process.
-                return server.search_logs_tool.fn(**arguments)
+                # The server function behind @mcp.tool, called in-process
+                # (FastMCP >= 3 decorators return the plain function).
+                return server.search_logs_tool(**arguments)
 
         monkeypatch.setattr(server, "search_with_total", fake_search)
         monkeypatch.setattr(mcp_tools, "get_mcp_bridge", lambda: _Bridge())

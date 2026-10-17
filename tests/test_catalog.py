@@ -335,6 +335,6 @@ def test_the_mcp_server_offers_the_catalog_with_no_inputs():
             tools = {t.name: t for t in await client.list_tools()}
             tool = tools["list_datasets_tool"]
             assert "window_start" in tool.description
-            assert not tool.inputSchema.get("required")
+            assert not tool.input_schema.get("required")
 
     asyncio.run(run())
