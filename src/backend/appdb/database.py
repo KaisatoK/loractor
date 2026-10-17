@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_results TEXT,
     progress     TEXT,
     reframed_for TEXT,
+    stopped      INTEGER,
     created_at   TEXT NOT NULL,
     PRIMARY KEY (user_id, chat_id, seq),
     FOREIGN KEY (user_id, chat_id) REFERENCES chats(user_id, id) ON DELETE CASCADE
@@ -76,6 +77,17 @@ def db_path() -> Path:
     return Path(os.getenv("APP_DB_PATH", str(_DEFAULT_PATH)))
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a database file was first created.
+
+    The schema is ``CREATE TABLE IF NOT EXISTS``, which leaves an existing file
+    untouched, so each new column is added here when it is missing.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "stopped" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN stopped INTEGER")
+
+
 def _connect() -> sqlite3.Connection:
     global connection
     if connection is None:
@@ -89,6 +101,7 @@ def _connect() -> sqlite3.Connection:
                 conn.execute("PRAGMA busy_timeout=5000")
                 conn.execute("PRAGMA foreign_keys=ON")
                 conn.executescript(_SCHEMA)
+                _migrate(conn)
                 conn.commit()
                 connection = conn
     return connection

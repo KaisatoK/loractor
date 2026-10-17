@@ -215,13 +215,20 @@ def active_run(*, token: str, chat_id: str) -> str | None:
     return response.json().get("run_id")
 
 
-def cancel_run(*, token: str, chat_id: str, run_id: str) -> None:
-    """Ask the backend to stop an in-flight investigation."""
-    requests.post(
+def cancel_run(*, token: str, chat_id: str, run_id: str) -> bool:
+    """Ask the backend to stop an in-flight investigation.
+
+    Returns whether the backend accepted the request. The run does not stop at
+    once: it ends at its next event, so poll the run until it reports
+    ``cancelled``. Raises on an HTTP error (for example 404 for an unknown run).
+    """
+    response = requests.post(
         f"{API_BASE}/chats/{chat_id}/run/{run_id}/cancel",
         headers=_auth_headers(token),
         timeout=30,
     )
+    response.raise_for_status()
+    return bool(response.json().get("cancelled"))
 
 
 # --- Role switch -----------------------------------------------------------------

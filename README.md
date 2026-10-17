@@ -412,6 +412,17 @@ itself. The UI is only a viewer:
 - `GET /chats/{id}/active-run` lets a fresh session re-attach to an in-flight run.
 - `POST /chats/{id}/run/{run_id}/cancel` (and `DELETE /chats/{id}`) stop a run.
 
+The chat box is locked while a run is active: the text field is disabled and the
+send button becomes a **stop button** that calls the cancel endpoint. The box shows
+"Stopping…" until the run reports `cancelled` (the worker checks for a cancel
+between events), then unlocks. A stopped run saves no answer, so the question that
+started it is flagged `stopped` in the store. The UI shows "Stopped by user" under
+it (also after a refresh), and the agents read the turn labelled
+`[investigation stopped by the user; no answer was given]`, so a later "what was my
+whole question again?" is answered from the conversation instead of re-running the
+investigation. Role-switch runs are not affected by the stop button. A run that
+fails unlocks the box too, and its error stays visible under the question.
+
 Because the run outlives any single HTTP request or Streamlit script run,
 switching conversations, deleting a chat, or refreshing the browser no longer
 truncates a half-rendered answer or erases its thinking — the work continues and
@@ -629,6 +640,7 @@ confidence tests below are skipped unless enabled.
 | `test_config.py` | env-driven config and the pooled connection layer |
 | `test_observability.py` | metrics registry and request-correlation middleware |
 | `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
+| `test_chat_box_stop.py` / `test_chat_stop_ui.py` / `test_stopped_turns.py` | chat box lock and stop button, stopped/failed runs in the UI, the stored `stopped` flag and the transcript label |
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
@@ -777,7 +789,7 @@ suggestion carries `line_id` and `dataset` in place of `count`.
 | `GET /chats` | `{chats: [{id, role, title, created_at, updated_at}]}` |
 | `POST /chats` | create `{chat_id, role, title?}` → chat record |
 | `DELETE /chats/{chat_id}` | `{deleted: bool}` |
-| `GET /chats/{chat_id}/messages` | `{messages: [...]}` |
+| `GET /chats/{chat_id}/messages` | `{messages: [{seq, role, content, tool_results, progress, reframed_for, stopped, created_at}]}` (`stopped`: the user stopped the investigation of this question) |
 | `POST /chats/{chat_id}/messages` | append `{role, content, tool_results?, progress?, reframed_for?}` |
 
 ### Background investigations

@@ -88,6 +88,7 @@ from backend.pipeline.decision import (
 from backend.pipeline.graph import normalize_node
 from backend.pipeline.prompts import PipelinePrompts, normalized_is_usable
 from backend.pipeline.roles import ROLE_OBJECTIVES
+from backend.pipeline.transcript import label_stopped
 
 
 # --- case data ------------------------------------------------------------
@@ -101,7 +102,9 @@ prompts = PipelinePrompts()
 class Conversation:
     id: str
     # ("user", text, expected_route) -> asserted; ("user", text) -> context only
-    # (NOT classified); ("assistant", text) -> context only.
+    # (NOT classified); ("assistant", text) -> context only; ("user_stopped", text)
+    # -> a user turn whose investigation the user stopped (context only, shown to
+    # the classifiers with the stopped label, exactly as ``api.py`` renders it).
     messages: list[tuple[str, str] | tuple[str, str, str]]
     # The user's role; ``decide_scope`` applies it in code (overview requests
     # are scoped for team_lead/manager). The Nouls never see it.
@@ -179,6 +182,19 @@ CONVERSATIONS = [
         id="manager-specific-but-vague-clarifies",
         role="manager",
         messages=[("user", "Why did it fail?", "clarify")],
+    ),
+    # Two investigations the user stopped, then a question about the conversation
+    # itself: it is not a log request, so it must not restart an investigation.
+    # The stopped turns carry no expected route -- they were cut off before any
+    # answer, so their own routing is irrelevant; only their stopped label matters.
+    Conversation(
+        id="recap-after-stopped-questions",
+        role="team_lead",
+        messages=[
+            ("user_stopped", "What recurring problem do we have in the last hour?"),
+            ("user_stopped", "Wait, I only want to find service X"),
+            ("user", "What was my whole question again?", "general"),
+        ],
     ),
 ]
 
@@ -360,10 +376,15 @@ def run_conversation(conversation: Conversation) -> None:
             role, text = message[0], message[1]
             expected = message[2] if len(message) == 3 else None
 
-            assert role in ("user", "assistant"), (
+            assert role in ("user", "assistant", "user_stopped"), (
                 f"[{conversation.id}] turn {index}: unknown role {role!r}"
             )
-            transcript.append((role, text))
+            # A stopped turn is a user turn the agents read with its label.
+            transcript.append(
+                ("user", label_stopped(text, True))
+                if role == "user_stopped"
+                else (role, text)
+            )
 
             context_only = role != "user" or expected is None
             if context_only:
@@ -484,7 +505,7 @@ def test_case_data_is_valid():
             )
             role = message[0]
             text = message[1]
-            assert role in ("user", "assistant"), (
+            assert role in ("user", "assistant", "user_stopped"), (
                 f"[{conversation.id}] unknown role {role!r}"
             )
             assert isinstance(text, str), f"[{conversation.id}] non-str text {text!r}"

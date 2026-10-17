@@ -129,6 +129,19 @@ def _apply_event(run: dict, event: dict) -> None:
         run["thinking_key"] = None
 
 
+def _annotate_last_user_turn(current_chat, **flags) -> None:
+    """Flag the user turn that started the run that just ended without an answer.
+
+    This is a flag on the existing history item, never a new entry: local history
+    mirrors the persisted messages one-to-one (answers are numbered
+    ``len(history) + 1``) and is what the next request sends to the backend.
+    """
+    for item in reversed(current_chat.get("history") or []):
+        if item["role"] == "user":
+            item.update(flags)
+            return
+
+
 def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
     """Retire a finished run and fold its result back into the chat history."""
     st.session_state.active_runs.pop(chat_id, None)
@@ -150,9 +163,16 @@ def _finalize_run(current_chat, chat_id: str, payload: dict) -> None:
         # Full rerun so the completed answer renders through the history loop
         # (real tables plus the reframe buttons), not the live placeholder.
         st.rerun(scope="app")
-    elif status == "error":
-        st.error(f"Investigation failed: {payload.get('error') or 'unknown error'}")
-    # cancelled: the chat was deleted or the run was stopped; render nothing.
+        return
+    if status == "error":
+        _annotate_last_user_turn(
+            current_chat, run_error=payload.get("error") or "unknown error"
+        )
+    elif status == "cancelled":
+        _annotate_last_user_turn(current_chat, stopped=True)
+    # The chat box stays locked while a run is active, so a full rerun is what
+    # unlocks it; the outcome is drawn under the question by the history loop.
+    st.rerun(scope="app")
 
 
 @st.fragment(run_every="0.5s")
@@ -420,6 +440,10 @@ def main_page():
                     )
             else:
                 st.markdown(item["content"])
+                if item.get("stopped"):
+                    st.caption(":material/stop_circle: Stopped by user")
+                if item.get("run_error"):
+                    st.error(f"Investigation failed: {item['run_error']}")
         copy_to_clipboard_button(item["content"], item["role"], idx)
 
     # Live view of an in-flight investigation for this chat (if any).

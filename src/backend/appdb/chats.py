@@ -29,6 +29,7 @@ def _row_to_message(row) -> dict:
         "tool_results": json.loads(row["tool_results"]) if row["tool_results"] else None,
         "progress": json.loads(row["progress"]) if row["progress"] else None,
         "reframed_for": row["reframed_for"],
+        "stopped": bool(row["stopped"]),
         "created_at": row["created_at"],
     }
 
@@ -80,7 +81,8 @@ def delete_chat(user_id: str, chat_id: str) -> bool:
 def get_messages(user_id: str, chat_id: str) -> list[dict]:
     with db() as cur:
         rows = cur.execute(
-            "SELECT seq, role, content, tool_results, progress, reframed_for, created_at "
+            "SELECT seq, role, content, tool_results, progress, reframed_for, "
+            "stopped, created_at "
             "FROM messages WHERE user_id = ? AND chat_id = ? ORDER BY seq",
             (user_id, chat_id),
         ).fetchall()
@@ -238,5 +240,20 @@ def append_message(
         "tool_results": tool_results,
         "progress": progress,
         "reframed_for": reframed_for,
+        "stopped": False,
         "created_at": now,
     }
+
+
+def mark_message_stopped(user_id: str, chat_id: str, seq: int) -> bool:
+    """Flag a user message whose investigation was stopped before it answered.
+
+    Returns ``False`` when the message no longer exists (the chat was deleted).
+    """
+    with db() as cur:
+        cur.execute(
+            "UPDATE messages SET stopped = 1 "
+            "WHERE user_id = ? AND chat_id = ? AND seq = ? AND role = 'user'",
+            (user_id, chat_id, seq),
+        )
+        return cur.rowcount > 0

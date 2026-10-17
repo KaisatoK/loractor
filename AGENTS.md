@@ -74,6 +74,9 @@ decision surface. If you change any of:
 - `prompts/system.py` (`NORMALIZE_SYSTEM_PROMPT`)
 - `agents/normalize.py`
 - `prompts/builders.py` (`scope_request` and its five questions, `QUERYABLE_TARGETS`)
+- `pipeline/transcript.py` or `api.py::_render_conversation` (a user turn the user
+  stopped is shown to the agents with `STOPPED_NOTE`; the `user_stopped` role in the
+  live cases mirrors it)
 - `decision.py` (`decide_scope`, `LOG_REQUEST_THRESHOLD`, `QUERYABLE_SCOPE_THRESHOLD`,
   `NEW_EVIDENCE_THRESHOLD`, `OVERVIEW_THRESHOLD`, `OVERVIEW_ROLES`, `MAX_CLARIFY_ROUNDS`,
   `PROCEED_THRESHOLD`)

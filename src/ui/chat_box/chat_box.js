@@ -1,14 +1,22 @@
 // Talks the Streamlit component protocol directly, so no build step is needed.
 const RENDER = "streamlit:render";
-const state = { text: "", submitted: "", word: "", submitSeq: 0 };
+const state = { text: "", submitted: "", word: "", submitSeq: 0, stopSeq: 0 };
 const input = document.getElementById("q");
 const list = document.getElementById("list");
 const sendBtn = document.getElementById("send");
+const box = document.getElementById("box");
 let suggestions = [];
 let focused = false;
 let ready = false;
 let debounce = null;
 let active = -1; // suggestion the arrow keys have selected (Enter accepts it)
+
+// An investigation is running for this chat: the field is locked and the send
+// button is a stop button. ``stopping`` is set once a stop has been requested,
+// until the backend reports the run has ended (it stops at its next event).
+let running = false;
+let stopping = false;
+let basePlaceholder = "";
 
 const SPACE = /\s/;
 // ``@`` component/service, ``^`` event template, ``$`` message content. ``!`` is
@@ -87,9 +95,49 @@ function setHeight() {
   post("streamlit:setFrameHeight", { height: document.body.scrollHeight });
 }
 
-// The send button is only actionable when there is something to send.
+// The send button is only actionable when there is something to send; while a
+// run is active it is the stop button, actionable until a stop is requested.
 function syncSend() {
-  sendBtn.disabled = !input.value.trim();
+  sendBtn.disabled = running ? stopping : !input.value.trim();
+}
+
+// Lock the field and swap the send icon for the stop icon while a run is active.
+function syncMode() {
+  input.disabled = running;
+  box.classList.toggle("locked", running);
+  sendBtn.classList.toggle("stop", running);
+
+  const label = running ? (stopping ? "Stopping" : "Stop") : "Send";
+  sendBtn.setAttribute("aria-label", label);
+  sendBtn.title = label;
+
+  input.placeholder = running
+    ? stopping
+      ? "Stopping…"
+      : "Investigation running…"
+    : basePlaceholder;
+
+  if (running) {
+    focused = false;
+    suggestions = [];
+    active = -1;
+  }
+
+  syncSend();
+}
+
+// Ask Streamlit to cancel the run. The button locks at once so a double click
+// cannot send two requests; the next render confirms (or undoes) the state.
+function stop() {
+  if (!running || stopping) {
+    return;
+  }
+
+  stopping = true;
+  state.submitted = "";
+  state.stopSeq += 1;
+  syncMode();
+  setValue();
 }
 
 // Hand the draft to Streamlit: clear the box, bump the submit counter and post
@@ -97,7 +145,7 @@ function syncSend() {
 function submit() {
   const text = input.value.trim();
 
-  if (!text) {
+  if (running || !text) {
     return;
   }
 
@@ -303,6 +351,10 @@ input.addEventListener("input", () => {
 });
 
 input.addEventListener("keydown", (event) => {
+  if (running) {
+    return;
+  }
+
   if (event.key === "Enter") {
     event.preventDefault();
 
@@ -330,6 +382,11 @@ sendBtn.addEventListener("mousedown", (event) => {
 });
 
 sendBtn.addEventListener("click", () => {
+  if (running) {
+    stop();
+    return;
+  }
+
   submit();
   input.focus();
 });
@@ -367,7 +424,7 @@ window.addEventListener("message", (event) => {
     applyTheme(data.theme);
   }
 
-  input.placeholder = args.placeholder || "";
+  basePlaceholder = args.placeholder || "";
 
   // Resume counting above the backend's submit watermark: a remounted box (a new
   // chat unmounts it on the role picker) would otherwise restart at zero, and the
@@ -375,6 +432,17 @@ window.addEventListener("message", (event) => {
   if (typeof args.submit_seq_base === "number") {
     state.submitSeq = Math.max(state.submitSeq, args.submit_seq_base);
   }
+
+  // Same for the stop counter, so a remounted box does not replay old stops.
+  if (typeof args.stop_seq_base === "number") {
+    state.stopSeq = Math.max(state.stopSeq, args.stop_seq_base);
+  }
+
+  // The backend's view of the run is authoritative: it undoes an optimistic
+  // "stopping" if the stop request failed.
+  const wasRunning = running;
+  running = args.running === true;
+  stopping = running && args.stopping === true;
 
   if (
     typeof args.text === "string" &&
@@ -384,10 +452,16 @@ window.addEventListener("message", (event) => {
     input.value = args.text;
   }
 
-  suggestions = Array.isArray(args.suggestions) ? args.suggestions : [];
+  suggestions =
+    !running && Array.isArray(args.suggestions) ? args.suggestions : [];
   active = suggestions.length > 0 ? 0 : -1;
+  syncMode();
   renderList();
-  syncSend();
+
+  // The run ended: hand the keyboard back so the next question can be typed.
+  if (wasRunning && !running) {
+    input.focus();
+  }
 });
 
 function announce() {

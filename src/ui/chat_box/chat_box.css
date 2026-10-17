@@ -76,6 +76,35 @@ body {
   display: block;
 }
 
+/* The send button doubles as the stop button while a run is active. */
+#send .icon-stop,
+#send.stop .icon-send {
+  display: none;
+}
+
+#send.stop .icon-stop {
+  display: block;
+}
+
+#send.stop {
+  color: var(--ac-fg);
+}
+
+/* Locked while an investigation runs: visibly inert, but the stop button stays
+   fully usable. */
+#box.locked {
+  cursor: not-allowed;
+}
+
+#box.locked #q {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+#q::placeholder {
+  color: var(--ac-muted);
+}
+
 #list {
   display: none;
   list-style: none;

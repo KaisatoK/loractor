@@ -192,9 +192,28 @@ def test_cancel_run_posts(monkeypatch):
 
     def fake_post(url, headers=None, timeout=None):
         captured["url"] = url
+        captured["headers"] = headers
         return FakeResponse({"cancelled": True})
 
     monkeypatch.setattr(chat_client.requests, "post", fake_post)
-    chat_client.cancel_run(token="t", chat_id="c1", run_id="r1")
+    assert chat_client.cancel_run(token="t", chat_id="c1", run_id="r1") is True
     assert captured["url"].endswith("/chats/c1/run/r1/cancel")
+    assert captured["headers"]["Authorization"] == "Bearer t"
+
+
+def test_cancel_run_reports_a_refusal_and_raises_on_http_error(monkeypatch):
+    monkeypatch.setattr(
+        chat_client.requests,
+        "post",
+        lambda url, headers=None, timeout=None: FakeResponse({"cancelled": False}),
+    )
+    assert chat_client.cancel_run(token="t", chat_id="c1", run_id="r1") is False
+
+    monkeypatch.setattr(
+        chat_client.requests,
+        "post",
+        lambda url, headers=None, timeout=None: FakeResponse({}, status=404),
+    )
+    with pytest.raises(requests.HTTPError):
+        chat_client.cancel_run(token="t", chat_id="c1", run_id="r1")
 

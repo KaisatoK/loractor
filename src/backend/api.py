@@ -5,7 +5,7 @@ import threading
 
 from collections.abc import AsyncIterable, Iterator
 from contextlib import asynccontextmanager
-from typing import Literal, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -20,6 +20,7 @@ from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import generate_answer
 from backend.pipeline.answers import serialize_answer, strip_appendix
 from backend.pipeline.cost import investigation_cost
+from backend.pipeline.transcript import label_stopped
 from backend.pipeline.graph import chatbot, prompts
 from backend.pipeline.roles import ROLE_OBJECTIVES
 from backend.pipeline.state import PipelineState, RoleName
@@ -99,6 +100,8 @@ async def lifespan(app: FastAPI):
 class ChatMessage(TypedDict):
     role: str
     content: str
+    # A user turn whose investigation the user stopped before it was answered.
+    stopped: NotRequired[bool]
 
 
 class ChatRequest(TypedDict):
@@ -134,7 +137,7 @@ app.add_middleware(RequestContextMiddleware)
 
 def _render_conversation(history: list[ChatMessage]) -> str:
     """Flatten the chat history into the role-prefixed transcript the agents read."""
-    return "\n".join(f"{item['role']}: {_context_text(item)}" for item in history)
+    return "\n".join(f"{item['role']}: {_transcript_text(item)}" for item in history)
 
 
 def _context_text(item: ChatMessage) -> str:
@@ -142,6 +145,12 @@ def _context_text(item: ChatMessage) -> str:
     code-built data-scope/SQL appendix, which only bloats classifier state."""
     content = item["content"]
     return strip_appendix(content) if item["role"] == "assistant" else content
+
+
+def _transcript_text(item: ChatMessage) -> str:
+    """Context text as the agents read it in the transcript: a stopped user turn
+    is labelled, so it is not mistaken for a question that was answered."""
+    return label_stopped(_context_text(item), bool(item.get("stopped")))
 
 
 def _latest(history: list[ChatMessage], role: str) -> str:
@@ -177,7 +186,7 @@ def stream_events(
         {
             "conversation": _render_conversation(history),
             "messages": [
-                {"role": item["role"], "content": _context_text(item)}
+                {"role": item["role"], "content": _transcript_text(item)}
                 for item in history
             ],
             "latest_message": _latest(history, "user"),
@@ -321,7 +330,9 @@ def start_investigation(
 
         acquire_slot(user_id)
         try:
-            chats.append_message(user_id, chat_id, "user", req["question"])
+            user_message = chats.append_message(
+                user_id, chat_id, "user", req["question"]
+            )
         except KeyError as e:
             release_slot(user_id)
             raise HTTPException(status_code=404, detail="Chat not found.") from e
@@ -349,14 +360,20 @@ def start_investigation(
             chat_id=chat_id,
             produce=produce,
             on_finish=lambda finished: _finish_investigation(
-                user_id, chat_id, finished
+                user_id, chat_id, finished, user_message["seq"]
             ),
         )
         return {"run_id": run.run_id, "status": run.status}
 
 
-def _finish_investigation(user_id: str, chat_id: str, run: jobs.RunState) -> None:
-    """Persist a completed answer and release capacity (runs in the worker)."""
+def _finish_investigation(
+    user_id: str, chat_id: str, run: jobs.RunState, user_seq: int
+) -> None:
+    """Persist the outcome and release capacity (runs in the worker).
+
+    A completed run saves the answer; a run the user stopped flags the question
+    that started it, so later turns know it was never answered.
+    """
     metrics.inc("chat_streams_completed")
     try:
         if run.status == jobs.DONE:
@@ -368,6 +385,8 @@ def _finish_investigation(user_id: str, chat_id: str, run: jobs.RunState) -> Non
                 tool_results=run.tool_results,
                 progress=run.progress,
             )
+        elif run.status == jobs.CANCELLED:
+            chats.mark_message_stopped(user_id, chat_id, user_seq)
     except KeyError:
         # Chat deleted mid-run: nothing to persist, and that is fine.
         pass
@@ -464,7 +483,11 @@ def request_role_answer(
 
         # The conversation up to (not including) the answer being switched.
         history = [
-            {"role": m["role"], "content": m["content"]}
+            {
+                "role": m["role"],
+                "content": m["content"],
+                **({"stopped": True} if m.get("stopped") else {}),
+            }
             for m in messages
             if m["seq"] < message_seq and not m.get("reframed_for")
         ]
