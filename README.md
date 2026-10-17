@@ -74,9 +74,9 @@ starting point for the team lead and manager but not for the engineer.
 Every answer shows its work. Code (not the model) appends:
 
 - **Findings** labelled *Measured* (cited to query results), *Hypotheses* and
-  *Limitations*; a "measured" claim without a valid cited result is downgraded to
-  a hypothesis, and claims backed only by example search hits are flagged as not
-  a frequency.
+  *Limitations*; a "measured" claim without a valid cited result, or with a number
+  that the cited results do not show, is downgraded to a hypothesis, and claims
+  backed only by example search hits are flagged as not a frequency.
 - **Recommended next steps** with their reason and owning team.
 - **Data scope and queries**: datasets, time window, filters, which results are
   measured counts and which are examples, whether each result was truncated, and
@@ -661,6 +661,7 @@ confidence tests below are skipped unless enabled.
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
 | `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
+| `test_timeline.py` / `test_claims.py` | the engineer's code-built before/after timeline; the number check that downgrades a measured finding whose figures the cited results do not show |
 | `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
@@ -676,7 +677,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 818 passed, 71 skipped`. Three failures
+> The offline suite reports `5 failed, 906 passed, 75 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
@@ -886,6 +887,8 @@ src/
 │       ├── roles.py      role objectives and role -> playbook skill map
 │       ├── playbooks.py  playbook text and ownership mapping injected into prompts
 │       ├── priority.py   deterministic priority score from measured counts
+│       ├── timeline.py   engineer's before/after timeline, ordered and timed in code
+│       ├── claims.py     checks a measured claim's numbers against the cited results
 │       ├── data_scope.py data scope derived from tool results
 │       ├── effort.py     per-effort budgets
 │       ├── middleware.py model/tool error handling and retry/backoff

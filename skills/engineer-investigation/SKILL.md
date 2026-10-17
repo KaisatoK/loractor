@@ -22,9 +22,10 @@ What failed, in which component, and what happened just before and after?
    relevant hit. Until then, approximate from the hit's `record_id` (search
    returns it; lines follow the original file order): call
    `get_log_by_line_id_tool` with `line_id` = `record_id - 1` and `record_id + 1`
-   (more neighbours if the budget allows), and use
-   `get_trend_tool` for the hit's template (or service) over the window. Say that the timeline
-   is approximate (adjacent lines, not a time-bounded slice).
+   (more neighbours if the budget allows; consecutive ids let the timeline be
+   ordered and timed in code), and use `get_trend_tool` for the hit's template
+   (or service) over the window. Say that the timeline is approximate (adjacent
+   lines, not a time-bounded slice).
 3. **Isolated or recurring?** One `count_by_category_tool` (type `template` or
    `service`) over the whole dataset window (`window_start`..`window_end` from
    `list_datasets_tool`, when you do not have it yet), so the answer can say whether this
@@ -35,7 +36,11 @@ What failed, in which component, and what happened just before and after?
 
 ## Answer must contain
 - The failing component, event and exact error message(s) with line ids.
-- An ordered before/after timeline from the retrieved rows.
+- An ordered before/after timeline from the retrieved rows. When a result named
+  `timeline` is present, show that table (it is ordered and timed in code, with
+  each line's offset and seconds from the failing line) and do not re-sort or
+  re-time the rows yourself; when none is present, say the timeline could not be
+  built from the rows retrieved.
 - The table of the matching lines and their neighbouring events.
 - A possible cause, labelled as a hypothesis unless the rows confirm it. State
   the hypothesis once, where hypotheses are listed; do not repeat it in the

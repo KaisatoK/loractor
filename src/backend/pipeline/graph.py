@@ -30,6 +30,7 @@ from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.evidence import build_evidence
 from backend.pipeline.playbooks import team_for
 from backend.pipeline.priority import with_priority
+from backend.pipeline.timeline import with_timeline
 from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
@@ -71,6 +72,9 @@ NO_REVISION = "No revision is required."
 
 # Roles whose answers get the code-computed priority ranking.
 PRIORITY_ROLES = frozenset({"team_lead", "manager"})
+# The engineer asks what happened just before and after a failing line; the
+# ordered timeline (pipeline/timeline.py) is bookkeeping done in code.
+TIMELINE_ROLES = frozenset({"engineer"})
 
 
 def _emit_stage(name: str) -> None:
@@ -268,6 +272,10 @@ def answer_node(state: PipelineState) -> PipelineState:
     # added as a derived result the answer can cite. Idempotent on revisions.
     if state["role"]["name"] in PRIORITY_ROLES:
         records = with_priority(records, team_for)
+    # Engineers get the before/after timeline, ordered and timed in code and
+    # added as a derived result the answer can cite. Idempotent on revisions.
+    if state["role"]["name"] in TIMELINE_ROLES:
+        records = with_timeline(records)
     state = {**state, "tool_results": records}
     prompt = prompts.answer(state)
     logger.info("answer prompt: %d chars", len(prompt))

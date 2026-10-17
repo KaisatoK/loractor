@@ -21,13 +21,17 @@ Everything below the narrative is built in code, never by a model:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from typing import Any
 
+from backend.pipeline.claims import unsupported_numbers
 from backend.pipeline.contracts import AnswerTable, AnswerText
 from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.tools.envelope import MEASURED_KINDS
+
+logger = logging.getLogger(__name__)
 
 # Canonical, well-formed marker written for each table block.
 MARKER_TEMPLATE = "[[RESULT:{result_id}]]"
@@ -129,6 +133,18 @@ def _citation(result_id: str, by_id: dict[str, dict]) -> str:
     return f"{result_id} ({label})" if label else result_id
 
 
+def _measures_frequency(record: dict) -> bool:
+    """Whether a cited result can back a frequency claim.
+
+    Counts and trends do; so do derived results computed from them (the priority
+    ranking). A derived result that says otherwise (the timeline: rows around one
+    line) does not.
+    """
+    if record.get("measures_frequency") is False:
+        return False
+    return record.get("kind") in MEASURED_KINDS | {"derived"}
+
+
 def _findings_section(findings: list, valid_ids: set[str], by_id: dict) -> str:
     groups: dict[str, list[str]] = {"measured": [], "hypothesis": [], "limitation": []}
     for finding in findings:
@@ -142,12 +158,21 @@ def _findings_section(findings: list, valid_ids: set[str], by_id: dict) -> str:
             # A "fact" with no valid evidence is not a measured fact.
             kind = "hypothesis"
             statement += " (not backed by a cited result)"
+        elif kind == "measured" and by_id:
+            # Every figure in a measured claim must be in the results it cites.
+            # A sum, share or rounding the model made up is not measured.
+            missing = unsupported_numbers(statement, [by_id[r] for r in cited if r in by_id])
+            if missing:
+                logger.info("measured finding %s downgraded: %s", fid, missing)
+                kind = "hypothesis"
+                statement += (
+                    " (not shown by the cited result: " + ", ".join(missing) + ")"
+                )
         line = f"- **{fid}** {statement}" if fid else f"- {statement}"
         if cited:
             line += " — " + ", ".join(_citation(rid, by_id) for rid in cited)
             if kind == "measured" and not any(
-                (by_id.get(rid) or {}).get("kind") in MEASURED_KINDS | {"derived"}
-                for rid in cited
+                _measures_frequency(by_id.get(rid) or {}) for rid in cited
             ) and by_id:
                 line += " (row-level evidence, not a frequency)"
         groups.get(kind, groups["hypothesis"]).append(line)
