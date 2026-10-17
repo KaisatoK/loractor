@@ -50,15 +50,63 @@ def test_unknown_severities_have_no_arrival_rate():
 
 
 # --- Plan derivation --------------------------------------------------------
-def test_the_window_is_derived_from_the_budget_not_configured():
+def test_the_window_is_derived_from_whichever_constraint_binds():
+    """Never larger than the disk ceiling, and clamped by the text read.
+
+    Originally this asserted the plan always filled the disk allowance. It does
+    not, and should not: reading message text costs ~660 s per row group, so the
+    wall-clock limit binds long before disk does.
+    """
     plan = slices.plan_slice(PROBLEM_SEVERITIES)
-    ceiling = max_buildable_rows(
+    disk_ceiling = max_buildable_rows(
         BUDGET.otel_slice_allowance_bytes,
         MAX_SLICE_BUILD_SECONDS,
         materialized=True,
     )
-    assert plan.estimated_rows == pytest.approx(ceiling, rel=0.01)
+    assert 0 < plan.estimated_rows <= disk_ceiling
     assert plan.window_seconds > 0
+
+
+def test_the_text_read_is_what_bounds_a_default_plan():
+    """The binding constraint, asserted explicitly."""
+    plan = slices.plan_slice(PROBLEM_SEVERITIES)
+    assert (
+        slices.estimate_text_read_seconds(plan.window_seconds)
+        <= slices.MAX_SLICE_WALL_SECONDS + slices.BODY_SECONDS_PER_ROW_GROUP
+    )
+
+
+def test_rare_severities_do_not_buy_more_coverage():
+    """The trap, encoded so it cannot be reintroduced.
+
+    Restricting to rare severities *looks* like a bargain -- ``fatal``+``warn``
+    arrive ~125x slower than problem severities, so the disk allowance would
+    stretch to ~48 minutes of coverage instead of ~23 seconds. But text is read
+    per row group regardless of how few rows survive the filter, so those 48
+    minutes would touch ~2,600 row groups and cost days.
+
+    Both plans are therefore clamped to the same affordable window; the rare
+    plan simply yields fewer rows for the same build cost.
+    """
+    broad = slices.plan_slice(PROBLEM_SEVERITIES)
+    narrow = slices.plan_slice(("fatal", "warn"))
+
+    assert narrow.window_seconds == pytest.approx(broad.window_seconds)
+    assert narrow.estimated_rows < broad.estimated_rows
+
+
+def test_the_full_disk_affordable_rare_window_would_be_unaffordable():
+    """Quantifies the trap: ~63 hours of text reads."""
+    disk_affordable_seconds = (
+        max_buildable_rows(
+            BUDGET.otel_slice_allowance_bytes,
+            MAX_SLICE_BUILD_SECONDS,
+            materialized=True,
+        )
+        / slices.arrival_rate(("fatal", "warn"))
+    )
+    cost = slices.estimate_text_read_seconds(disk_affordable_seconds)
+    assert cost > 10 * slices.MAX_SLICE_WALL_SECONDS
 
 
 def test_a_severity_filter_alone_cannot_cover_much_time():
@@ -69,13 +117,6 @@ def test_a_severity_filter_alone_cannot_cover_much_time():
     """
     plan = slices.plan_slice(PROBLEM_SEVERITIES)
     assert plan.window_seconds < 60
-
-
-def test_restricting_to_rare_severities_buys_far_more_coverage():
-    """The useful trade: fewer severities, vastly more time covered."""
-    broad = slices.plan_slice(PROBLEM_SEVERITIES)
-    narrow = slices.plan_slice(("fatal", "warn"))
-    assert narrow.window_seconds > 20 * broad.window_seconds
 
 
 def test_the_plan_estimates_disk_with_the_materialized_cost():
@@ -138,13 +179,25 @@ def test_each_batch_stays_near_the_target_row_count():
         assert rows_per_batch <= slices.TARGET_BATCH_ROWS * 2
 
 
-def test_a_wide_slice_still_produces_small_batches():
-    """However wide the slice, no single statement spans it."""
-    plan = slices.plan_slice(("fatal", "warn"))
-    batches = list(slices._batches(plan))
-    assert len(batches) > 1
-    widest = max((hi - lo).total_seconds() for lo, hi in batches)
-    assert widest <= slices.MAX_BATCH_SECONDS
+def test_no_batch_is_ever_wider_than_the_cap():
+    """The safety invariant, across every severity set and plan size.
+
+    This is what bounds peak memory per statement, and it must hold even for a
+    plan whose whole window is narrower than one batch.
+    """
+    for severities in (PROBLEM_SEVERITIES, ("fatal", "warn"), ("fatal",)):
+        for rows in (50_000, 150_000, None):
+            plan = slices.plan_slice(severities, max_rows=rows)
+            batches = list(slices._batches(plan))
+            assert batches, "a plan must produce at least one batch"
+            widest = max((hi - lo).total_seconds() for lo, hi in batches)
+            assert widest <= slices.MAX_BATCH_SECONDS
+
+
+def test_an_explicitly_large_request_is_split_into_many_batches():
+    """A wide window must never become one statement."""
+    plan = slices.plan_slice(PROBLEM_SEVERITIES, max_wall_seconds=100_000)
+    assert len(list(slices._batches(plan))) > 1
 
 
 # --- Budget enforcement -----------------------------------------------------

@@ -17,6 +17,7 @@ remote files, so a text query never reaches S3.
 from __future__ import annotations
 
 import logging
+import re
 
 from psycopg2 import sql
 
@@ -24,6 +25,7 @@ from backend.db import predicates as pred
 from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL
 from backend.db.connection import query_runner
 from backend.db.datasets import Capability, Dataset, resolve
+from backend.db.errors import refuse
 from backend.db.stats import QueryStats
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,48 @@ BRANCH_DEPTH = 100
 
 # Reciprocal-rank-fusion constant, also unchanged from the original.
 RRF_K = 60
+
+# Longest word list a single search will match on. A pasted stack trace would
+# otherwise become hundreds of fuzzy sub-queries against the index.
+MAX_SEARCH_TERMS = 12
+
+# A word is a run of letters/digits, optionally hyphenated internally. This
+# splits on JSON punctuation, which log bodies are full of.
+_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
+
+# Words carrying no selectivity in a log corpus. Deliberately short: this trims
+# obvious filler, it is not a linguistic stop-word list, and anything that might
+# appear in a message (``error``, ``failed``, ``timeout``) is kept.
+_SEARCH_NOISE = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "had", "has", "have", "in", "is", "it", "its", "of", "on", "or", "that",
+    "the", "their", "then", "there", "these", "this", "to", "was", "were",
+    "what", "when", "where", "which", "why", "with",
+})
+
+
+def search_terms(query_text: str) -> tuple[str, ...]:
+    """Split a query into the words the index will be matched on.
+
+    The inverted index stores tokens, so a phrase handed to ``ts_levenshtein``
+    whole is treated as one token and matches nothing. Splitting is therefore
+    not an optimisation -- it is what makes multi-word search work at all.
+
+    Punctuation **separates** words rather than being stripped from them,
+    because log bodies are frequently JSON: ``"details":"failed`` has to become
+    ``details`` and ``failed``, not ``detailsfailed``.
+    """
+    words: list[str] = []
+    seen: set[str] = set()
+    for word in _WORD_RE.findall(query_text):
+        lowered = word.lower()
+        if len(word) < 2 or lowered in _SEARCH_NOISE or lowered in seen:
+            continue
+        seen.add(lowered)
+        words.append(word)
+    # No fallback to the raw text when everything is noise: a search for
+    # "is it the" should return nothing rather than silently match the corpus.
+    return tuple(words[:MAX_SEARCH_TERMS])
 
 
 def _display_fields(dataset: Dataset) -> list[tuple[str, sql.Composable]]:
@@ -74,13 +118,39 @@ def search_logs(
     index = ds.search_relation()
     relation = ds.scan_relation()
 
+    terms = search_terms(query_text)
+    if not terms:
+        raise refuse(
+            f"No searchable words in {query_text!r}.",
+            "Search for a word that appears in log messages, such as "
+            "'timeout' or 'connection refused'.",
+            code="empty_query",
+        )
+
+    # One fuzzy sub-query per word, combined with ts_any, rather than handing the
+    # whole phrase to ts_levenshtein.
+    #
+    # The index stores *tokens*, so a multi-word argument is looked up as a
+    # single token and matches nothing. Measured against the slice: 'order'
+    # matched 58,199 rows while 'failed to place order' matched 0 -- and because
+    # this is the only branch for a dataset without embeddings, every multi-word
+    # search returned empty. ts_any keeps recall (any word may match) and lets
+    # BM25 float the rows matching more words to the top, which is what makes a
+    # natural-language query behave sensibly without an embedding model.
+    matcher = sql.SQL("ts_any([{terms}])").format(
+        terms=sql.SQL(", ").join(
+            sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder())
+            for _ in terms
+        )
+    )
+
     lexical = sql.SQL("""
         SELECT {record_id} AS rid,
                ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
         FROM (
             SELECT {record_id}, BM25({index}.tableoid) AS s
             FROM {index}
-            WHERE {message} @@ ts_levenshtein(%s, 1)
+            WHERE {message} @@ {matcher}
             ORDER BY s DESC
             LIMIT {depth}
         ) lex
@@ -88,9 +158,10 @@ def search_logs(
         record_id=record_id,
         index=index,
         message=message,
+        matcher=matcher,
         depth=sql.Literal(BRANCH_DEPTH),
     )
-    params: list = [query_text]
+    params: list = list(terms)
 
     if hybrid:
         # The embedding is computed inside SereneDB; the model name and
@@ -119,8 +190,9 @@ def search_logs(
             index=index,
             depth=sql.Literal(BRANCH_DEPTH),
         )
-        # ai_embed's placeholder comes first in the composed statement.
-        params = [query_text, query_text]
+        # ai_embed's placeholder comes first in the composed statement, then
+        # one placeholder per lexical term.
+        params = [query_text, *terms]
     else:
         fused = sql.SQL("WITH fused AS ({lexical})").format(lexical=lexical)
 

@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 
+from backend.db.config import SERENEDB_BUILD_THREADS as BUILD_THREADS
 from backend.db.budget import (
     BUDGET,
     PROBLEM_SEVERITIES,
@@ -59,22 +60,32 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def probe_cursor() -> Iterator[RealDictCursor]:
-    """A standalone **autocommit** cursor for size measurements.
+    """A standalone **autocommit** cursor for size measurements and builds.
 
     Size probes cannot run inside one transaction: ``pg_database_size`` does not
     reflect uncommitted writes, so a build and its measurement in the same
-    transaction both read zero. This also keeps ``SET memory_limit`` on a
-    connection nobody else is using, instead of leaving it on a pooled one.
+    transaction both read zero.
+
+    This deliberately does **not** set ``memory_limit``. An earlier version did,
+    and it was a trap: ``SET memory_limit`` is global and persistent in SereneDB,
+    so a helper documented as "a cursor for measurements" quietly reconfigured
+    the entire server -- including for any other client -- every time a probe
+    ran. The ceiling is now an explicit operator action,
+    :func:`backend.db.connection.set_global_memory_limit`.
+
+    ``threads`` is different, and measurably so: it reads back as the default on
+    a fresh connection, so it is **session-scoped** and safe to lower here. That
+    matters on this host, where each worker thread carries its own operator
+    buffers -- 16 threads multiply the peak footprint of exactly the build
+    operations that have proven fragile. Fewer threads means a slower build with
+    a much lower ceiling, which is the right trade when the alternative is an
+    OOM kill.
     """
     conn = get_conn()
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cur.execute(
-            sql.SQL("SET memory_limit = {limit}").format(
-                limit=sql.Literal(f"{BUDGET.memory_limit_bytes // (1024 * 1024)}MB")
-            )
-        )
+        cur.execute(sql.SQL("SET threads = {n}").format(n=sql.Literal(BUILD_THREADS)))
         yield cur
     finally:
         cur.close()

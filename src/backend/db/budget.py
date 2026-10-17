@@ -81,6 +81,74 @@ Findings that shaped the design
     * assign ids with ``row_number() OVER ()`` and **no ORDER BY** -- ids only
       need to be unique, and ordering reintroduces the global sort.
 
+14. **The host has far less memory than the budget assumed, and it is
+    shared.** Measured: 7,322 MB total, **~1,092 MB available**, swap
+    essentially exhausted (2,044 of 2,048 MB used). The remainder is editor and
+    agent tooling belonging to *two* different users, so SereneDB is one tenant
+    among several rather than the machine's main occupant.
+
+    This reframes all three crashes. ``memory_limit`` was 5.7 GiB on a host with
+    ~1 GiB free, so SereneDB was authorised to request five times the memory the
+    kernel could supply; what killed it was the OOM killer, not its own
+    accounting. A memory ceiling above available RAM does not bound anything --
+    it converts a recoverable "query exceeded memory" error into a dead server,
+    and takes every other client down with it.
+
+    Hence :attr:`Budget.memory_limit_bytes` is **512 MiB**, well under what is
+    free, so operators spill to disk instead of being killed. Combined with
+    batched extraction (finding 13) no single statement needs more. The user's
+    stated 6 GB RAM allowance is simply not grantable on this host; 512 MiB is
+    the honest figure.
+
+15. **``threads`` is session-scoped, ``memory_limit`` is not.** Measured on the
+    same server: after ``SET memory_limit`` and ``SET threads`` on one
+    connection, a *fresh* connection reports the new ``memory_limit`` (488.2
+    MiB) but the default ``threads`` (16). So the two settings that both look
+    like ordinary GUCs behave oppositely -- one leaks globally and permanently,
+    the other does not leak at all. Builds therefore lower ``threads`` per
+    session (free, no effect on other clients) and treat ``memory_limit`` as a
+    deliberate one-off operator action.
+
+16. **Reading message text is the dominant cost of building anything, and it
+    is paid per row group.** Measured on a one-second window (one row group):
+
+    * a two-column aggregate over it: **1.43 s**;
+    * the same window projecting ``Body``, ``LIMIT 5``: **33.3 s**;
+    * the same window reading ``Body`` for all 72,678 problem-severity rows:
+      **481.6 s** at 4 threads, **86.8 s** at 16.
+
+    Two consequences. First, throttling threads is counterproductive (finding
+    15's premise was wrong -- see :data:`SERENEDB_BUILD_THREADS`). Second, and
+    more important for planning: the unit of build cost is the **row group
+    touched**, not the row stored, because a row group's text column must be
+    fetched and decompressed in full before any predicate can select from it.
+
+    This inverts an earlier conclusion. Restricting the slice to rare severities
+    looked like a bargain -- ``fatal``+``warn`` arrive at ~626 rows/s, so the
+    disk allowance buys ~48 minutes of coverage against 23 seconds for all
+    problem severities. But 48 minutes spans ~2,600 row groups, each costing a
+    text read, so that slice would take **days** to build while the dense
+    23-second one takes minutes. For slice building, *dense severities over a
+    short contiguous window* is the affordable shape.
+
+17. **Materialize first, then index: measured from a completed slice build.**
+    150,557 problem-severity rows extracted from 2 row groups:
+
+    * extract: **1,322.9 s** (~660 s per row group, cold);
+    * index over the resulting *local* table: **0.71 s**;
+    * table 4.19 MB, inverted index 19.12 MB, total **154.9 B/row**.
+
+    Three corrections to earlier conclusions. The index is **4.5x larger than
+    the table** it covers, because it inverts message text. Total cost per row
+    is **154.9 B, not the 293 B** assumed from the CTAS probe, so the budget is
+    conservative. And indexing a local table is effectively free (0.71 s against
+    9.77 s for a comparable *view* over remote Parquet), because the view forced
+    a second remote read at index time -- so the view path's 4x disk saving was
+    paid for in repeated network cost.
+
+    Also: warm measurements lie. The 86.8 s warm read of a row group's text
+    underestimated the real cold build by 7.6x. Plan on cold figures.
+
 11. **``statement_timeout`` through libpq ``options`` is silently ignored.** A
     connection opened with ``-c statement_timeout=30000`` reports ``0``, while
     ``SET LOCAL statement_timeout`` inside the transaction reports the value set.
@@ -224,7 +292,10 @@ class Budget:
     total_disk_bytes: int = 3 * GIB
     """Hard ceiling. Nothing may be built that would take the database past it."""
 
-    memory_limit_bytes: int = 3 * GIB
+    # 512 MiB, not the 3 GiB originally planned: the host has ~1 GiB free and is
+    # shared with another user's tooling (finding 14). A ceiling above available
+    # RAM turns a recoverable error into an OOM kill.
+    memory_limit_bytes: int = 512 * MIB
     """Session ``memory_limit``.
 
     Deliberately below whatever the server is configured with -- the session

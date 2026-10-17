@@ -39,7 +39,20 @@ SERENEDB_BULK_TIMEOUT_MS = int(os.getenv("SERENEDB_BULK_TIMEOUT_MS", "300000"))
 # host: at 5.7 GiB a 2.44M-row materialization OOM-killed the process, and the
 # server is now configured at 3.8 GiB. 3 GiB keeps a margin under that and makes
 # an over-large query fail as a query rather than as a crash.
-SERENEDB_SESSION_MEMORY_LIMIT = os.getenv("SERENEDB_SESSION_MEMORY_LIMIT", "3072MB")
+SERENEDB_SESSION_MEMORY_LIMIT = os.getenv("SERENEDB_SESSION_MEMORY_LIMIT", "512MB")
+
+# Worker threads during index builds and size probes.
+#
+# Measured, and the opposite of the intuition that led here: reading the message
+# text of one row group took 481.6s at 4 threads and 86.8s at 16 -- a 5.5x
+# penalty for throttling. Decompressing Parquet is CPU-bound and parallelises
+# well, so starving it of threads does not make a build safer, it just makes the
+# build five times longer while holding its working set the whole time.
+#
+# Safety comes from ``memory_limit`` instead: bounded at 488 MiB, 16 threads
+# complete without incident. Left at the server default; lower it only to yield
+# CPU to another tenant, never as a memory measure.
+SERENEDB_BUILD_THREADS = int(os.getenv("SERENEDB_BUILD_THREADS", "16"))
 
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "http://host.docker.internal:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text:v1.5")

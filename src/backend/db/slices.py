@@ -103,6 +103,40 @@ def batch_seconds_for(severities: tuple[str, ...]) -> int:
     return max(BATCH_SECONDS, min(MAX_BATCH_SECONDS, int(TARGET_BATCH_ROWS / rate)))
 
 
+# Seconds to fetch and decompress one row group's message-text column, cold.
+#
+# Measured from a real build: 1,322.9s of extract across 2 row groups, so ~660s
+# each. An earlier 86.8s reading of the *same* window was cache-warmed and badly
+# misleading -- planning on it underestimated a real build by 7.6x. This is the
+# cold figure, which is the only honest one for a corpus too large to cache.
+#
+# This single number dominates every build decision, because a row group's text
+# column must be read in full before any predicate can select from it -- so cost
+# scales with row groups *touched*, not rows *kept*.
+BODY_SECONDS_PER_ROW_GROUP = 660.0
+
+# Longest a slice build may be planned to take. A build is not resumable, holds
+# its working set throughout, and shares a machine with other tenants, so a
+# multi-hour plan is a refusal rather than a decision to make at runtime.
+MAX_SLICE_WALL_SECONDS = 1_800
+
+
+def row_groups_touched(window_seconds: float) -> int:
+    """Row groups a window overlaps, from the measured ~1.1s span of each."""
+    import math
+
+    return max(1, math.ceil(window_seconds / CORPUS_FACTS.seconds_per_row_group))
+
+
+def estimate_text_read_seconds(window_seconds: float) -> float:
+    """Wall-clock to read message text across a window.
+
+    This is the number that decides whether a slice is buildable at all; the
+    disk allowance is rarely the binding constraint.
+    """
+    return row_groups_touched(window_seconds) * BODY_SECONDS_PER_ROW_GROUP
+
+
 @dataclass(frozen=True)
 class SlicePlan:
     """What a slice build will do, before it does it."""
@@ -127,6 +161,10 @@ class SlicePlan:
             "estimated_rows": self.estimated_rows,
             "estimated_bytes": self.estimated_bytes,
             "estimated_build_seconds": round(self.estimated_seconds, 1),
+            "row_groups_touched": row_groups_touched(self.window_seconds),
+            "text_read_seconds": round(
+                estimate_text_read_seconds(self.window_seconds), 1
+            ),
         }
 
 
@@ -151,10 +189,18 @@ def plan_slice(
     start: str | None = None,
     max_rows: int | None = None,
     max_build_seconds: int = MAX_SLICE_BUILD_SECONDS,
+    max_wall_seconds: int = MAX_SLICE_WALL_SECONDS,
 ) -> SlicePlan:
     """Derive the widest window that fits the budget without truncation.
 
-    Refuses rather than truncating: a slice that quietly covers its first two
+    Three constraints, and the **text read usually binds first**:
+
+    * disk -- the slice's share of the database allowance;
+    * index build time -- throughput degrades with row count;
+    * message-text read time -- ~87 s per row group touched, which is what makes
+      a wide window unaffordable however little disk its rows would occupy.
+
+    Refuses rather than truncating: a slice that quietly covered its first two
     seconds while claiming a thirty-second window would make every later answer
     wrong about its own coverage.
     """
@@ -172,6 +218,15 @@ def plan_slice(
         )
 
     seconds = ceiling / rate
+
+    # Clamp to what the text read can actually finish. Without this the plan
+    # looks affordable on disk while needing hours of network and CPU: rare
+    # severities spread thinly across thousands of row groups are the trap.
+    affordable_seconds = (
+        max_wall_seconds / BODY_SECONDS_PER_ROW_GROUP
+    ) * CORPUS_FACTS.seconds_per_row_group
+    seconds = min(seconds, affordable_seconds)
+
     begin = datetime.fromisoformat(
         (start or f"{CORPUS_FACTS.corpus_day} 00:00:00+00").replace(" ", "T")
     )
@@ -184,7 +239,8 @@ def plan_slice(
         end=finish,
         estimated_rows=estimated_rows,
         estimated_bytes=estimated_rows * MATERIALIZED_BYTES_PER_ROW,
-        estimated_seconds=estimate_build_seconds(estimated_rows),
+        estimated_seconds=estimate_build_seconds(estimated_rows)
+        + estimate_text_read_seconds(seconds),
     )
 
 
