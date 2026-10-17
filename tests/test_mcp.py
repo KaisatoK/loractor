@@ -18,8 +18,8 @@ def test_mcp_server_lists_tools_and_skills():
             # Auto-complete is a chat-box feature served in-process, not an
             # evidence tool, so the MCP service does not offer it.
             assert "auto_complete" not in names
-            resource = await client.read_resource("skill://log-investigation")
-            assert resource[0].text.startswith("# Log Investigation")
+            resource = await client.read_resource("skill://log-investigation/SKILL.md")
+            assert "# Log Investigation" in resource[0].text
             result = await client.call_tool("read_skill", {"name": "log-investigation"})
             assert not result.is_error
             assert "hypothes" in result.content[0].text.lower()

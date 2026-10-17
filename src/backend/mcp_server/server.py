@@ -22,6 +22,7 @@ tools and tables". Importing this module registers everything on ``mcp``.
 from __future__ import annotations
 
 from backend.mcp_server import http as _http  # noqa: F401  (registers /health)
+from backend.mcp_server import prompts as _prompts  # noqa: F401  (registers)
 from backend.mcp_server import resources as _resources  # noqa: F401  (registers)
 from backend.mcp_server import tools as _tools  # noqa: F401  (registers)
 from backend.mcp_server.app import mcp

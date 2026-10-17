@@ -40,6 +40,16 @@ _MARKER_RE = re.compile(
 )
 
 APPENDIX_HEADING = "#### Data scope and queries"
+
+# The headings of the code-built sections. Read by the renderer below and by the
+# MCP server's role prompts (``answer_layout``), so an external agent is asked
+# for exactly the layout the chatbot produces.
+FINDING_TITLES = {
+    "measured": "**Measured** (shown by the cited query results)",
+    "hypothesis": "**Hypotheses** (not confirmed by the logs)",
+    "limitation": "**Limitations** (what the data does not establish)",
+}
+RECOMMENDATIONS_TITLE = "**Recommended next steps**"
 MAX_QUERY_CHARS = 1500
 
 _KIND_LABEL = {
@@ -152,13 +162,10 @@ def _findings_section(findings: list, valid_ids: set[str], by_id: dict) -> str:
                 line += " (row-level evidence, not a frequency)"
         groups.get(kind, groups["hypothesis"]).append(line)
 
-    titles = {
-        "measured": "**Measured** (shown by the cited query results)",
-        "hypothesis": "**Hypotheses** (not confirmed by the logs)",
-        "limitation": "**Limitations** (what the data does not establish)",
-    }
     sections = [
-        f"{titles[kind]}\n" + "\n".join(lines) for kind, lines in groups.items() if lines
+        f"{FINDING_TITLES[kind]}\n" + "\n".join(lines)
+        for kind, lines in groups.items()
+        if lines
     ]
     return "\n\n".join(sections)
 
@@ -181,7 +188,29 @@ def _recommendations_section(recommendations: list) -> str:
         if extras:
             line += f" ({'; '.join(extras)})"
         lines.append(line)
-    return "**Recommended next steps**\n" + "\n".join(lines) if lines else ""
+    return f"{RECOMMENDATIONS_TITLE}\n" + "\n".join(lines) if lines else ""
+
+
+def answer_layout() -> str:
+    """The sections of an answer, for an agent that has no code to build them.
+
+    The chatbot's answer node builds these sections in code from the cited query
+    results. An external agent writing its own answer is asked for the same
+    layout, and for the same rule that keeps it honest: a statement is only
+    "measured" when a query that actually ran backs it.
+    """
+    return (
+        "Write the answer, then finish with these sections:\n"
+        f"{FINDING_TITLES['measured']}: a statement belongs here only if a query "
+        "you ran shows it; cite that query. Anything else is a hypothesis.\n"
+        f"{FINDING_TITLES['hypothesis']}: explanations the logs do not confirm.\n"
+        f"{FINDING_TITLES['limitation']}: what remains unknown.\n"
+        f"{RECOMMENDATIONS_TITLE}: each action with its reason and, where the "
+        "ownership mapping names one, the owning team.\n"
+        f"{APPENDIX_HEADING}: the datasets, time windows and filters used; which "
+        "results are measured counts and which are examples; whether each result "
+        "was truncated; and the executed query for every result."
+    )
 
 
 # --- data-scope appendix ---------------------------------------------------

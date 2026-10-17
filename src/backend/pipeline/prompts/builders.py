@@ -339,6 +339,48 @@ def normalized_is_usable(previous: object) -> bool:
     )
 
 
+def role_context(role: Role) -> str:
+    """Who the investigation is for and what that role needs from it."""
+    return f"User role: {role['name']}\nRole objective: {role['objective']}\n\n"
+
+
+def evidence_brief(role: Role, effort: str | None) -> str:
+    """What an agent needs to investigate as ``role`` at ``effort``, as prompt blocks.
+
+    The role and its objective, the role's evidence plan (the skill), the team
+    ownership mapping, the effort budget and the cost discipline. It depends on
+    nothing but the role and the effort, so it is the one place both consumers
+    get it from: the chatbot's ``find_evidence`` prompt, and the MCP server's
+    role prompts for an external agent. Everything else in ``find_evidence``
+    (the request, the datasets, the previous report) is the pipeline's own state.
+    """
+    spec = get_effort_spec(effort)
+    return (
+        "<role context>\n"
+        f"{role_context(role)}\n"
+        "</role context>\n"
+        "<role playbook>\n"
+        "Follow this evidence plan for the user's role. It decides WHICH "
+        "evidence to collect; the effort budget decides how much.\n\n"
+        f"{role_playbook(role['name'])}\n"
+        "</role playbook>\n"
+        "<team ownership>\n"
+        f"{ownership_context()}\n"
+        "</team ownership>\n"
+        "<effort guidance>\n"
+        f"Effort level: {effort}.\n"
+        f"Tool-call budget: at most {spec.max_tool_calls} tool calls in this investigation (hard limit; to-do updates count).\n"
+        f"Hypothesis budget: define at most {spec.max_hypotheses} hypotheses (never more than 3).\n"
+        f"Scan budget: at most ~{spec.max_rows_scanned:,} rows read across "
+        "the whole investigation. Each tool result reports what it actually "
+        "read in query_stats.\n"
+        "</effort guidance>\n"
+        "<cost discipline>\n"
+        f"{COST_DISCIPLINE}\n"
+        "</cost discipline>\n"
+    )
+
+
 class PipelinePrompts:
     """Build the prompts used by each stage of the pipeline."""
 
@@ -366,7 +408,7 @@ class PipelinePrompts:
     )
 
     def role_context(self, role: Role) -> str:
-        return f"User role: {role['name']}\n" f"Role objective: {role['objective']}\n\n"
+        return role_context(role)
 
     def queryable_context(self) -> dict:
         """What can be queried, as named fields.
@@ -673,33 +715,10 @@ class PipelinePrompts:
         revision_feedback = state.get(
             "revision_feedback", "No previous attempt exists."
         )
-        spec = get_effort_spec(state.get("effort"))
-        role_name = state["role"]["name"]
 
         return (
-            "<role context>\n"
-            f"{self.role_context(state['role'])}\n"
-            "</role context>\n"
-            "<role playbook>\n"
-            "Follow this evidence plan for the user's role. It decides WHICH "
-            "evidence to collect; the effort budget decides how much.\n\n"
-            f"{role_playbook(role_name)}\n"
-            "</role playbook>\n"
-            "<team ownership>\n"
-            f"{ownership_context()}\n"
-            "</team ownership>\n"
-            "<effort guidance>\n"
-            f"Effort level: {state.get('effort', 'Medium')}.\n"
-            f"Tool-call budget: at most {spec.max_tool_calls} tool calls in this investigation (hard limit; to-do updates count).\n"
-            f"Hypothesis budget: define at most {spec.max_hypotheses} hypotheses (never more than 3).\n"
-            f"Scan budget: at most ~{spec.max_rows_scanned:,} rows read across "
-            "the whole investigation. Each tool result reports what it actually "
-            "read in query_stats.\n"
-            "</effort guidance>\n"
-            "<cost discipline>\n"
-            f"{COST_DISCIPLINE}\n"
-            "</cost discipline>\n"
-            "<datasets>\n"
+            evidence_brief(state["role"], state.get("effort", "Medium"))
+            + "<datasets>\n"
             f"{dataset_catalog()}\n"
             "</datasets>\n"
             "<request>\n"
