@@ -57,6 +57,9 @@ class PipelineState(TypedDict):
     # ran out without a scope (decision.scope_assumption); None otherwise. The
     # answer states it in a code-rendered line.
     assumed_scope: list[str] | None
+    # The claim check of the latest answer: one record per measured finding that
+    # was judged against its cited results (decision.decide_claims).
+    claim_checks: list[dict[str, Any]]
     # Iterations spent in the confidence revision loop within the current turn.
     revision_count: int
     # Set only by a role-switch run (its own graph thread): skips the scope

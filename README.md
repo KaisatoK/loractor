@@ -74,9 +74,9 @@ starting point for the team lead and manager but not for the engineer.
 Every answer shows its work. Code (not the model) appends:
 
 - **Findings** labelled *Measured* (cited to query results), *Hypotheses* and
-  *Limitations*; a "measured" claim without a valid cited result is downgraded to
-  a hypothesis, and claims backed only by example search hits are flagged as not
-  a frequency.
+  *Limitations*; a "measured" claim without a valid cited result, or with a number
+  that the cited results do not show, is downgraded to a hypothesis, and claims
+  backed only by example search hits are flagged as not a frequency.
 - **Recommended next steps** with their reason and owning team.
 - **Data scope and queries**: datasets, time window, filters, which results are
   measured counts and which are examples, whether each result was truncated, and
@@ -685,6 +685,8 @@ confidence tests below are skipped unless enabled.
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
 | `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
+| `test_timeline.py` / `test_claims.py` | the engineer's code-built before/after timeline; the number check that downgrades a measured finding whose figures the cited results do not show |
+| `test_claim_check.py` / `test_live_claims.py` | the semantic claim check (which claims are sent, the request, the confidence gate, relabel and revision policy, with a fake classifier); gated live cases |
 | `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
@@ -706,7 +708,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 1025 passed, 92 skipped`. Three failures
+> The offline suite reports `5 failed, 1118 passed, 99 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
@@ -760,6 +762,17 @@ gated by `RUN_LIVE_CONFIDENCE=1`, must run alone, and writes
 report includes each atomic Noul signal and the selected policy route. Thresholds
 are starting values validated against these cases; the cases are stochastic and
 must not be re-baselined to match a flipped result.
+
+### Live claim checks
+
+`bash ./claims.sh` sends measured claims and the rows they cite to the real claim
+check and asserts the code-owned policy: a supported claim is kept, a claim whose
+cited rows say nothing about it is relabelled as a hypothesis, and a contradicted
+claim sends the answer back for a rewrite. It is gated by `RUN_LIVE_CLAIMS=1`,
+must run alone, and writes `.data/claims_report.html` (override
+`RUN_LIVE_CLAIMS_REPORT`). The gate (`CLAIM_CONFIDENCE_THRESHOLD`, 0.8) is a
+starting value; a judgment below it leaves the finding as written. Cases are
+stochastic and must not be re-baselined to match a flipped result.
 
 To see tool calls and their parameters (and, at `DEBUG`, the SQL and query
 params) in the backend terminal:
@@ -888,6 +901,7 @@ frontend.sh   streamlit run src/ui/streamlit_app.py
 routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
 worked_investigation.sh  one topic as all three roles -> docs/worked_investigation.md
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
+claims.sh     gated live claim-check tests (RUN_LIVE_CLAIMS=1) + HTML report
 setup.sh      load the local corpora via loghub: openstack, then bgl (--no-embed; no arguments)
 src/
 ├── stream_events/       one event reducer shared by backend/jobs.py (saved progress) and the UI (live)
@@ -916,6 +930,8 @@ src/
 │       ├── roles.py      role objectives and role -> playbook skill map
 │       ├── playbooks.py  playbook text and ownership mapping injected into prompts
 │       ├── priority.py   deterministic priority score from measured counts
+│       ├── timeline.py   engineer's before/after timeline, ordered and timed in code
+│       ├── claims.py     checks a measured claim's numbers against the cited results
 │       ├── data_scope.py data scope derived from tool results
 │       ├── effort.py     per-effort budgets
 │       ├── middleware.py model/tool error handling and retry/backoff

@@ -50,7 +50,11 @@ What failed, in which component, and what happened just before and after?
 
 ## Answer must contain
 - The failing component, event and exact error message(s) with line ids.
-- An ordered before/after timeline from the retrieved rows.
+- An ordered before/after timeline from the retrieved rows. When a result named
+  `timeline` is present, show that table (it is ordered and timed in code, with
+  each line's offset and seconds from the failing line) and do not re-sort or
+  re-time the rows yourself; when none is present, say the timeline could not be
+  built from the rows retrieved.
 - The table of the matching lines and their neighbouring events.
 - A possible cause, labelled as a hypothesis unless the rows confirm it. State
   the hypothesis once, where hypotheses are listed; do not repeat it in the
