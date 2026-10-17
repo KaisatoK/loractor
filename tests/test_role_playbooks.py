@@ -47,6 +47,8 @@ def test_find_evidence_prompt_injects_only_the_users_playbook():
     assert "Engineer investigation playbook" in engineer
     assert "Recurring-patterns playbook" not in engineer
     assert "Recurring-patterns playbook" in lead
+    assert "count_by_team_tool" in lead
+    assert "NOT AVAILABLE YET" not in lead
     # Both get the ownership mapping so teams can be named.
     assert "Compute Platform" in engineer and "Compute Platform" in lead
 

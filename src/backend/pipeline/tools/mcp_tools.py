@@ -9,7 +9,11 @@ from langchain.tools import ToolRuntime, tool
 
 from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.context_tools import nearby_operation
-from backend.pipeline.tools.count_tools import count_by_dataset_operation
+from backend.pipeline.tools.count_tools import (
+    count_by_dataset_operation,
+    count_by_team_filters,
+    count_by_team_operation,
+)
 from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
@@ -17,7 +21,9 @@ from backend.pipeline.tools.tools import search_operation
 from backend.pipeline.tools.trend_tools import trend_operation
 from backend.pipeline.tools.schemas import (
     NEARBY_EVENTS_DESCRIPTION,
+    COUNT_BY_TEAM_DESCRIPTION,
     CountByDataset,
+    CountByTeam,
     ComparePeriods, CountByCategory, GetLogByLineId, GetNearbyEvents, GetTools,
     GetTrend,
     InvestigateChunk,
@@ -72,6 +78,24 @@ def count_by_category_tool(runtime: ToolRuntime, start_time: str, end_time: str,
                  f"count {type} on {dataset} by severity",
                  {"start_time": start_time, "end_time": end_time, "type": type,
                   "dataset": dataset, "category": category, "limit": limit})
+
+
+@tool(args_schema=CountByTeam, description=COUNT_BY_TEAM_DESCRIPTION)
+def count_by_team_tool(
+    runtime: ToolRuntime,
+    datasets: list[str] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    category: str | None = None,
+) -> dict:
+    """Count local log entries per owning team and severity through MCP."""
+    arguments = count_by_team_filters(datasets, start_time, end_time, category)
+    return _call(
+        runtime,
+        "count_by_team_tool",
+        count_by_team_operation(datasets, start_time, end_time, category),
+        arguments,
+    )
 
 
 @tool(args_schema=GetTools, description="List a field's most common values.")
@@ -189,10 +213,9 @@ def investigate_chunk_tool(runtime: ToolRuntime, chunk_id: str,
 
 
 MCP_DB_TOOLS = [
-    list_datasets_tool, count_by_dataset_tool,
+    list_datasets_tool, count_by_dataset_tool, count_by_team_tool,
     count_by_category_tool, get_data_tool, get_log_by_line_id_tool,
     get_nearby_events_tool, get_trend_tool,
     search_logs_tool, top_in_category_by_service_tool, compare_periods_tool,
     sweep_chunks_tool, investigate_chunk_tool,
-    # Planned, not registered yet (schema CountByTeam): count_by_team_tool (T3).
 ]

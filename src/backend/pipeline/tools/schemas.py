@@ -370,20 +370,21 @@ class GetNearbyEvents(_DatasetScoped):
     ] = False
 
 
-# --- Planned tool (docs/tool_requests.md T3) ---------------------------------
-# Schema and shared description only. The tool itself is a stub in
-# ``pipeline/tools/planned_tools.py`` and is not registered with any transport
-# yet; see AGENTS.md "Integrating new tools and tables".
+# --- Team counts --------------------------------------------------------------
+# The local and MCP tools use this shared schema and description. The query
+# joins the real ``team_ownership`` table and is implemented in count_tools.py.
 
 COUNT_BY_TEAM_DESCRIPTION = (
     "Count log entries per owning team and severity, joining each row's "
-    "service (Component) to the team ownership table. Inputs: datasets "
+    "service (Component) to the real team ownership table. Inputs: datasets "
     "(optional list of local dataset ids; default every local dataset), "
-    "start_time and end_time (optional, together; omit both to count every "
-    "row), category (optional severity). Returns kind=aggregate rows {team, "
-    "severity, count} ordered by count, computed in the database over every "
-    "matching row. Services with no owner count as team 'unowned', so team "
-    "totals equal the dataset totals. Counts are log entries, not incidents."
+    "start_time and end_time (optional paired half-open window; omit both to "
+    "count every row), and category (optional exact severity). Returns "
+    "kind=aggregate rows {dataset, team, severity, count} ordered by count, "
+    "computed in the database over every matching row. Services with no owner "
+    "count as team 'unowned', so team totals equal the dataset totals. Remote "
+    "datasets and missing tables are refused with a retry suggestion. Counts "
+    "are log entries, not incidents."
 )
 
 

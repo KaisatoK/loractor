@@ -140,14 +140,14 @@ TOOL_CATALOG = {
         "context) with an offset from the anchor, never a frequency. Use for "
         "the engineer's before/after timeline."
     ),
-    # Planned (docs/tool_requests.md T3): schema only, not callable yet.
-    # Drop the "NOT AVAILABLE YET" prefix once the tool is registered.
     "count_by_team_tool": (
-        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Counts log "
-        "entries per owning team and severity over local datasets; params: "
-        "datasets, start_time, end_time (optional, together), category. "
-        "Unowned services count as team 'unowned'. Measured (kind aggregate). "
-        "Use to group recurring problems by team."
+        "TIER index. Counts log entries per owning team and severity over local "
+        "datasets; params: datasets, start_time, end_time (optional paired "
+        "window), category. Returns measured kind=aggregate rows with "
+        "dataset, team, severity and count, ordered by count. It joins the "
+        "ownership mapping and counts unowned services as team 'unowned'. "
+        "Use to group recurring problems by team; counts are log entries, not "
+        "incidents."
     ),
 }
 

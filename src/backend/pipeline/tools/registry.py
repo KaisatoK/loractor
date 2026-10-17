@@ -8,6 +8,7 @@ from backend.pipeline.tools import (
     compare_periods_tool as local_compare_periods_tool,
     count_by_category_tool as local_count_by_category_tool,
     count_by_dataset_tool as local_count_by_dataset_tool,
+    count_by_team_tool as local_count_by_team_tool,
     get_data_tool as local_get_data_tool,
     get_log_by_line_id_tool as local_get_log_by_line_id_tool,
     get_nearby_events_tool as local_get_nearby_events_tool,
@@ -26,6 +27,7 @@ LOCAL_DB_TOOLS = [
     # The catalog first: every windowed tool needs a window it can supply.
     local_list_datasets_tool,
     local_count_by_category_tool, local_count_by_dataset_tool,
+    local_count_by_team_tool,
     local_get_data_tool, local_get_log_by_line_id_tool,
     local_get_nearby_events_tool,
     local_get_trend_tool, local_search_logs_tool, local_top_in_category_by_service_tool,
@@ -34,8 +36,6 @@ LOCAL_DB_TOOLS = [
     # reaches the UI from depth <= 1, and a sweep that reports nothing while it
     # runs for minutes is worse than no sweep.
     local_sweep_chunks_tool, local_investigate_chunk_tool,
-    # Planned, not registered yet (stub in planned_tools.py, docs/tool_requests.md):
-    # count_by_team_tool (T3).
 ]
 
 

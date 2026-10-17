@@ -104,3 +104,39 @@ def test_skill_path_is_sandboxed():
         server.read_skill("../README")
     with pytest.raises(Exception):
         server.read_skill("/etc/passwd")
+
+
+def test_mcp_server_serves_count_by_team_and_validates_it():
+    async def run():
+        async with Client(server.mcp) as client:
+            listed = {tool.name: tool for tool in await client.list_tools()}
+            tool = listed["count_by_team_tool"]
+            assert "ownership table" in tool.description
+            assert {"datasets", "start_time", "end_time", "category"} <= set(
+                tool.inputSchema["properties"]
+            )
+            for bad in (
+                {"datasets": ["otel_s3"]},
+                {"start_time": "2017-05-16 00:00:00"},
+                {
+                    "start_time": "2017-05-17 00:00:00",
+                    "end_time": "2017-05-16 00:00:00",
+                },
+            ):
+                result = await client.call_tool(
+                    "count_by_team_tool", bad, raise_on_error=False
+                )
+                assert result.is_error, bad
+
+    asyncio.run(run())
+
+
+def test_local_mcp_and_server_share_team_description():
+    from backend.mcp_server import server
+    from backend.pipeline.tools import count_by_team_tool
+    from backend.pipeline.tools.mcp_tools import count_by_team_tool as mcp_tool
+    from backend.pipeline.tools.schemas import COUNT_BY_TEAM_DESCRIPTION
+
+    assert count_by_team_tool.description == COUNT_BY_TEAM_DESCRIPTION
+    assert mcp_tool.description == COUNT_BY_TEAM_DESCRIPTION
+    assert server.count_by_team_tool.description == COUNT_BY_TEAM_DESCRIPTION

@@ -13,20 +13,20 @@ Which observed problems deserve attention first, and what should happen next?
    dataset's `window_start`..`window_end` (every row, measured on the call) as
    the whole-dataset window, and say so. Its `levels` show which severities
    actually occur.
-2. **Measured frequency and severity.** `count_by_category_tool` with type
-   `service` (or a team-count tool when available, planned: `count_by_team_tool`)
-   over the scope, for every severity level above informational that actually
-   occurs in the data (the catalog's `levels`, or a count by level, tells you
-   which levels exist; never assume a level is present or absent). These counts drive the
-   ranking. When the question spans several datasets, or asks which dataset
-   needs attention first, `count_by_dataset_tool` gives measured severity counts
-   for each whole local dataset in one call.
+2. **Measured frequency and severity.** Call `count_by_team_tool` for local
+   datasets over the scope (and `count_by_dataset_tool` when comparing whole
+   datasets). It returns measured counts by dataset, owning team and severity;
+   use those counts for the ranking. The team tool joins `team_ownership` and
+   labels unmapped components `unowned`. For remote OTel, use
+   `count_by_category_tool` by service with a bounded window instead.
 3. **Trend direction.** `compare_periods_tool` (first half vs second half of the
    scope) or `get_trend_tool` for the top two or three candidates, to see which
    problems are growing. If a trend is refused for too many buckets, take the
    suggested coarser bucket; a split period must split on whole buckets.
-4. **Breadth.** From the counts, how many components (and owning teams, from the
-   team-ownership mapping) each problem touches.
+4. **Breadth.** From the team-count rows, use the number of teams and
+   components represented by each candidate. Do not infer breadth from the
+   number of returned examples; the measured team aggregate is the source for
+   owning-team coverage.
 5. Optional: one `search_logs_tool` example (limit 1) for the top priority so the
    manager can see what it is.
 

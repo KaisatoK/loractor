@@ -389,3 +389,28 @@ def test_the_nearby_events_tool_returns_its_query(loaded):
     assert envelope["returned"] == 5 and envelope["truncated"] is False
     assert "WITH anchor AS" in envelope["query"]
     assert envelope["filters"]["same_entity"] is True
+
+
+# --- Team ownership counts (T3) ----------------------------------------------
+def test_team_counts_preserve_every_openstack_row(loaded):
+    rows = db.count_by_team(datasets=("openstack",))
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    by_severity = {}
+    for row in rows:
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + row["count"]
+    whole = db.count_by_dataset(("openstack",))
+    expected = {row["severity"]: row["count"] for row in whole}
+    assert by_severity == expected
+    assert not any(row["team"] == "unowned" for row in rows)
+
+
+def test_windowed_team_counts_are_bounded(loaded):
+    rows = db.count_by_team(
+        datasets=("openstack",),
+        start_time="2017-05-16 00:00:00",
+        end_time="2017-05-17 00:00:00",
+    )
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    assert sum(row["count"] for row in rows) <= OPENSTACK_ROWS

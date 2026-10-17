@@ -15,8 +15,8 @@ never a table name, and rows use the canonical field names (``ts``,
 ``event_id``, ``record_id``, ``request_id``) whatever the corpus calls them.
 
 New tools must use ``_result`` too; see AGENTS.md "Integrating new tools and tables".
-Planned, not served yet: ``count_by_team_tool`` (T3); its schema and description
-are in ``pipeline/tools/schemas.py``.
+The team-count tool joins the real ``team_ownership`` table and preserves
+unmapped components as ``unowned``.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from backend.db import (
     compare_periods,
     count_by_dataset,
     count_by_field,
+    count_by_team,
     get_field_values,
     get_log_by_record_id,
     get_nearby_events,
@@ -50,13 +51,19 @@ from backend.pipeline.sweep import (
     sweep,
 )
 from backend.pipeline.tools.context_tools import nearby_filters, nearby_operation
-from backend.pipeline.tools.count_tools import count_by_dataset_operation
+from backend.pipeline.tools.count_tools import (
+    count_by_dataset_operation,
+    count_by_team_filters,
+    count_by_team_operation,
+)
 from backend.pipeline.tools.envelope import run_enveloped
 from backend.pipeline.tools.tools import search_filters, search_operation
 from backend.pipeline.tools.trend_tools import trend_filters, trend_operation
 from backend.pipeline.tools.schemas import (
     NEARBY_EVENTS_DESCRIPTION,
+    COUNT_BY_TEAM_DESCRIPTION,
     CountByDataset,
+    CountByTeam,
     GetNearbyEvents,
     InvestigateChunk,
     SweepChunks,
@@ -119,6 +126,49 @@ def count_by_dataset_tool(datasets: list[str] | None = None) -> dict:
         lambda: count_by_dataset(tuple(v["datasets"]) if v["datasets"] else None),
         kind="aggregate", filters={"datasets": v["datasets"]}, complete=True,
     )
+
+
+@mcp.tool(name="count_by_team_tool", description=COUNT_BY_TEAM_DESCRIPTION)
+def count_by_team_tool(
+    datasets: list[str] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    category: str | None = None,
+) -> dict:
+    """Count local log entries by owning team and severity.
+
+    Inputs: datasets (optional local ids), start_time/end_time (optional paired
+    half-open window), and category (optional exact severity). Returns
+    kind=aggregate rows ``dataset, team, severity, count`` ordered by count,
+    with unmapped components counted as ``unowned``. Counts are log entries,
+    not incidents; remote datasets, missing log tables, and a missing
+    ``team_ownership`` table are refused with a retry suggestion.
+    """
+    v = _validated(
+        CountByTeam,
+        datasets=datasets,
+        start_time=start_time,
+        end_time=end_time,
+        category=category,
+    )
+    return _result(
+        count_by_team_operation(
+            v["datasets"], v["start_time"], v["end_time"], v["category"]
+        ),
+        lambda: count_by_team(
+            datasets=tuple(v["datasets"]) if v["datasets"] else None,
+            start_time=v["start_time"],
+            end_time=v["end_time"],
+            category=v["category"],
+        ),
+        kind="aggregate",
+        filters=count_by_team_filters(
+            v["datasets"], v["start_time"], v["end_time"], v["category"]
+        ),
+        complete=True,
+    )
+
+count_by_team_tool.description = COUNT_BY_TEAM_DESCRIPTION
 
 
 @mcp.tool(name="search_logs_tool")
@@ -184,6 +234,8 @@ def get_nearby_events_tool(line_id: int, dataset: str = DEFAULT_DATASET_ID,
         filters=nearby_filters(v["line_id"], v["before"], v["after"],
                                v["same_entity"], v["same_request"]),
     )
+
+get_nearby_events_tool.description = NEARBY_EVENTS_DESCRIPTION
 
 
 @mcp.tool(name="top_in_category_by_service_tool")
@@ -325,7 +377,15 @@ _SKILLS_ROOT = Path(MCP_SKILLS_ROOT) if MCP_SKILLS_ROOT else Path(__file__).reso
 def _skill_files() -> dict[str, Path]:
     if not _SKILLS_ROOT.is_dir():
         raise RuntimeError(f"Skills directory not found: {_SKILLS_ROOT}")
-    return {p.parent.name: p for p in _SKILLS_ROOT.glob("*/SKILL.md") if p.is_file()}
+    paths = {
+        path.parent.name: path
+        for path in _SKILLS_ROOT.glob("*/SKILL.md")
+        if path.is_file()
+    }
+    ordered = ["log-investigation"] + sorted(
+        name for name in paths if name != "log-investigation"
+    )
+    return {name: paths[name] for name in ordered if name in paths}
 
 
 def _skill_body(path: Path) -> str:

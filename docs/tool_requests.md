@@ -30,13 +30,7 @@ kinds) follows once the tools exist (see AGENTS.md, "Integrating new tools and t
 - **Tests:** offline tests of the query built (SQL and parameters), plus at least one
   live check against a seeded SereneDB.
 
-## Required by the brief
-
-| # | Tool | Inputs | Output rows | Notes |
-| --- | --- | --- | --- | --- |
-| T3 | `count_by_team_tool` | `table_names` (list), `start_time?`, `end_time?`, `level?` | `team`, `level`, `count`, ordered by count | `JOIN team_ownership ON team_ownership.component = t.component` (and `dataset`). Unmapped components count as team `unowned`, so totals never drop rows. Needs the `team_ownership` table (on our branch it is in `src/backend/data/team_ownership.csv`, loaded by `setup.load_ownership`; move it to `data/`). |
-
-## For hypothesis tests (phase 2, after T3)
+## For hypothesis tests (phase 2)
 
 Each returns raw numbers only. Our code decides `supported / contradicted /
 inconclusive` from explicit thresholds, so the tools must not return a verdict.

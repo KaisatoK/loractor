@@ -1,4 +1,6 @@
 dataset,component,team
+OpenStack,keystonemiddleware.auth_token,API Gateway
+OpenStack,oslo_service.periodic_task,Compute Platform
 OpenStack,nova.osapi_compute.wsgi.server,API Gateway
 OpenStack,nova.api.openstack.wsgi,API Gateway
 OpenStack,nova.api.openstack.compute.server_external_events,API Gateway
@@ -20,3 +22,19 @@ BGL,HARDWARE,Hardware Ops
 BGL,LINKCARD,Hardware Ops
 BGL,DISCOVERY,Hardware Ops
 BGL,SERV_NET,Network Ops
+OTel,frontend,Storefront
+OTel,ad,Storefront
+OTel,recommendation,Storefront
+OTel,product-catalog,Storefront
+OTel,checkout,Checkout & Payments
+OTel,payment,Checkout & Payments
+OTel,cart,Checkout & Payments
+OTel,currency,Checkout & Payments
+OTel,fraud-detection,Checkout & Payments
+OTel,accounting,Checkout & Payments
+OTel,shipping,Fulfilment
+OTel,email,Fulfilment
+OTel,quote,Fulfilment
+OTel,kafka,Data Platform
+OTel,valkey-cart,Data Platform
+OTel,load-generator,Load Testing

@@ -6,20 +6,47 @@ import pytest
 
 from backend.db import connection, ownership
 from backend.db.config import OWNERSHIP_CSV_PATH
+from backend.db.datasets import all_datasets
+from backend.pipeline import playbooks
 
 
-def test_shipped_ownership_csv_is_valid_and_covers_both_datasets():
+def test_shipped_ownership_csv_is_valid_and_covers_all_measured_components():
     rows = ownership.read_ownership_csv(OWNERSHIP_CSV_PATH)
     datasets = {dataset for dataset, _, _ in rows}
-    assert {"OpenStack", "BGL"} <= datasets
-    # The main nova components have an owner.
-    owned = {component for dataset, component, _ in rows if dataset == "OpenStack"}
+    registered_corpora = {dataset.corpus_name for dataset in all_datasets()}
+    assert datasets <= registered_corpora
+    assert {"OpenStack", "BGL", "OTel"} <= datasets
+
+    by_dataset = {
+        dataset: {component for row_dataset, component, _ in rows if row_dataset == dataset}
+        for dataset in datasets
+    }
     assert {
         "nova.osapi_compute.wsgi.server",
         "nova.compute.manager",
         "nova.virt.libvirt.imagecache",
         "nova.scheduler.host_manager",
-    } <= owned
+        "oslo_service.periodic_task",
+        "keystonemiddleware.auth_token",
+    } <= by_dataset["OpenStack"]
+    assert {
+        "KERNEL", "APP", "DISCOVERY", "MMCS", "HARDWARE", "MONITOR",
+        "LINKCARD", "CMCS", "BGLMASTER", "SERV_NET",
+    } <= by_dataset["BGL"]
+    assert {
+        "cart", "frontend", "email", "recommendation", "payment",
+        "shipping", "checkout", "quote", "currency", "fraud-detection",
+        "kafka", "accounting", "ad", "product-catalog", "valkey-cart",
+        "load-generator",
+    } <= by_dataset["OTel"]
+
+
+def test_ownership_context_is_grouped_by_corpus():
+    context = playbooks.ownership_context()
+    assert "OpenStack:" in context and "BGL:" in context and "OTel:" in context
+    assert "- unowned: any OpenStack component not listed above" in context
+    assert "- Checkout & Payments:" in context
+    assert all(name in context for name in ("cart", "checkout", "currency"))
 
 
 @pytest.mark.parametrize(

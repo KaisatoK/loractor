@@ -26,6 +26,7 @@ from backend.db.count_query import (
     compare_periods,
     count_by_dataset,
     count_by_field,
+    count_by_team,
     count_distinct_by_field,
     top_by_field,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "compare_periods",
     "count_by_dataset",
     "count_by_field",
+    "count_by_team",
     "count_distinct_by_field",
     "dataset_ids",
     "db_cursor",

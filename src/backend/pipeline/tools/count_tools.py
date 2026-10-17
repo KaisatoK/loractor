@@ -7,12 +7,14 @@ different function per column.
 
 from langchain.tools import ToolRuntime, tool
 
-from backend.db import count_by_dataset, count_by_field
+from backend.db import count_by_dataset, count_by_field, count_by_team
 from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.schemas import (
+    COUNT_BY_TEAM_DESCRIPTION,
     CountByCategory,
     CountByDataset,
+    CountByTeam,
 )
 
 _LABELS = {
@@ -91,5 +93,64 @@ def count_by_dataset_tool(
         # Several datasets: named in the filters (the data scope reads them
         # from there), not in the single-dataset envelope field.
         filters={"datasets": datasets},
+        complete=True,
+    )
+
+
+def count_by_team_operation(
+    datasets: list[str] | None,
+    start_time: str | None,
+    end_time: str | None,
+    category: str | None,
+) -> str:
+    scope = ", ".join(datasets) if datasets else "every local dataset"
+    operation = f"count log entries by owning team and severity in {scope}"
+    if start_time and end_time:
+        operation += f" from {start_time} to {end_time}"
+    if category:
+        operation += f" for '{category}'"
+    return operation
+
+
+def count_by_team_filters(
+    datasets: list[str] | None,
+    start_time: str | None,
+    end_time: str | None,
+    category: str | None,
+) -> dict:
+    return {
+        "datasets": datasets,
+        "start_time": start_time,
+        "end_time": end_time,
+        "category": category,
+    }
+
+
+@tool(args_schema=CountByTeam, description=COUNT_BY_TEAM_DESCRIPTION)
+def count_by_team_tool(
+    runtime: ToolRuntime,
+    datasets: list[str] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    category: str | None = None,
+) -> dict:
+    """Count measured log entries per owning team and severity.
+
+    The query joins the real ``team_ownership`` table and keeps unmapped
+    components under ``unowned``. Local datasets can be counted whole or over
+    one paired half-open time window; remote datasets are refused.
+    """
+    operation = count_by_team_operation(datasets, start_time, end_time, category)
+    return execute_database_tool(
+        runtime=runtime,
+        operation=operation,
+        function=lambda: count_by_team(
+            datasets=tuple(datasets) if datasets else None,
+            start_time=start_time,
+            end_time=end_time,
+            category=category,
+        ),
+        kind="aggregate",
+        filters=count_by_team_filters(datasets, start_time, end_time, category),
         complete=True,
     )

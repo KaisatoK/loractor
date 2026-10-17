@@ -67,7 +67,7 @@ TOOL_KINDS: dict[str, str] = {
     "get_trend_tool": "trend",
     # Lines around one anchor line: examples for a timeline, never a frequency.
     "get_nearby_events_tool": "context",
-    # Planned (docs/tool_requests.md T3); stub in planned_tools.py.
+    # Implemented team counts: database aggregate joined to ownership table.
     "count_by_team_tool": "aggregate",
     # The sweep ranks chunks from profiles and samples and digests the ones it
     # reads: examples and coverage, never a frequency over the corpus.

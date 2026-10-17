@@ -296,3 +296,28 @@ def test_a_node_seen_once_returns_the_anchor_alone_with_a_note(loaded):
 def test_same_request_is_refused_on_bgl(loaded):
     rows = db.get_nearby_events(1, "bgl", same_request=True)
     assert rows.refused and rows.refusal.code == "unsupported_field"
+
+
+# --- Team ownership counts (T3) ----------------------------------------------
+def test_team_counts_preserve_every_bgl_row(loaded):
+    rows = db.count_by_team(datasets=("bgl",))
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    by_severity = {}
+    for row in rows:
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + row["count"]
+    whole = db.count_by_dataset(("bgl",))
+    expected = {row["severity"]: row["count"] for row in whole}
+    assert by_severity == expected
+    assert not any(row["team"] == "unowned" for row in rows)
+
+
+def test_windowed_team_counts_are_bounded(loaded):
+    rows = db.count_by_team(
+        datasets=("bgl",),
+        start_time="2005-07-01 00:00:00",
+        end_time="2005-08-01 00:00:00",
+    )
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    assert sum(row["count"] for row in rows) <= BGL_ROWS

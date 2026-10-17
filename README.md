@@ -236,13 +236,14 @@ and outlives the chunk it came from.
 
 ### How the agent uses it
 
-The evidence agent has twelve tools. One is the dataset catalog
+The evidence agent has thirteen tools. One is the dataset catalog
 (`list_datasets_tool`: per dataset, rows, first and last timestamp, severity
 levels and a window covering every row, measured on each call, so windows come
 from the data rather than a guess). One counts each whole local dataset by
-severity in a single query (`count_by_dataset_tool`, no time window). Eight are
-ordinary bounded queries; two are the sweep (`sweep_chunks_tool`,
-`investigate_chunk_tool`).
+severity in a single query (`count_by_dataset_tool`, no time window), and one
+counts local rows by owning team and severity (`count_by_team_tool`, joined to
+the real `team_ownership` table). Eight are ordinary bounded queries; two are
+the sweep (`sweep_chunks_tool`, `investigate_chunk_tool`).
 
 One of the bounded queries, `get_nearby_events_tool`, gives the engineer the
 lines just before and after a search hit (`before`/`after`, 0-50 each), in
@@ -573,15 +574,18 @@ uv sync           # install dependencies and the project itself
 bash ./setup.sh   # load the local log corpora (no arguments)
 ```
 
-`setup.sh` loads both local corpora through the loghub loader
-(`backend.db.loghub`), in this order, each with `--no-embed`:
+`setup.sh` loads the ownership table first, then both local corpora through the
+loghub loader (`backend.db.loghub`), in this order, each with `--no-embed`:
 
-1. `openstack` -- one table from the three nova logs, read one after another in
+1. `team_ownership` -- `src/backend/data/team_ownership.csv`, loaded by
+   `uv run python -m backend.db.ownership`. This recreates only the ownership
+   table and does not touch log tables.
+2. `openstack` -- one table from the three nova logs, read one after another in
    chronological order: `src/backend/data/openstack_abnormal.log` (2017-05-14),
    `openstack_normal1.log`, `openstack_normal2.log` (2017-05-16 to 05-17), 207,820
    lines. `LineId` runs on across the files, so it is unique in the table and its
    order is time order; nothing records which run a row came from.
-2. `bgl` -- `src/backend/data/BGL.log` (or the file named by `BGL_LOG_PATH`),
+3. `bgl` -- `src/backend/data/BGL.log` (or the file named by `BGL_LOG_PATH`),
    4,747,963 lines. This takes a long time.
 
 Each run drops and rebuilds the table, and the disk budget is checked before
@@ -604,34 +608,43 @@ Ollama embedding model from Prerequisites.
 
 ### Team ownership (fictional)
 
-`src/backend/data/team_ownership.csv` is a small, **invented** mapping from log
-components to the teams that "own" them, used so team-lead and manager answers
-can group counts by team. It is not real organisational data. Columns:
+`src/backend/data/team_ownership.csv` is an **invented** mapping from the exact
+log components in each corpus to the teams that "own" them. It is not real
+organisational data. `count_by_team_tool` loads and joins this table by corpus
+and component; unmapped components remain `unowned`, so totals never silently
+drop rows. The same CSV is prompt context for naming owners of individual
+components.
 
 | Column | Meaning |
 | --- | --- |
-| `dataset` | Base-corpus dataset (`OpenStack` or `BGL`) |
-| `component` | Exact value of the corpus's `Component` column (the registry's `service` field) |
-| `team` | Owning team |
+| `dataset` | Base-corpus dataset (`OpenStack`, `BGL`, or `OTel`) |
+| `component` | Exact value of the corpus's `Component`/`ServiceName` field |
+| `team` | Fictional owning team |
 
-| Team | Owns |
-| --- | --- |
-| API Gateway | `nova.osapi_compute.wsgi.server`, `nova.api.openstack.*`, `nova.metadata.wsgi.server` |
-| Compute Platform | `nova.compute.manager`, `nova.compute.claims`, `nova.compute.resource_tracker` |
-| Virtualization | `nova.virt.libvirt.driver`, `nova.virt.libvirt.imagecache` |
-| Scheduling | `nova.scheduler.*` |
-| BG/L Kernel | BGL `KERNEL`, `APP` |
-| BG/L Control System | BGL `MMCS`, `BGLMASTER`, `CMCS` |
-| Hardware Ops | BGL `MONITOR`, `HARDWARE`, `LINKCARD`, `DISCOVERY` |
-| Network Ops | BGL `SERV_NET` |
+The measured local components are fully mapped:
 
-Components that are not listed count as team `unowned`, so a team total never
-silently drops rows. `backend.db.ownership` validates the file (header, no empty
-fields, no component mapped twice); `uv run python -m backend.db.ownership`
-loads it into SereneDB as `team_ownership` (no log table is touched). Today the
-prompts read the CSV directly to name teams; a team-count tool would join
-`Component = team_ownership.component`. Replace the CSV if
-the organisers' ownership table becomes available; keep the three columns.
+| Dataset | Team | Components |
+| --- | --- | --- |
+| OpenStack | API Gateway | `nova.osapi_compute.wsgi.server`, `nova.api.openstack.wsgi`, `nova.api.openstack.compute.server_external_events`, `nova.metadata.wsgi.server`, `keystonemiddleware.auth_token` |
+| OpenStack | Compute Platform | `nova.compute.manager`, `nova.compute.claims`, `nova.compute.resource_tracker`, `oslo_service.periodic_task` |
+| OpenStack | Virtualization | `nova.virt.libvirt.driver`, `nova.virt.libvirt.imagecache` |
+| OpenStack | Scheduling | `nova.scheduler.host_manager`, `nova.scheduler.filter_scheduler` |
+| BGL | BG/L Kernel | `KERNEL`, `APP` |
+| BGL | BG/L Control System | `MMCS`, `BGLMASTER`, `CMCS` |
+| BGL | Hardware Ops | `MONITOR`, `HARDWARE`, `LINKCARD`, `DISCOVERY` |
+| BGL | Network Ops | `SERV_NET` |
+
+The sampled OTel components use these fictional teams: Storefront (`frontend`,
+`ad`, `recommendation`, `product-catalog`), Checkout & Payments (`checkout`,
+`payment`, `cart`, `currency`, `fraud-detection`, `accounting`), Fulfilment
+(`shipping`, `email`, `quote`), Data Platform (`kafka`, `valkey-cart`), and Load
+Testing (`load-generator`). OTel is remote and therefore is not accepted by
+`count_by_team_tool`; use its bounded service aggregates instead.
+
+`backend.db.ownership` validates the file (header, no empty fields, no component
+mapped twice); `uv run python -m backend.db.ownership` loads it into SereneDB as
+`team_ownership` without touching log tables. Replace the CSV if the organisers'
+ownership table becomes available; keep the three columns and reload it.
 
 ## Running
 
@@ -676,10 +689,11 @@ confidence tests below are skipped unless enabled.
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
-| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (twelve tools), MCP server validation (no auto-complete tool) |
+| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (thirteen tools), MCP server validation (no auto-complete tool) |
 | `test_nearby_events.py` | nearby events: schema, the one-statement SQL (both sides, correlation filters, omitted sides), refusals, explanatory notes, the tool on both transports with one shared description |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
+| `test_count_by_team.py` | team ownership joins, `unowned` preservation, window/category validation, data scope and measured envelope |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
@@ -688,17 +702,11 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `6 failed, 875 passed, 86 skipped`. Three failures
-> are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
-> rendering edge cases). Two more,
-> `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
-> `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, need a
-> reachable SereneDB although they are not gated, and pass when it is. The last,
-> `test_mcp.py::test_sync_bridge_uses_one_loop_and_preserves_skill_result`,
-> also fails at the previous commit: it expects `list_skills()` to list
-> `log-investigation` first, but the order follows the filesystem. The skips
-> are the gated live cases below. The suite passes identically under `TOOLS_TRANSPORT=local` and
-> `TOOLS_TRANSPORT=mcp`.
+> The offline suite reports `3 failed, 899 passed, 91 skipped`. The three failures
+> are known and pre-existing in `tests/test_rendering.py` (inline-marker
+> rendering edge cases). The skips are gated live cases below. The new T3
+> focused suite and local/MCP parity checks pass; the live OpenStack and BGL
+> team-count checks pass when the ownership table is loaded.
 
 ### Live corpus tests
 
