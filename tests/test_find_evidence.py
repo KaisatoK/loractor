@@ -23,6 +23,7 @@ from backend.pipeline.agents import evidence_report
 from backend.pipeline.agents.find_evidence import get_find_evidence_agent
 from backend.pipeline.contracts import EvidenceReport, Hypothesis
 from backend.pipeline.prompts import EVIDENCE_REPORT_SYSTEM_PROMPT
+from backend.pipeline.tools.registry import get_db_tools
 from backend.pipeline.tools.results import MAX_RESULT_ROWS, collect_tool_results
 
 
@@ -350,14 +351,45 @@ def test_find_evidence_node_propagates_report_failure(monkeypatch):
 # --- compiled agent (state boundary) -------------------------------------
 
 
-def test_compiled_agent_output_schema_has_no_persisted_report():
-    # The report is built off-agent by the formatter, so it is never a state
-    # channel. Assert the exact property set so an added report field is caught
-    # here.
-    agent = get_find_evidence_agent("Low")
-    properties = agent.get_output_jsonschema().get("properties", {})
-    assert set(properties) == {
-        "messages",
-        "structured_response",
-        "todos",
-    }
+def test_compiled_agent_never_persists_the_report():
+    """The invariant, in either transport: the report is not a state channel.
+
+    It is built off-agent by the formatter from the agent's free-text summary,
+    so a report field appearing here would mean the agent had started carrying
+    its own conclusions across the state boundary.
+    """
+    properties = set(
+        get_find_evidence_agent("Low").get_output_jsonschema().get("properties", {})
+    )
+    assert properties >= {"messages", "structured_response", "todos"}
+    assert not {p for p in properties if "report" in p or "evidence" in p}
+
+
+def test_compiled_agent_state_channels_follow_the_skill_backend():
+    """The exact channel set, which depends on where skill text is read from.
+
+    Local transport hands the agent a disk-backed ``FilesystemBackend`` rooted
+    at ``skills/``, so skill files are on disk and absent from the state. Under
+    MCP the skill text arrives through the ``list_skills`` / ``read_skill``
+    tools instead, no backend is passed, and deepagents installs its default
+    store -- which keeps files *in graph state* and so adds a ``files``
+    channel.
+
+    That channel is unused in MCP mode, but it is deepagents' default rather
+    than something this code asks for, so it is asserted rather than fought.
+    The discriminator is ``mcp_enabled``, not ``TOOLS_TRANSPORT``:
+    ``TOOLS_TRANSPORT=mcp`` falls back to local tools when the service is
+    unreachable, and the agent is built from the same value.
+    """
+    _tools, mcp_enabled = get_db_tools()
+    expected = {"messages", "structured_response", "todos"}
+    if mcp_enabled:
+        expected.add("files")
+
+    properties = set(
+        get_find_evidence_agent("Low").get_output_jsonschema().get("properties", {})
+    )
+    assert properties == expected, (
+        f"unexpected state channels with mcp_enabled={mcp_enabled}: "
+        f"{sorted(properties ^ expected)}"
+    )
