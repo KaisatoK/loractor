@@ -472,13 +472,19 @@ OPENSTACK_SPEC = LoghubSpec(
 # The full corpus: 207,820 lines from three files, in this order. ``LineId``
 # runs on across them, so it is unique in the shared table; nothing records
 # which file a row came from.
+#
+# The order is chronological, so ``LineId`` order is time order. Each file is
+# already time-ordered, and the runs do not overlap (measured: abnormal
+# 2017-05-14 19:39-21:27, normal1 05-16 00:00-06:25, normal2 05-16 15:15 to
+# 05-17 12:02). Loading normal1, normal2, abnormal made line 207,820 two days
+# older than line 207,819.
 OPENSTACK_FULL_SPEC = LoghubSpec(
     dataset_id="openstack",
     csv_name="OpenStack_2k.log_structured.csv",
     raw_names=(
+        "openstack_abnormal.log",
         "openstack_normal1.log",
         "openstack_normal2.log",
-        "openstack_abnormal.log",
     ),
     line_parser=parse_openstack_line,
     source_kind=SourceKind.RAW_LINES,

@@ -176,3 +176,36 @@ def test_the_corpus_stays_well_inside_its_allowance(loaded):
         size = int(cur.fetchone()["b"])
 
     assert size < ALLOWANCES["bgl"]
+
+
+# --- Dataset catalog (list_datasets_tool) -------------------------------------
+def test_the_catalog_reports_the_loaded_corpus_exactly(loaded):
+    row = next(r for r in db.list_datasets() if r["dataset"] == "bgl")
+    assert row["available"] is True and row["rows_exact"] is True
+    assert row["rows"] == BGL_ROWS
+    levels = {lv["severity"]: lv["count"] for lv in row["levels"]}
+    assert sum(levels.values()) == BGL_ROWS
+    assert levels["FAILURE"] == 1_714
+    assert row["whole_span_fits_one_window"] is True
+
+    # The catalog's own window, used as a tool would use it, sees every row.
+    rows = db.count_by_field(row["window_start"], row["window_end"], dataset="bgl")
+    assert not rows.refused
+    assert sum(r["count"] for r in rows) == BGL_ROWS
+
+
+# --- Whole-dataset counts (count_by_dataset_tool) ------------------------------
+def test_counts_by_dataset_cover_every_row_of_each_local_corpus(loaded):
+    rows = db.count_by_dataset()
+    if rows.refused:
+        pytest.skip(f"not every local corpus is loaded: {rows.refusal.reason}")
+    totals: dict[str, int] = {}
+    for row in rows:
+        totals[row["dataset"]] = totals.get(row["dataset"], 0) + row["count"]
+    assert totals["bgl"] == BGL_ROWS
+    # Agrees with the catalog's own exact profile of every local dataset.
+    catalog = {r["dataset"]: r for r in db.list_datasets()}
+    for dataset_id, total in totals.items():
+        assert total == catalog[dataset_id]["rows"]
+    fatal = next(r for r in rows if r["dataset"] == "bgl" and r["severity"] == "FATAL")
+    assert fatal["count"] == 855_501

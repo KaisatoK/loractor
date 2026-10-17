@@ -28,10 +28,12 @@ from fastmcp import FastMCP
 
 from backend.db import (
     compare_periods,
+    count_by_dataset,
     count_by_field,
     get_field_values,
     get_log_by_record_id,
     get_trend,
+    list_datasets,
     search_logs,
     top_by_field,
 )
@@ -43,8 +45,10 @@ from backend.pipeline.sweep import (
     investigate_chunk,
     sweep,
 )
+from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import run_enveloped
 from backend.pipeline.tools.schemas import (
+    CountByDataset,
     InvestigateChunk,
     SweepChunks,
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
@@ -69,6 +73,43 @@ def _result(operation: str, function: Callable[[], Any], *, kind: str | None,
     return run_enveloped(operation=operation, function=function, kind=kind,
                          dataset=dataset, filters=filters, limit=limit,
                          complete=complete)
+
+
+@mcp.tool(name="list_datasets_tool")
+def list_datasets_tool() -> dict:
+    """List every dataset with its rows, time span and severity levels, measured now.
+
+    Inputs: none. Returns kind=catalog, one row per dataset: dataset, kind,
+    available (false = not loaded or not built; `note` says why), rows,
+    rows_exact, first_timestamp, last_timestamp, span_seconds,
+    max_window_seconds, whole_span_fits_one_window, window_start/window_end (a
+    window covering every row, end exclusive), levels [{severity, count}],
+    timestamp_source and note. Local datasets are counted exactly; the remote
+    corpus reads file footers only (levels uncounted); the in-place index
+    reports the window it was built over.
+    """
+    return _result(
+        "list every dataset with its rows, time span and severity levels",
+        list_datasets, kind="catalog", complete=True,
+    )
+
+
+@mcp.tool(name="count_by_dataset_tool")
+def count_by_dataset_tool(datasets: list[str] | None = None) -> dict:
+    """Count log entries per severity in each whole local dataset, in one query.
+
+    Inputs: datasets (optional list of local dataset ids; default every local
+    dataset). No time window. The remote corpus is rejected; use
+    count_by_category_tool with a window there. Returns kind=aggregate rows
+    {dataset, severity, count}: measured log-entry counts, not incidents, with
+    no row cap. An unloaded dataset is refused, never left out of the totals.
+    """
+    v = _validated(CountByDataset, datasets=datasets)
+    return _result(
+        count_by_dataset_operation(v["datasets"]),
+        lambda: count_by_dataset(tuple(v["datasets"]) if v["datasets"] else None),
+        kind="aggregate", filters={"datasets": v["datasets"]}, complete=True,
+    )
 
 
 @mcp.tool(name="search_logs_tool")

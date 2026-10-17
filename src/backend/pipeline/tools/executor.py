@@ -17,7 +17,7 @@ class ProgressReporter:
     Most tools are one query and need nothing of the sort: the ``started`` and
     ``completed`` events around them tell the whole story. The sweep is the
     exception -- it iterates over up to 1,624 chunks inside a *single* tool call,
-    because per-effort budgets cap all tool calls at between 4 and 20. Without a
+    because per-effort budgets cap all tool calls at between 6 and 22. Without a
     way to report mid-flight, the most expensive operation in the system would
     be its most opaque: minutes of silence, then a result.
 

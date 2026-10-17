@@ -4,10 +4,11 @@
 #
 # This script takes NO arguments. It loads two local corpora, in this order:
 #
-#   openstack  one table from three nova logs, loaded one after another:
+#   openstack  one table from three nova logs, loaded one after another in
+#              chronological order (so LineId order is time order):
+#                src/backend/data/openstack_abnormal.log
 #                src/backend/data/openstack_normal1.log
 #                src/backend/data/openstack_normal2.log
-#                src/backend/data/openstack_abnormal.log
 #   bgl        the Blue Gene/L RAS log, 4.7M rows / 743 MB, from
 #                src/backend/data/BGL.log  (or the path in BGL_LOG_PATH)
 #

@@ -57,6 +57,29 @@ def test_the_corpus_spans_the_three_runs(loaded):
     assert loaded["covered_end"].startswith("2017-05-17 12:02:35")
 
 
+def test_line_order_is_time_order(loaded):
+    """The three files load in chronological order, so no line is older than
+    the one before it. Loaded normal1, normal2, abnormal, exactly one step went
+    back (two days, at the join to the abnormal run)."""
+    from backend.db.connection import db_cursor
+
+    with db_cursor() as cur:
+        cur.execute("""
+            WITH o AS (
+                SELECT "Timestamp" AS ts,
+                       LAG("Timestamp") OVER (ORDER BY "LineId") AS prev
+                FROM openstack
+            )
+            SELECT count(*) FILTER (WHERE ts < prev) AS backward FROM o
+        """)
+        assert cur.fetchone()["backward"] == 0
+
+    first = db.get_log_by_record_id(1, dataset="openstack")
+    last = db.get_log_by_record_id(OPENSTACK_ROWS, dataset="openstack")
+    assert str(first[0]["ts"]).startswith("2017-05-14 19:39:01")
+    assert str(last[0]["ts"]).startswith("2017-05-17 12:02:35")
+
+
 def test_severity_counts_are_exact_and_uppercase(loaded):
     rows = db.count_by_field(*WINDOW, dataset="openstack")
     assert not rows.refused
@@ -135,3 +158,27 @@ def test_the_corpus_stays_well_inside_its_allowance(loaded):
         size = int(cur.fetchone()["b"])
 
     assert size < ALLOWANCES["openstack"]
+
+
+# --- Dataset catalog (list_datasets_tool) -------------------------------------
+def _catalog_row(dataset_id):
+    return next(r for r in db.list_datasets() if r["dataset"] == dataset_id)
+
+
+def test_the_catalog_reports_the_loaded_corpus_exactly(loaded):
+    row = _catalog_row("openstack")
+    assert row["available"] is True and row["rows_exact"] is True
+    assert row["rows"] == OPENSTACK_ROWS
+    assert {lv["severity"]: lv["count"] for lv in row["levels"]} == SEVERITY_COUNTS
+    assert str(row["first_timestamp"]).startswith("2017-05-14 19:39:01")
+    assert str(row["last_timestamp"]).startswith("2017-05-17 12:02:35")
+    assert row["whole_span_fits_one_window"] is True
+
+
+def test_the_catalog_window_covers_every_row(loaded):
+    """window_start..window_end is the agent's whole-dataset window: one count
+    over it must see every row, so the end really is past the last one."""
+    row = _catalog_row("openstack")
+    rows = db.count_by_field(row["window_start"], row["window_end"], dataset="openstack")
+    assert not rows.refused
+    assert sum(r["count"] for r in rows) == row["rows"]

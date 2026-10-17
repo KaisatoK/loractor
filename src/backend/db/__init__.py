@@ -8,6 +8,7 @@ queries. See that module for the canonical field vocabulary.
 
 from backend.db.auto_complete import auto_complete
 from backend.db.budget import BUDGET, CORPUS_FACTS, fits
+from backend.db.catalog_query import list_datasets
 from backend.db.config import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
@@ -18,6 +19,7 @@ from backend.db.config import (
 from backend.db.connection import bulk_query, db_cursor, get_conn, query_runner
 from backend.db.count_query import (
     compare_periods,
+    count_by_dataset,
     count_by_field,
     count_distinct_by_field,
     top_by_field,
@@ -58,6 +60,7 @@ __all__ = [
     "bulk_query",
     "catalog",
     "compare_periods",
+    "count_by_dataset",
     "count_by_field",
     "count_distinct_by_field",
     "dataset_ids",
@@ -67,6 +70,7 @@ __all__ = [
     "get_field_values",
     "get_log_by_record_id",
     "get_trend",
+    "list_datasets",
     "query_runner",
     "resolve",
     "search_logs",

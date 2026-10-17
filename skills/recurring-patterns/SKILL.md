@@ -9,13 +9,17 @@ description: Evidence plan for a TEAM LEAD looking at recurring problems - count
 Which problems recur, how often, and which components or teams are involved?
 
 ## Evidence to collect (in this order)
-1. **State the period.** If the user named none, use the whole dataset window
-   from the schema description and say so.
+1. **State the period.** If the user named none, call `list_datasets_tool` and
+   use the dataset's `window_start`..`window_end` (every row, measured on the
+   call) as the whole-dataset window, and say so. Its `levels` show which
+   severities actually occur.
 2. **Recurring problems by count.** `count_by_category_tool` with type
    `template` (and/or `service`) over the period, for every severity level above
-   informational that actually occurs in the data (count by level first if you do
-   not know which levels exist; never assume a level is present or absent). These
-   database counts are the measured frequency.
+   informational that actually occurs in the data (the catalog's `levels`, or a
+   count by level, tells you which levels exist; never assume a level is present or absent). These
+   database counts are the measured frequency. For a question across datasets,
+   `count_by_dataset_tool` counts each whole local dataset by severity in one
+   call.
 3. **Teams involved.** When a team-count tool is available (planned:
    `count_by_team_tool`, a join of the component column to the `team_ownership` table),
    use it. Until then, use the service counts and the team-ownership mapping

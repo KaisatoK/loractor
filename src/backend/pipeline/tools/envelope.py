@@ -45,7 +45,7 @@ from backend.db.capture import capture_queries
 # ``aggregate`` counts grouped in the database (whole scope, a measured number)
 # ``trend``     counts per time bucket
 # ``lookup``    one record by key
-# ``catalog``   known values of a field (discovery)
+# ``catalog``   discovery: a field's known values, or each dataset's rows/span/levels
 # ``test``      a deterministic hypothesis test (planned; see AGENTS.md)
 RESULT_KINDS = ("search", "context", "aggregate", "trend", "lookup", "catalog", "test")
 
@@ -55,10 +55,13 @@ MEASURED_KINDS = frozenset({"aggregate", "trend"})
 # Kind of every tool name currently known. Legacy envelopes that omit ``kind``
 # are classified from this table; add each new tool here.
 TOOL_KINDS: dict[str, str] = {
+    # One row per dataset: rows, span and levels, for choosing a window.
+    "list_datasets_tool": "catalog",
     "search_logs_tool": "search",
     "get_log_by_line_id_tool": "lookup",
     "get_data_tool": "catalog",
     "count_by_category_tool": "aggregate",
+    "count_by_dataset_tool": "aggregate",
     "top_in_category_by_service_tool": "aggregate",
     "compare_periods_tool": "aggregate",
     "get_trend_tool": "trend",

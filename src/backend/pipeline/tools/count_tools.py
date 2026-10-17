@@ -7,10 +7,13 @@ different function per column.
 
 from langchain.tools import ToolRuntime, tool
 
-from backend.db import count_by_field
+from backend.db import count_by_dataset, count_by_field
 from backend.db.datasets import DEFAULT_DATASET_ID
 from backend.pipeline.tools.executor import execute_database_tool
-from backend.pipeline.tools.schemas import CountByCategory
+from backend.pipeline.tools.schemas import (
+    CountByCategory,
+    CountByDataset,
+)
 
 _LABELS = {
     "general": "logs",
@@ -60,4 +63,33 @@ def count_by_category_tool(
             "category": category,
             "group_by": "category" if group_by is None else f"{group_by}, category",
         },
+    )
+
+
+def count_by_dataset_operation(datasets: list[str] | None) -> str:
+    scope = ", ".join(datasets) if datasets else "every local dataset"
+    return f"count log entries by severity in {scope}"
+
+
+@tool(args_schema=CountByDataset)
+def count_by_dataset_tool(
+    runtime: ToolRuntime,
+    datasets: list[str] | None = None,
+) -> dict:
+    """Count log entries per severity in each WHOLE local dataset, in one query.
+
+    No time window: every row is counted. datasets is an optional list of local
+    dataset ids (default all). The remote corpus cannot be counted whole and is
+    rejected. Returns kind=aggregate rows (dataset, severity, count): measured
+    counts of log entries, not incidents. An unloaded dataset is refused.
+    """
+    return execute_database_tool(
+        runtime=runtime,
+        operation=count_by_dataset_operation(datasets),
+        function=lambda: count_by_dataset(tuple(datasets) if datasets else None),
+        kind="aggregate",
+        # Several datasets: named in the filters (the data scope reads them
+        # from there), not in the single-dataset envelope field.
+        filters={"datasets": datasets},
+        complete=True,
     )

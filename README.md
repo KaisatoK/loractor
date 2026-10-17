@@ -226,24 +226,29 @@ and outlives the chunk it came from.
 
 ### How the agent uses it
 
-The evidence agent has nine tools. Seven are ordinary bounded queries; two are
-the sweep (`sweep_chunks_tool`, `investigate_chunk_tool`).
+The evidence agent has eleven tools. One is the dataset catalog
+(`list_datasets_tool`: per dataset, rows, first and last timestamp, severity
+levels and a window covering every row, measured on each call, so windows come
+from the data rather than a guess). One counts each whole local dataset by
+severity in a single query (`count_by_dataset_tool`, no time window). Seven are
+ordinary bounded queries; two are the sweep (`sweep_chunks_tool`,
+`investigate_chunk_tool`).
 
 The sweep tools are **withheld entirely below Extreme effort** rather than
 offered and refused — a visible tool gets tried eventually, and a refusal still
-consumes one of the 5–21 calls the effort level permits. `max_promotions` is the
+consumes one of the 6–22 calls the effort level permits. `max_promotions` is the
 existing per-effort dial, so it governs this too:
 
 | Effort | Tool calls | Rows scanned | Promotions |
 | --- | --- | --- | --- |
-| Low | 5 | 25M | 0 |
-| Medium | 9 | 100M | 0 |
-| High | 11 | 250M | 0 |
-| Extreme | 17 | 1B | 2 |
-| Brutal | 21 | 5B | 4 |
+| Low | 6 | 25M | 0 |
+| Medium | 10 | 100M | 0 |
+| High | 12 | 250M | 0 |
+| Extreme | 18 | 1B | 2 |
+| Brutal | 22 | 5B | 4 |
 
 The whole sweep runs **inside a single tool call**, because 1,624 chunks cannot
-be 1,624 calls when the ceiling is 21. The agent decides *whether* to sweep and,
+be 1,624 calls when the ceiling is 22. The agent decides *whether* to sweep and,
 afterwards, which single chunk deserves a full text read. Calling
 `sweep_chunks_tool` with `confirm_cost=false` returns a cost estimate instead of
 running, so the user can agree to the spend first — four promotions is about
@@ -553,10 +558,11 @@ bash ./setup.sh   # load the local log corpora (no arguments)
 `setup.sh` loads both local corpora through the loghub loader
 (`backend.db.loghub`), in this order, each with `--no-embed`:
 
-1. `openstack` -- one table from the three nova logs, read one after another:
-   `src/backend/data/openstack_normal1.log`, `openstack_normal2.log`,
-   `openstack_abnormal.log` (207,820 lines). `LineId` runs on across the files,
-   so it is unique in the table; nothing records which run a row came from.
+1. `openstack` -- one table from the three nova logs, read one after another in
+   chronological order: `src/backend/data/openstack_abnormal.log` (2017-05-14),
+   `openstack_normal1.log`, `openstack_normal2.log` (2017-05-16 to 05-17), 207,820
+   lines. `LineId` runs on across the files, so it is unique in the table and its
+   order is time order; nothing records which run a row came from.
 2. `bgl` -- `src/backend/data/BGL.log` (or the file named by `BGL_LOG_PATH`),
    4,747,963 lines. This takes a long time.
 
@@ -651,7 +657,9 @@ confidence tests below are skipped unless enabled.
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
-| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (nine tools), MCP server validation (no auto-complete tool) |
+| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (eleven tools), MCP server validation (no auto-complete tool) |
+| `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
+| `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
 | `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
@@ -907,7 +915,7 @@ TOOLS_TRANSPORT=mcp bash ./backend.sh
 ```
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
-seven bounded query tools and the two sweep tools through MCP; if the service is
+dataset catalog, whole-dataset counts, the seven bounded query tools and the two sweep tools through MCP; if the service is
 unreachable, the backend logs the failure and falls back to the in-process DB
 implementation. `/auto-complete` is not an MCP tool: it is a chat-box feature and
 is always answered in-process, whatever the transport. MCP mode also exposes `list_skills` and `read_skill`, while
@@ -968,7 +976,10 @@ unsupported log facts:
 1. Use `list_skills` and then `read_skill("log-investigation")` when the request
    asks why a failure occurs, asks for root-cause analysis, or requires testable
    hypotheses.
-2. Pass a `dataset` id (`openstack` is the default; `bgl`, `otel_s3`,
+2. Call `list_datasets_tool` (no arguments) first to learn each dataset's rows,
+   first and last timestamp, severity levels and a whole-dataset window
+   (`window_start`/`window_end`); choose windows from it instead of guessing.
+   Pass a `dataset` id (`openstack` is the default; `bgl`, `otel_s3`,
    `otel_slice`) to every log tool; there are no table names. Use
    `search_logs_tool` for message-content searches on an indexed corpus. Use
    `get_log_by_line_id_tool` when the user supplies a `Line ID: n (dataset)`
@@ -976,7 +987,8 @@ unsupported log facts:
 3. Use `get_data_tool` to discover a field's real values (services, entity ids,
    templates) before requesting a trend for an exact target with `get_trend_tool`.
 4. Use `count_by_category_tool`, `top_in_category_by_service_tool`, and
-   `compare_periods_tool` for computed counts, rankings, and period comparisons;
+   `compare_periods_tool` for computed counts, rankings, and period comparisons,
+   and `count_by_dataset_tool` for severity counts over each whole local dataset;
    `sweep_chunks_tool` and `investigate_chunk_tool` cover the remote corpus at
    high effort (price a sweep first with `confirm_cost=false`).
 5. Ground the final answer in returned rows and aggregates. Preserve the tool

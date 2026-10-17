@@ -85,6 +85,11 @@ MAX_BUILD_SECONDS = 1_800
 VIEW_NAME = "otel_ext"
 INDEX_NAME = "otel_ext_idx"
 
+# One-row build record: the window and severities the index covers. The view's
+# WHERE clause is the only other place that knows, so without this the catalog
+# (``backend.db.catalog_query``) could not say what the index can find.
+META_TABLE = "otel_ext_meta"
+
 
 @dataclass(frozen=True)
 class ExternalIndexPlan:
@@ -283,6 +288,7 @@ def build_external_index(
             )
         )
         rows = int(cur.fetchone()["n"])
+        _record_build(cur, plan, rows)
         built = _db_bytes(cur)
 
         report["rows"] = rows
@@ -296,7 +302,50 @@ def build_external_index(
     return report
 
 
+def record_build_statements(
+    plan: ExternalIndexPlan, rows: int
+) -> list[tuple[sql.Composable, tuple]]:
+    """The statements that (re)write the one-row build record.
+
+    Severities are stored comma-joined and the bounds as the plan's own text, so
+    the record reads back exactly as the window was asked for.
+    """
+    meta = sql.Identifier(META_TABLE)
+    return [
+        (sql.SQL("DROP TABLE IF EXISTS {t}").format(t=meta), ()),
+        (
+            sql.SQL(
+                "CREATE TABLE {t} (window_start TEXT NOT NULL, "
+                "window_end TEXT NOT NULL, severities TEXT NOT NULL, "
+                "indexed_rows BIGINT NOT NULL, built_at TEXT NOT NULL)"
+            ).format(t=meta),
+            (),
+        ),
+        (
+            sql.SQL(
+                "INSERT INTO {t} (window_start, window_end, severities, "
+                "indexed_rows, built_at) VALUES (%s, %s, %s, %s, %s)"
+            ).format(t=meta),
+            (
+                plan.start,
+                plan.end,
+                ",".join(plan.severities),
+                rows,
+                time.strftime("%Y-%m-%d %H:%M:%S+00", time.gmtime()),
+            ),
+        ),
+    ]
+
+
+def _record_build(cur, plan: ExternalIndexPlan, rows: int) -> None:
+    for statement, params in record_build_statements(plan, rows):
+        cur.execute(statement, params or None)
+
+
 def _drop(cur) -> None:
+    cur.execute(
+        sql.SQL("DROP TABLE IF EXISTS {t}").format(t=sql.Identifier(META_TABLE))
+    )
     cur.execute(
         sql.SQL("DROP INDEX IF EXISTS {idx}").format(
             idx=sql.Identifier(INDEX_NAME)

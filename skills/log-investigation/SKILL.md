@@ -28,6 +28,13 @@ use them decides whether an investigation costs a second or a minute.
 columns; a message search reads log bodies. Find the interesting window with a
 count, then search inside it.
 
+0. **Know the span before you pick a window.** `list_datasets_tool` (no
+   arguments) returns each dataset's rows, first and last timestamp, severity
+   levels, `max_window_seconds` and a `window_start`/`window_end` covering every
+   row. Use it instead of guessing dates: a window outside the data returns
+   nothing, which proves nothing. When `whole_span_fits_one_window` is false,
+   split the span into windows of at most `max_window_seconds`.
+
 1. **Start with a count, not a search.** `count_by_category_tool` is the
    cheapest aggregate there is — it never touches message text. Use it to find
    which minute, service, or severity actually matters.

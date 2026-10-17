@@ -48,12 +48,15 @@ def build_data_scope(records: Sequence[dict]) -> DataScope:
         if filters is None:
             # Legacy envelope: fall back to the call arguments.
             filters = record.get("arguments") or {}
+        # A multi-dataset result (count_by_dataset_tool) names its datasets in
+        # the filters rather than in the single-dataset envelope field.
+        datasets.update(filters.get("datasets") or ())
         for start, end, label in _WINDOWS:
             window = _window(filters, start, end, label)
             if window and window not in scope.time_windows:
                 scope.time_windows.append(window)
         for key, value in filters.items():
-            if key in _TIME_KEYS or key == "table_name" or value is None:
+            if key in _TIME_KEYS or key in ("table_name", "datasets") or value is None:
                 continue
             values = scope.filters.setdefault(key, [])
             if value not in values:

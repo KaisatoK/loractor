@@ -8,12 +8,15 @@ from __future__ import annotations
 from langchain.tools import ToolRuntime, tool
 
 from backend.db.datasets import DEFAULT_DATASET_ID
+from backend.pipeline.tools.count_tools import count_by_dataset_operation
 from backend.pipeline.tools.envelope import TOOL_KINDS
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.schemas import (
+    CountByDataset,
     ComparePeriods, CountByCategory, GetLogByLineId, GetTools, GetTrend,
     InvestigateChunk,
+    ListDatasets,
     SearchLogs, TopInCategoryByService,
     SweepChunks,
 )
@@ -38,6 +41,22 @@ def _call(runtime: ToolRuntime, name: str, operation: str, arguments: dict) -> d
         dataset=arguments.get("dataset"),
         limit=arguments.get("limit"),
     )
+
+
+@tool(args_schema=ListDatasets,
+      description="List every dataset's rows, time span and severity levels.")
+def list_datasets_tool(runtime: ToolRuntime) -> dict:
+    return _call(runtime, "list_datasets_tool",
+                 "list every dataset with its rows, time span and severity levels",
+                 {})
+
+
+@tool(args_schema=CountByDataset,
+      description="Count log entries by severity in each whole local dataset.")
+def count_by_dataset_tool(runtime: ToolRuntime,
+                          datasets: list[str] | None = None) -> dict:
+    return _call(runtime, "count_by_dataset_tool",
+                 count_by_dataset_operation(datasets), {"datasets": datasets})
 
 
 @tool(args_schema=CountByCategory, description="Count log rows by severity.")
@@ -148,6 +167,7 @@ def investigate_chunk_tool(runtime: ToolRuntime, chunk_id: str,
 
 
 MCP_DB_TOOLS = [
+    list_datasets_tool, count_by_dataset_tool,
     count_by_category_tool, get_data_tool, get_log_by_line_id_tool, get_trend_tool,
     search_logs_tool, top_in_category_by_service_tool, compare_periods_tool,
     sweep_chunks_tool, investigate_chunk_tool,

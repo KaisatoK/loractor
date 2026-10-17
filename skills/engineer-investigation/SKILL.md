@@ -23,7 +23,8 @@ What failed, in which component, and what happened just before and after?
    `get_trend_tool` for the hit's template (or service) over the window. Say that the timeline
    is approximate (adjacent lines, not a time-bounded slice).
 3. **Isolated or recurring?** One `count_by_category_tool` (type `template` or
-   `service`) over the whole dataset window, so the answer can say whether this
+   `service`) over the whole dataset window (`window_start`..`window_end` from
+   `list_datasets_tool`, when you do not have it yet), so the answer can say whether this
    error appears once or many times. This is a database count, not the number of
    search hits.
 4. Optional, when a hypothesis needs it: one query that could contradict it

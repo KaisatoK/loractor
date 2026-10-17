@@ -223,3 +223,32 @@ def test_no_slice_table_remains():
             "WHERE table_name IN ('otel_slice', 'otel_slice_templates')"
         )
         assert int(cur.fetchone()["n"]) == 0
+
+
+# --- Dataset catalog (list_datasets_tool) -------------------------------------
+def test_the_catalog_reads_the_remote_corpus_from_footers_only():
+    """Rows and span from the footers: exact, and no row is scanned for them.
+    One file is 1,000,000,000 rows over about half an hour, far past one 300s
+    window, so the catalog must say the span does not fit one query."""
+    import backend.db as db
+    from backend.db.datasets import resolve
+
+    row = next(r for r in db.list_datasets() if r["dataset"] == "otel_s3")
+    assert row["available"] is True
+    assert row["timestamp_source"] == "parquet_footers"
+    assert row["rows"] == 1_000_000_000 * len(resolve("otel_s3").sources)
+    assert row["whole_span_fits_one_window"] is False
+    assert all(level["count"] is None for level in row["levels"])
+
+
+def test_the_catalog_reports_the_index_build_window():
+    import backend.db as db
+    from backend.db.external import external_index_status
+
+    row = next(r for r in db.list_datasets() if r["dataset"] == "otel_slice")
+    if not external_index_status().get("exists"):
+        assert row["available"] is False
+        return
+    assert row["available"] is True
+    assert row["timestamp_source"] in {"index_build_record", "index_view_definition"}
+    assert row["window_start"] and row["window_end"]

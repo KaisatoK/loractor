@@ -281,14 +281,16 @@ def test_both_openstack_specs_are_registered():
     assert {"bgl", "bgl_2k", "openstack", "openstack_2k"} <= set(loghub.SPECS)
 
 
-def test_the_full_spec_loads_three_files_in_order():
+def test_the_full_spec_loads_three_files_in_chronological_order():
+    """abnormal (05-14), normal1 (05-16), normal2 (05-16..05-17): LineId order is
+    then time order across the whole table."""
     spec = loghub.OPENSTACK_FULL_SPEC
     assert spec.source_kind is loghub.SourceKind.RAW_LINES
     assert spec.line_parser is loghub.parse_openstack_line
     assert spec.raw_names == (
+        "openstack_abnormal.log",
         "openstack_normal1.log",
         "openstack_normal2.log",
-        "openstack_abnormal.log",
     )
     assert [p.name for p in spec.source_paths] == list(spec.raw_names)
     assert all(p.parent == loghub.DATA_DIR for p in spec.source_paths)

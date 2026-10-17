@@ -9,13 +9,18 @@ description: Evidence plan for a MANAGER deciding what to prioritize - rank obse
 Which observed problems deserve attention first, and what should happen next?
 
 ## Evidence to collect (in this order)
-1. **Scope.** If the user named none, use the whole dataset window and say so.
+1. **Scope.** If the user named none, call `list_datasets_tool` and use the
+   dataset's `window_start`..`window_end` (every row, measured on the call) as
+   the whole-dataset window, and say so. Its `levels` show which severities
+   actually occur.
 2. **Measured frequency and severity.** `count_by_category_tool` with type
    `service` (or a team-count tool when available, planned: `count_by_team_tool`)
    over the scope, for every severity level above informational that actually
-   occurs in the data (count by level first if you do not know which levels
-   exist; never assume a level is present or absent). These counts drive the
-   ranking.
+   occurs in the data (the catalog's `levels`, or a count by level, tells you
+   which levels exist; never assume a level is present or absent). These counts drive the
+   ranking. When the question spans several datasets, or asks which dataset
+   needs attention first, `count_by_dataset_tool` gives measured severity counts
+   for each whole local dataset in one call.
 3. **Trend direction.** `compare_periods_tool` (first half vs second half of the
    scope) or `get_trend_tool` for the top two or three candidates, to see which
    problems are growing.

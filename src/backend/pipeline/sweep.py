@@ -20,7 +20,7 @@ honesty rests on saying which stage saw what: a chunk that was profiled and
 discarded was examined, but not read.
 
 **This loop runs inside one tool call.** Per-effort budgets cap *all* tool calls
-at between 4 and 20, to-do writes included, so 1,624 chunks cannot be 1,624
+at between 6 and 22, to-do writes included, so 1,624 chunks cannot be 1,624
 calls. The agent sees two tools -- one that sweeps and one that investigates a
 named chunk -- and the iteration happens here, in Python, reporting progress as
 it goes.

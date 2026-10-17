@@ -1,7 +1,7 @@
 """The two sweep tools.
 
 Only two, and that is the design. The sweep iterates over up to 1,624 chunks,
-but per-effort budgets cap *all* tool calls at between 4 and 20 (to-do writes
+but per-effort budgets cap *all* tool calls at between 6 and 22 (to-do writes
 included), so the iteration cannot be the agent's. It runs in Python inside one
 call; the agent decides whether to sweep and, afterwards, which single chunk is
 worth reading properly.

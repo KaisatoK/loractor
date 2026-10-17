@@ -3,7 +3,7 @@
 The sweep is the one operation whose reasoning would otherwise be invisible. Its
 entire cost -- up to 1,624 chunks, four stages, minutes of wall clock -- happens
 inside a *single* tool call, because per-effort budgets cap all tool calls at
-between 4 and 20. Without reporting from inside that call, the most expensive
+between 6 and 22. Without reporting from inside that call, the most expensive
 thing the system does would also be its most opaque: a long silence, then a
 result with no account of how it was reached.
 

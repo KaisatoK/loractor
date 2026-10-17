@@ -40,6 +40,23 @@ ANSWER_EFFORT_NOTES = {
 #   remote  -- Parquet in object storage, read in place. Costs network and time
 #              in proportion to the time window, and aggregates are approximate.
 TOOL_CATALOG = {
+    "list_datasets_tool": (
+        "TIER metadata. No params. One row per dataset, measured on this call: "
+        "rows, first_timestamp, last_timestamp, span, max_window_seconds, a "
+        "ready window_start/window_end covering every row, and severity levels "
+        "(exact counts on local datasets; declared, uncounted on the remote "
+        "corpus; for otel_slice the window the index was built over). Call it "
+        "FIRST when the user named no time window, so windows and severity "
+        "filters come from the data instead of a guess."
+    ),
+    "count_by_dataset_tool": (
+        "TIER index. Counts log entries per severity in each WHOLE local "
+        "dataset in one query; params: datasets (optional list, default every "
+        "local dataset). No time window: local datasets are counted over every "
+        "row in milliseconds. The remote corpus cannot be counted whole and is "
+        "rejected. Use for a corpus-wide overview or to compare datasets; the "
+        "counts are measured (kind aggregate)."
+    ),
     "get_trend_tool": (
         "TIER index|remote. Counts one known service/entity/event per time "
         "bucket; params: dataset, start_time, end_time, type=(field, exact "

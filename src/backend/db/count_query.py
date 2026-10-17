@@ -19,8 +19,9 @@ import logging
 from psycopg2 import sql
 
 from backend.db import predicates as pred
-from backend.db.connection import bulk_query
-from backend.db.datasets import Dataset, DatasetKind, resolve
+from backend.db.connection import bulk_query, query_runner
+from backend.db.datasets import Dataset, DatasetKind, local_datasets, resolve
+from backend.db.errors import refuse
 from backend.db.pruning import plan_and_guard
 from backend.db.stats import QueryStats
 from backend.db.windows import build_window
@@ -270,3 +271,68 @@ def compare_periods(
         limit=pred.bounded_limit(ds, limit),
     )
     return query, baseline_params + recent_params, stats
+
+
+@query_runner
+def count_by_dataset(
+    datasets: tuple[str, ...] | None = None,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Log entries per severity in each whole dataset, in one statement.
+
+    The brief's "aggregation over the whole base corpus, such as counts by
+    dataset". No time window, deliberately, and therefore only on local datasets
+    with exact counts (:func:`~backend.db.datasets.local_datasets`): counting
+    one of them whole is milliseconds, while the remote corpus cannot be counted
+    whole at all. One ``UNION ALL`` branch per dataset, so the executed SQL is a
+    single statement an answer can show.
+
+    A requested dataset that is not loaded is refused rather than skipped: a
+    corpus-wide total that silently drops a corpus is wrong, not partial.
+    """
+    from backend.db.catalog_query import existing_relations
+
+    countable = {d.id for d in local_datasets()}
+    ids = tuple(dict.fromkeys(datasets)) if datasets else tuple(sorted(countable))
+    resolved = [resolve(i) for i in ids]
+
+    remote = [d.id for d in resolved if d.id not in countable]
+    if remote:
+        raise refuse(
+            f"{', '.join(remote)} cannot be counted whole: only local datasets "
+            "with exact counts can.",
+            "Use count_by_category_tool with a time window on that dataset "
+            f"instead, or count {', '.join(sorted(countable))} here.",
+            code="not_countable_whole",
+        )
+
+    present = {
+        r["table_name"]
+        for r in existing_relations(tuple(d.sources[0] for d in resolved))
+    }
+    missing = [d.id for d in resolved if d.sources[0] not in present]
+    if missing:
+        raise refuse(
+            f"Not loaded: {', '.join(missing)}.",
+            "Load it with `bash ./setup.sh`, or pass `datasets` without it.",
+            code="not_loaded",
+        )
+
+    branches = [
+        sql.SQL(
+            "SELECT {id} AS dataset, {sev} AS severity, count(*) AS count "
+            "FROM {relation} GROUP BY {sev}"
+        ).format(
+            id=sql.Literal(d.id),
+            sev=d.sql_for("severity"),
+            relation=d.scan_relation(),
+        )
+        for d in resolved
+    ]
+    query = sql.SQL("""
+        SELECT dataset, severity, count
+        FROM ({branches}) AS counted
+        ORDER BY dataset, count DESC
+    """).format(branches=sql.SQL(" UNION ALL ").join(branches))
+    stats = QueryStats(dataset=",".join(ids), approximate=False)
+    stats.notes.append("counted over every row of each dataset; no time window")
+    return query, [], stats

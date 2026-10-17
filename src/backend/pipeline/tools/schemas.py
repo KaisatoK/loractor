@@ -227,6 +227,47 @@ class GetTools(_Windowed):
     limit: Annotated[int, Field(ge=1, le=200)] = 50
 
 
+class ListDatasets(BaseModel):
+    """No arguments: the catalog always covers every registered dataset.
+
+    Deliberately not ``_DatasetScoped`` -- its purpose is to tell the agent
+    which datasets exist and what they hold *before* it picks one.
+    """
+
+
+class CountByDataset(BaseModel):
+    """Whole-dataset severity counts across local datasets. No time window."""
+
+    datasets: Annotated[
+        list[str] | None,
+        Field(
+            min_length=1,
+            description=(
+                "Local dataset ids to count, each counted over every row. "
+                "Omit to count every local dataset. Only datasets held in a "
+                "local table with exact counts are accepted."
+            ),
+        ),
+    ] = None
+
+    @field_validator("datasets")
+    @classmethod
+    def _local_datasets(cls, value: list[str] | None) -> list[str] | None:
+        from backend.db.datasets import local_datasets
+
+        if value is None:
+            return value
+        allowed = {d.id for d in local_datasets()}
+        bad = [v for v in value if v not in allowed]
+        if bad:
+            raise ValueError(
+                f"Cannot count {', '.join(bad)} whole. Choose from: "
+                f"{', '.join(sorted(allowed))}; count a remote dataset with "
+                "count_by_category_tool and a time window."
+            )
+        return list(dict.fromkeys(value))
+
+
 class _Sweepable(_DatasetScoped):
     """Argument set for the sweep tools.
 

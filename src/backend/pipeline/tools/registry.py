@@ -7,10 +7,12 @@ import os
 from backend.pipeline.tools import (
     compare_periods_tool as local_compare_periods_tool,
     count_by_category_tool as local_count_by_category_tool,
+    count_by_dataset_tool as local_count_by_dataset_tool,
     get_data_tool as local_get_data_tool,
     get_log_by_line_id_tool as local_get_log_by_line_id_tool,
     get_trend_tool as local_get_trend_tool,
     investigate_chunk_tool as local_investigate_chunk_tool,
+    list_datasets_tool as local_list_datasets_tool,
     search_logs_tool as local_search_logs_tool,
     sweep_chunks_tool as local_sweep_chunks_tool,
     top_in_category_by_service_tool as local_top_in_category_by_service_tool,
@@ -20,7 +22,10 @@ from backend.pipeline.tools.mcp_tools import MCP_DB_TOOLS, list_skills, read_ski
 logger = logging.getLogger(__name__)
 
 LOCAL_DB_TOOLS = [
-    local_count_by_category_tool, local_get_data_tool, local_get_log_by_line_id_tool,
+    # The catalog first: every windowed tool needs a window it can supply.
+    local_list_datasets_tool,
+    local_count_by_category_tool, local_count_by_dataset_tool,
+    local_get_data_tool, local_get_log_by_line_id_tool,
     local_get_trend_tool, local_search_logs_tool, local_top_in_category_by_service_tool,
     local_compare_periods_tool,
     # The sweep pair. Kept on the main agent like the rest: tool_progress only
