@@ -640,3 +640,55 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# Parquet logical-type unit names, mapped onto the registry's vocabulary.
+_PARQUET_TS_UNITS = (
+    ("NANOS", "nanosecond"),
+    ("MICROS", "microsecond"),
+    ("MILLIS", "millisecond"),
+)
+
+
+def verify_ts_precision(dataset: str = "otel_s3", *, parts: int = 5) -> dict:
+    """Check a dataset's declared timestamp precision against its files.
+
+    Worth a dedicated check because the failure mode is so poor: a precision
+    finer than ``microsecond`` that is *not* declared surfaces as
+    ``microsecond must be in 0..999999`` from deep inside the driver, and only
+    once a query happens to SELECT a raw timestamp. On a remote corpus that can
+    be several hundred seconds into the work.
+
+    Samples across the series rather than trusting one file, because the whole
+    point of declaring a precision is that it holds for every part.
+    """
+    from backend.db.datasets import TS_PRECISIONS, resolve
+
+    ds = resolve(dataset)
+    ts_column = ds.field("ts").column
+    urls = list(ds.sources)[:parts] if ds.sources else []
+
+    observed: dict[str, str] = {}
+    with probe_cursor() as cur:
+        for url in urls:
+            cur.execute(
+                "SELECT logical_type FROM parquet_schema(%s) WHERE name = %s",
+                (url, ts_column),
+            )
+            row = cur.fetchone()
+            text = str(row["logical_type"]) if row else ""
+            observed[url.rsplit("/", 1)[-1]] = next(
+                (name for token, name in _PARQUET_TS_UNITS if token in text),
+                "microsecond",
+            )
+
+    units = set(observed.values())
+    return {
+        "dataset": ds.id,
+        "declared": ds.ts_precision,
+        "observed": observed,
+        "consistent": len(units) <= 1,
+        "matches_declaration": units <= {ds.ts_precision},
+        "needs_truncation": ds.ts_needs_truncation,
+        "fractional_digits": TS_PRECISIONS.get(ds.ts_precision),
+    }

@@ -143,6 +143,14 @@ class SweepResult:
     coverage: dict = field(default_factory=dict)
     cursor: int = 0
     notes: tuple[str, ...] = field(default=())
+    sampling: tuple[dict, ...] = field(default=())
+    """What each sampled chunk's sample supports, with its caveat.
+
+    Separate from ``ranked`` because a score is a decision and this is its
+    confidence: the sample is drawn like a quicksort pivot -- cheaply, from a
+    chunk nothing is known about -- and an answer leaning on it has to say so.
+    """
+
     events: tuple[SweepEvent, ...] = field(default=())
     """Every step the sweep took, in order.
 
@@ -163,6 +171,7 @@ class SweepResult:
             "notes": list(self.notes),
             "query_stats": self.stats.as_dict() if self.stats else None,
             "trace": [event.as_dict() for event in self.events],
+            "sampling": list(self.sampling),
         }
 
 
@@ -286,6 +295,7 @@ def sweep(
     collected_stats: list[QueryStats] = []
     notes: list[str] = []
     trace: list[SweepEvent] = []
+    uncertainties: dict[str, triage.SampleUncertainty] = {}
 
     def elapsed() -> float:
         return time.monotonic() - started
@@ -426,6 +436,16 @@ def sweep(
         state.chunks_sampled += 1
         state.elapsed_seconds = elapsed()
 
+        # What the sample actually supports. Computed across windows, so a
+        # chunk whose parts disagree reports a wide range rather than a
+        # confident-looking ratio.
+        uncertainty = triage.sample_uncertainty(
+            list(rows),
+            sample_score.matched_terms or triage.question_terms(question),
+            rows_in_chunk=chunk.num_rows,
+        )
+        uncertainties[chunk.chunk_id] = uncertainty
+
         # The evaluation itself, not just the outcome: the three weighted
         # signals and the words that matched, so a surprising verdict can be
         # understood rather than guessed at.
@@ -437,6 +457,7 @@ def sweep(
             **sample_score.as_dict(),
             rows_read=len(rows),
             reads_message_text=True,
+            uncertainty=uncertainty.as_dict(),
         )
 
     ranked = triage.rank(sampled_scores or scored)
@@ -520,6 +541,10 @@ def sweep(
         **state.as_dict(),
     )
 
+    for chunk_id, u in uncertainties.items():
+        if not u.is_decisive:
+            notes.append(f"{chunk_id}: {u.caveat()}")
+
     coverage = triage.coverage(
         total_chunks=state.chunks_total,
         profiled=state.chunks_profiled,
@@ -541,6 +566,9 @@ def sweep(
         coverage=coverage,
         cursor=cursor,
         notes=tuple(notes),
+        sampling=tuple(
+            {"chunk_id": cid, **u.as_dict()} for cid, u in uncertainties.items()
+        ),
         events=tuple(trace),
     )
 

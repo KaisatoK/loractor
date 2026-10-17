@@ -56,7 +56,11 @@ TOOL_CATALOG = {
         "the user the estimate, then call again with confirm_cost=true. Report "
         "the returned coverage: a profiled chunk was counted, not read. The "
         "result also carries a `trace` of every step and the score behind each "
-        "decision -- cite it when explaining why a particular chunk was read."
+        "decision -- cite it when explaining why a particular chunk was read. "
+        "`sampling` gives each sample's examined fraction and a likely RANGE "
+        "for its match rate: quote the range rather than the single number, "
+        "because a sample of ~0.3% of a chunk in a few windows is a cheap "
+        "guess, not a measurement."
     ),
     "investigate_chunk_tool": (
         "TIER sweep. Reads one named chunk's message text and returns counts, "

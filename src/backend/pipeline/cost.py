@@ -92,6 +92,22 @@ def investigation_cost(tool_results: list[dict] | None) -> dict:
         },
         "approximate_count": sum(1 for q in per_query if q["approximate"]),
         "datasets": datasets,
+        # Timing broken out, so a caller measuring agent performance does not
+        # have to re-derive it from the per-query list.
+        "timing": {
+            "total_ms": total.elapsed_ms,
+            "query_count": len(per_query),
+            "slowest_ms": max((q["elapsed_ms"] for q in per_query), default=0),
+            "slowest_id": max(
+                per_query, key=lambda q: q["elapsed_ms"], default={"id": None}
+            ).get("id"),
+            "mean_ms": round(total.elapsed_ms / max(len(per_query), 1), 1),
+            "rows_per_second": round(
+                total.est_rows_scanned / (total.elapsed_ms / 1000), 1
+            )
+            if total.elapsed_ms and total.est_rows_scanned
+            else 0.0,
+        },
         "note": format_cost_note(per_query, total),
     }
 
@@ -105,14 +121,32 @@ def format_cost_note(per_query: list[dict], total: QueryStats) -> str:
     if not per_query:
         return ""
 
-    parts: list[str] = []
+    # Timing leads, because it is the figure a reader uses to judge whether the
+    # investigation was efficient, and an average hides the shape of the work:
+    # eight fast aggregates and one slow text read average to something that
+    # describes neither.
+    parts: list[str] = [
+        f"{len(per_query)} queries in {total.elapsed_ms / 1000:.2f}s"
+    ]
+
+    slowest = max(per_query, key=lambda q: q["elapsed_ms"])
+    if len(per_query) > 1 and slowest["elapsed_ms"] > 0:
+        share = 100.0 * slowest["elapsed_ms"] / max(total.elapsed_ms, 1)
+        parts.append(
+            f"slowest {slowest['id']} at {slowest['elapsed_ms'] / 1000:.2f}s "
+            f"({share:.0f}% of the total)"
+        )
+
     if total.files_considered:
         parts.append(f"read {total.files_read} of {total.files_considered} files")
     if total.est_rows_scanned:
         parts.append(f"~{total.est_rows_scanned:,} rows scanned")
     if total.est_bytes_read:
         parts.append(f"~{_human_bytes(total.est_bytes_read)}")
-    parts.append(f"{len(per_query)} queries in {total.elapsed_ms / 1000:.1f}s")
+
+    if total.est_rows_scanned and total.elapsed_ms:
+        rate = total.est_rows_scanned / (total.elapsed_ms / 1000)
+        parts.append(f"~{rate:,.0f} rows/s")
 
     approximate = sum(1 for q in per_query if q["approximate"])
     if approximate:
@@ -122,7 +156,7 @@ def format_cost_note(per_query: list[dict], total: QueryStats) -> str:
     if empty:
         parts.append(f"{empty} returned no rows")
 
-    return "Data queried: " + ", ".join(parts) + "."
+    return "Query cost: " + ", ".join(parts) + "."
 
 
 def _human_bytes(num_bytes: int) -> str:

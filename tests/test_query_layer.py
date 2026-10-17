@@ -193,8 +193,34 @@ def test_the_same_builder_renders_each_corpus_own_columns():
 def test_remote_corpus_reads_parquet_in_place():
     query, _, _ = build(db.count_by_field, OTEL_LO, OTEL_HI, dataset="otel_s3")
     rendered = normalized(query)
-    assert "read_parquet([" in rendered
+    assert "read_parquet(" in rendered
     assert "part_000.parquet" in rendered
+
+
+def test_a_single_source_is_passed_as_a_scalar_path():
+    """Not cosmetic: a list argument makes a view over the reader "generic",
+    which disables the fast path an external inverted index needs to
+    materialize columns. With a list the index counts and matches but cannot
+    return a single column value."""
+    query, _, _ = build(db.count_by_field, OTEL_LO, OTEL_HI, dataset="otel_s3")
+    rendered = normalized(query)
+    assert "read_parquet('" in rendered
+    assert "read_parquet([" not in rendered
+
+
+def test_several_sources_are_passed_as_a_list():
+    """The widening mechanism: HTTPS gives no bucket listing, so a wider
+    window means more entries rather than a glob."""
+    from dataclasses import replace
+
+    from backend.db.datasets import resolve
+    from sql_render import render
+
+    two = replace(
+        resolve("otel_s3"),
+        sources=("https://example.invalid/a.parquet", "https://example.invalid/b.parquet"),
+    )
+    assert "read_parquet([" in render(two.scan_relation())
 
 
 def test_timestamp_cast_follows_the_dataset():

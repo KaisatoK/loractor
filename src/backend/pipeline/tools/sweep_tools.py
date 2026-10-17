@@ -54,6 +54,12 @@ def sweep_chunks_tool(
     The result also carries a `trace`: every stage, every chunk's score and the
     three signals behind it, and the reason any chunk was read in full. Use it
     to explain *why* the evidence you have is the evidence you have.
+
+    And it carries `sampling`: for each sampled chunk, the fraction examined and
+    a likely range for the match rate. Those samples are cheap guesses at chunks
+    nothing was known about -- roughly 0.3% of a chunk, in a handful of windows
+    -- so quote the range, not the point estimate, and say when the windows
+    disagreed.
     """
     budget = SweepBudget(max_promotions=max_promotions)
 
@@ -157,6 +163,9 @@ def _as_rows(result):
             # How the sweep reached its conclusions, step by step. The model is
             # told to report coverage; this is what lets a human check it.
             "trace": payload["trace"],
+            # What each sample supports. The sample is a cheap guess at a chunk
+            # nothing is known about, so its confidence travels with it.
+            "sampling": payload["sampling"],
         }
     ]
     rows += [{"ranked_chunk": entry} for entry in payload["ranked"]]

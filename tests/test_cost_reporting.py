@@ -111,13 +111,48 @@ def test_datasets_queried_are_listed():
 
 
 # --- The note that reaches the answer ---------------------------------------
-def test_the_cost_note_states_volume_time_and_approximation():
+def test_the_cost_note_leads_with_timing():
+    """Timing first, because it is what a reader uses to judge efficiency."""
     note = investigation_cost([result("R1"), result("R2")])["note"]
-    assert note.startswith("Data queried:")
+    assert note.startswith("Query cost: 2 queries in ")
     assert "rows scanned" in note
     assert "MiB" in note
-    assert "2 queries" in note
     assert "approximate" in note
+
+
+def test_the_note_names_the_slowest_query():
+    """An average hides the shape of the work: eight fast aggregates and one
+    slow text read average to something that describes neither."""
+    note = investigation_cost(
+        [result("R1", elapsed_ms=50), result("R2", elapsed_ms=5_000)]
+    )["note"]
+    assert "slowest R2" in note
+    assert "% of the total" in note
+
+
+def test_a_single_query_needs_no_slowest_breakdown():
+    note = investigation_cost([result("R1")])["note"]
+    assert "slowest" not in note
+
+
+def test_the_note_reports_a_throughput_rate():
+    """So "slow" can be told apart from "a lot of data"."""
+    note = investigation_cost([result("R1")])["note"]
+    assert "rows/s" in note
+
+
+def test_timing_is_exposed_structurally_for_measurement():
+    """A caller measuring agent performance should not have to parse prose."""
+    timing = investigation_cost(
+        [result("R1", elapsed_ms=100), result("R2", elapsed_ms=900)]
+    )["timing"]
+
+    assert timing["query_count"] == 2
+    assert timing["total_ms"] == 1_000
+    assert timing["slowest_ms"] == 900
+    assert timing["slowest_id"] == "R2"
+    assert timing["mean_ms"] == 500.0
+    assert timing["rows_per_second"] > 0
 
 
 def test_the_note_mentions_queries_that_returned_nothing():

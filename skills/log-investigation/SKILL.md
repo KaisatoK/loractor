@@ -115,3 +115,21 @@ Use it. "Chunk 412 was read because 6 of 8 sampled rows matched 'charge card'
 and its error density was 31%" is an explanation; "I searched the corpus" is
 not, and is also false. When a sweep found little, the trace is what
 distinguishes *nothing was there* from *nothing was looked at closely*.
+
+### Sampling is a guess, and must read like one
+
+Stage 3 samples roughly 0.3% of a chunk, as a handful of windows of consecutive
+rows. That is a deliberate choice — like picking a quicksort pivot, it is cheap
+and makes no claim to be representative — but it means a sampled rate is an
+estimate with real uncertainty, and two things follow.
+
+Consecutive log lines are correlated: one request or one error cascade emits
+many. So 2,000 sampled rows from 8 windows carry about 8 independent
+observations, not 2,000, and the honest uncertainty comes from how much the
+windows disagree with each other.
+
+Report the range, never the bare ratio. "Between a quarter and a half of
+sampled lines in that window mentioned card charging" is defensible. "23% of the
+chunk was card-charge failures" is not — it was never measured. When the tool
+reports the windows disagreed, say that the sample was inconclusive rather than
+quoting its midpoint.

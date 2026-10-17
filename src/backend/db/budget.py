@@ -191,6 +191,41 @@ Findings that shaped the design
     and then refuse the next promotion for lack of room. Teardown is now
     unconditional.
 
+21. **The corpus can be indexed in place, and the build cost is FIXED rather
+    than per row group.** An inverted index built over a view on
+    ``read_parquet`` leaves the rows in object storage and stores only the
+    postings. Measured:
+
+    ====  =========  ============  ======
+    rgs   build      rows          B/row
+    ====  =========  ============  ======
+    1     468.3 s        72,678    60.0
+    2     464.0 s       180,269    60.1
+    4     467.8 s       331,425    45.8
+    15    465.3 s     1,401,135    44.8
+    ====  =========  ============  ======
+
+    Fifteen row groups cost the same as one, and postings compress *better* at
+    scale. The cost is a fixed per-build scan that parallelises across groups.
+    Against materializing at ~660 s *per* row group: 1.4M rows in 465 s is
+    0.33 ms/row where the slice managed 8.8 ms/row -- **~27x more efficient, a
+    third of the disk, and nothing downloaded**. The searchable window can
+    therefore be an order of magnitude wider than the materialized design
+    allowed, for the same wall clock.
+
+    The cost is search latency: a match yields a row identity and the row is
+    re-read from object storage, so a query is ~1.7 s against ~20 ms on a
+    copied table.
+
+22. **A one-element file list silently disables column materialization.**
+    ``read_parquet(['url'])`` and ``read_parquet('url')`` behave identically for
+    ordinary queries, but a *list* makes a view over the reader "generic", and a
+    generic view's index can count and match while every attempt to select a
+    column fails with *materialising real columns from this view-backed inverted
+    index is not yet supported*. So the index worked and was useless -- it could
+    say how many rows matched but not show one. ``scan_relation()`` now emits a
+    scalar path whenever there is exactly one source.
+
 11. **``statement_timeout`` through libpq ``options`` is silently ignored.** A
     connection opened with ``-c statement_timeout=30000`` reports ``0``, while
     ``SET LOCAL statement_timeout`` inside the transaction reports the value set.

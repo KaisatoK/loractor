@@ -249,14 +249,23 @@ def sample_chunk(
     params: list = []
     severity_clause, severity_params = pred.severity_filter(ds, severity)
 
-    for window in slices:
+    # Each row is tagged with the window it came from, because this is a
+    # *cluster* sample rather than a uniform one: 250 consecutive rows from each
+    # of N points in the chunk. Consecutive log lines are strongly correlated --
+    # one request, one error cascade -- so the effective number of independent
+    # observations is nearer the window count than the row count. Keeping the
+    # tag is what lets the uncertainty be computed across clusters instead of
+    # being overstated from the raw row count.
+    for index, window in enumerate(slices):
         clause, clause_params = pred.where(
             pred.ts_filter(ds, window), (severity_clause, severity_params)
         )
         branches.append(
             sql.SQL("""
-                (SELECT {columns} FROM {relation} {clause} LIMIT {n})
+                (SELECT {marker} AS sample_window, {columns}
+                 FROM {relation} {clause} LIMIT {n})
             """).format(
+                marker=sql.Literal(index),
                 columns=columns,
                 relation=ds.scan_relation(),
                 clause=clause,

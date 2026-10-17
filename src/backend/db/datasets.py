@@ -79,6 +79,17 @@ class DatasetKind(StrEnum):
     """A file loaded into a local table by a loader (loghub datasets)."""
 
 
+# Fractional digits each timestamp precision carries. Python's ``datetime`` tops
+# out at six, which is the line anything finer has to be truncated to before it
+# can cross the driver boundary.
+TS_PRECISIONS: dict[str, int] = {
+    "second": 0,
+    "millisecond": 3,
+    "microsecond": 6,
+    "nanosecond": 9,
+}
+
+
 class Capability(StrEnum):
     """What a dataset supports. Checked before a tool offers a feature."""
 
@@ -177,15 +188,24 @@ class Dataset:
     ts_cast: str = "timestamp"
     """The cast applied to timestamp bounds (``timestamp`` or ``timestamptz``)."""
 
-    ts_nanoseconds: bool = False
-    """Whether the timestamp column carries nanosecond precision.
+    ts_precision: str = "microsecond"
+    """Precision of the timestamp column: a value from :data:`TS_PRECISIONS`.
 
-    The OTel corpus does, and it cannot be handed to the Python driver as-is:
-    a value like ``2025-09-23 00:00:01.116886762+00`` makes psycopg2 read
-    116,886,762 as a microsecond field and raise *microsecond must be in
-    0..999999*. Comparisons and aggregates are unaffected, which is why this
-    went unnoticed until a query first SELECTed a raw remote timestamp -- so
-    the truncation belongs on the way out, not on the column.
+    Declared per corpus rather than assumed, and **verifiable** against the
+    source -- :func:`backend.db.probe.verify_ts_precision` reads the Parquet
+    logical type and reports a mismatch instead of letting it surface as a
+    driver error hundreds of seconds into a query.
+
+    It matters because anything finer than ``microsecond`` cannot be handed to
+    the Python driver: a value like ``2025-09-23 00:00:01.116886762+00`` makes
+    psycopg2 read 116,886,762 as a microsecond field and raise *microsecond
+    must be in 0..999999*. Comparisons and aggregates are unaffected, which is
+    why it went unnoticed until a query first SELECTed a raw remote timestamp,
+    so the truncation belongs on the way out rather than on the column.
+
+    Measured on the OTel corpus: parts 0, 1, 7, 25 and 49 all report
+    ``TimestampType(isAdjustedToUTC=1, unit=NANOS)`` with an identical
+    26-entry schema, so one declaration covers the series.
     """
 
     index_name: str | None = None
@@ -223,6 +243,14 @@ class Dataset:
                 f"Dataset '{self.id}' has no '{name}' field. Available: {available}."
             ) from None
 
+    @property
+    def ts_needs_truncation(self) -> bool:
+        """Whether returning this timestamp to the client needs truncating.
+
+        True for any precision finer than what Python's ``datetime`` can hold.
+        """
+        return TS_PRECISIONS.get(self.ts_precision, 6) > 6
+
     def sql_for(self, name: str) -> sql.Composable:
         """A canonical field as SQL, for use in SELECT/WHERE/GROUP BY."""
         return self.field(name).as_sql()
@@ -236,7 +264,7 @@ class Dataset:
         comparisons and grouping, where full precision is both harmless and
         wanted.
         """
-        if name == "ts" and self.ts_nanoseconds:
+        if name == "ts" and self.ts_needs_truncation:
             return sql.SQL("date_trunc('microsecond', {col})").format(
                 col=self.sql_for(name)
             )
@@ -256,6 +284,17 @@ class Dataset:
         S3, so a wider window means more entries here.
         """
         if self.kind is DatasetKind.REMOTE_PARQUET:
+            # A single source is passed as a scalar path, not a one-element
+            # list, and the difference is not cosmetic: a *list* argument makes
+            # a view over the reader "generic", which disables the fast path an
+            # external inverted index needs to materialize columns. With a list
+            # the index can still count and match, but any query selecting a
+            # column fails with "materialising real columns from this
+            # view-backed inverted index is not yet supported".
+            if len(self.sources) == 1:
+                return sql.SQL("read_parquet({url})").format(
+                    url=sql.Literal(self.sources[0])
+                )
             urls = sql.SQL(", ").join(sql.Literal(u) for u in self.sources)
             return sql.SQL("read_parquet([{urls}])").format(urls=urls)
         return sql.Identifier(self.sources[0])
@@ -469,7 +508,8 @@ OTEL_S3 = (
         capabilities=frozenset({Capability.TEMPLATES, Capability.CHUNK_SWEEP}),
         severity_values=OTEL_SEVERITY_VALUES,
         ts_cast="timestamptz",
-        ts_nanoseconds=True,  # remote Parquet is TIMESTAMPTZ_NS
+        # Verified against parts 0, 1, 7, 25 and 49: TIMESTAMPTZ_NS throughout.
+        ts_precision="nanosecond",
         
         index_name=None,
         token_index_name=None,

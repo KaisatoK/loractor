@@ -342,3 +342,150 @@ def coverage(
             "chunks that were profiled but not searched."
         ),
     }
+
+
+# --- How much to trust a sample ---------------------------------------------
+#
+# The sample is drawn like a quicksort pivot: cheaply, from a chunk nothing is
+# yet known about, and with no claim to be representative. That is a reasonable
+# way to spend a fixed budget, but it has to be *said* rather than papered over
+# by quoting "467 of 2000 rows matched" as though it were a measurement of the
+# chunk.
+#
+# Two things make the raw ratio misleading:
+#
+# * it is a **cluster** sample -- 250 consecutive rows from each of 8 points --
+#   and consecutive log lines are strongly correlated, since one request or one
+#   error cascade emits many. So the independent observations number about 8,
+#   not 2,000, and the spread *between* windows is the only honest basis for a
+#   confidence interval.
+# * it covers ~0.33% of a chunk, so a pattern confined to the unsampled 99.67%
+#   is invisible to it.
+
+
+@dataclass(frozen=True)
+class SampleUncertainty:
+    """What a chunk sample does and does not support concluding."""
+
+    rows_sampled: int
+    rows_in_chunk: int
+    windows: int
+    hit_rate: float
+    """Fraction of sampled rows matching the question, pooled."""
+
+    window_rates: tuple[float, ...] = ()
+    """Per-window hit rates. The spread between these is the real uncertainty."""
+
+    standard_error: float = 0.0
+    """Standard error of the mean *across windows*, not across rows."""
+
+    @property
+    def sampled_fraction(self) -> float:
+        return self.rows_sampled / self.rows_in_chunk if self.rows_in_chunk else 0.0
+
+    @property
+    def interval(self) -> tuple[float, float]:
+        """Approximate 95% interval for the hit rate, clamped to [0, 1].
+
+        Two standard errors, computed between windows. Wide on purpose: with
+        eight clusters it genuinely is.
+        """
+        margin = 2.0 * self.standard_error
+        return (
+            max(0.0, self.hit_rate - margin),
+            min(1.0, self.hit_rate + margin),
+        )
+
+    @property
+    def is_decisive(self) -> bool:
+        """Whether the windows agree enough to lean on the estimate.
+
+        False when the interval spans more than half its own width either side
+        -- i.e. the windows disagree about what the chunk contains, which is
+        exactly when a single ratio would mislead.
+        """
+        low, high = self.interval
+        return self.hit_rate > 0 and (high - low) < self.hit_rate
+
+    def as_dict(self) -> dict:
+        low, high = self.interval
+        return {
+            "rows_sampled": self.rows_sampled,
+            "rows_in_chunk": self.rows_in_chunk,
+            "sampled_fraction": round(self.sampled_fraction, 6),
+            "windows": self.windows,
+            "hit_rate": round(self.hit_rate, 4),
+            "hit_rate_interval": [round(low, 4), round(high, 4)],
+            "window_rates": [round(r, 4) for r in self.window_rates],
+            "standard_error": round(self.standard_error, 4),
+            "decisive": self.is_decisive,
+            "caveat": self.caveat(),
+        }
+
+    def caveat(self) -> str:
+        """The sentence an answer must carry when it leans on this sample."""
+        low, high = self.interval
+        spread = (
+            f"{low:.0%}-{high:.0%}" if self.standard_error else f"{self.hit_rate:.0%}"
+        )
+        return (
+            f"Sampled {self.rows_sampled:,} of {self.rows_in_chunk:,} rows "
+            f"({self.sampled_fraction:.2%}) as {self.windows} spread windows. "
+            f"Match rate {self.hit_rate:.0%}, likely range {spread}. "
+            "Consecutive log lines are correlated, so this rests on about "
+            f"{self.windows} independent observations rather than "
+            f"{self.rows_sampled:,}"
+            + (
+                "; the windows disagree, so treat the rate as indicative only."
+                if not self.is_decisive
+                else "."
+            )
+        )
+
+
+def sample_uncertainty(
+    sample_rows: list[dict],
+    terms: list[str] | tuple[str, ...],
+    *,
+    rows_in_chunk: int,
+) -> SampleUncertainty:
+    """Measure how much the sample actually supports.
+
+    Hit rates are computed per window and then averaged, so the reported
+    uncertainty reflects disagreement between parts of the chunk. Pooling all
+    rows together would produce a tight interval around a number that one
+    unusual window could have dominated.
+    """
+    by_window: dict[object, list[dict]] = {}
+    for row in sample_rows:
+        by_window.setdefault(row.get("sample_window", 0), []).append(row)
+
+    lowered = [t.lower() for t in terms]
+
+    def hits(rows: list[dict]) -> float:
+        if not rows:
+            return 0.0
+        matched = sum(
+            1
+            for row in rows
+            if any(term in str(row.get("message", "")).lower() for term in lowered)
+        )
+        return matched / len(rows)
+
+    rates = tuple(hits(rows) for rows in by_window.values())
+    pooled = hits(sample_rows)
+
+    error = 0.0
+    if len(rates) > 1:
+        mean = sum(rates) / len(rates)
+        variance = sum((r - mean) ** 2 for r in rates) / (len(rates) - 1)
+        error = (variance / len(rates)) ** 0.5
+
+    return SampleUncertainty(
+        rows_sampled=len(sample_rows),
+        rows_in_chunk=rows_in_chunk,
+        windows=len(rates),
+        hit_rate=pooled,
+        window_rates=rates,
+        standard_error=error,
+    )
