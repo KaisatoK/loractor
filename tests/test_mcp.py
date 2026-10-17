@@ -14,6 +14,9 @@ def test_mcp_server_lists_tools_and_skills():
         async with Client(server.mcp) as client:
             names = {tool.name for tool in await client.list_tools()}
             assert {"search_logs_tool", "read_skill", "list_skills"} <= names
+            # The index-lifecycle tool must be served too, or an MCP-connected
+            # agent cannot tell whether OTel full-text search is available.
+            assert "otel_index_tool" in names
             assert "get_log_templates_tool" not in names
             # Auto-complete is a chat-box feature served in-process, not an
             # evidence tool, so the MCP service does not offer it.

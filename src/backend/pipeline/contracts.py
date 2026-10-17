@@ -35,8 +35,8 @@ class ToolStatus(BaseModel):
     parameters: dict[str, Any] = Field(
         description="The parameters supplied to the tool invocation."
     )
-    status: Literal["success", "failure"] = Field(
-        description="Whether the tool invocation completed successfully."
+    status: Literal["success", "failure", "refused"] = Field(
+        description="Whether the tool succeeded, was refused before execution, or failed unexpectedly."
     )
     error_message: str | None = Field(
         default=None,

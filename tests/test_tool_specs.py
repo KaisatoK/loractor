@@ -147,9 +147,16 @@ def test_annotations_say_what_each_tool_does_to_the_world():
         assert ann.read_only_hint is spec.read_only
         assert ann.idempotent_hint is True
         assert ann.open_world_hint is spec.open_world
-    # Only the sweep pair builds an index; clients should ask before running them.
+    # The tools that build or drop an index on disk; clients should ask before
+    # running them. `otel_index_tool` joined the sweep pair when the in-place
+    # OTel index became buildable on request.
+    #
+    # `search_logs_tool` stays read-only even though a search on otel_slice can
+    # build that index: the hint is per tool, not per call, and flagging every
+    # search -- including the millisecond local ones that build nothing -- would
+    # misdescribe the common case. Its description carries the warning instead.
     assert {s.name for s in AVAILABLE if not s.read_only} == {
-        "sweep_chunks_tool", "investigate_chunk_tool",
+        "sweep_chunks_tool", "investigate_chunk_tool", "otel_index_tool",
     }
     assert tools["count_by_dataset_tool"].annotations.open_world_hint is False
 

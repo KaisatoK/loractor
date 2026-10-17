@@ -60,6 +60,7 @@ from backend.db import (
     list_datasets,
     top_by_field,
 )
+from backend.db import external
 from backend.db.query import search_with_total
 from backend.db.stats import QueryResult, QueryStats, merge
 from backend.pipeline.sweep import (
@@ -309,10 +310,44 @@ def _run_count_by_category(args, progress):
 
 
 def _run_search(args, progress):
+    # On the in-place index the requested window is indexed first when the
+    # current index does not already cover it, so a search there either answers
+    # or explains itself rather than failing for a missing index. A build takes
+    # minutes and reports progress while it runs; a covered window costs
+    # nothing.
+    if args["dataset"] == "otel_slice":
+        external.ensure_searchable(
+            args["start_time"], args["end_time"], progress=progress
+        )
     return search_with_total(
         args["query_text"], args["dataset"], args["category"], args["limit"],
         args["start_time"], args["end_time"],
     )
+
+
+def _run_otel_index(args, progress):
+    """Report coverage, index a window, or release the index."""
+    if args["release"]:
+        return QueryResult([external.release_external_index()], stats=None)
+    if args["start_time"] and args["end_time"]:
+        return QueryResult(
+            [external.ensure_external_index(
+                args["start_time"], args["end_time"], progress=progress,
+            )],
+            stats=None,
+        )
+    return QueryResult([{"built": False, **external.index_coverage()}], stats=None)
+
+
+def _otel_index_operation(args: dict) -> str:
+    if args["release"]:
+        return "release the in-place OTel index and reclaim its disk"
+    if args["start_time"] and args["end_time"]:
+        return (
+            f"index the OTel corpus in place from {args['start_time']} "
+            f"to {args['end_time']}"
+        )
+    return "report what the in-place OTel index covers"
 
 
 def _run_line_id(args, progress):
@@ -746,7 +781,11 @@ SPECS: tuple[ToolSpec, ...] = (
             "TIER index ONLY. Searches message text and ranks by relevance; "
             "params: dataset, query_text, category, limit, start_time/end_time "
             "(optional, both or neither). Requires an indexed dataset -- it is "
-            "refused on the raw remote corpus, which has no index. Returns "
+            "refused on the raw remote corpus, which has no index. On otel_slice "
+            "the window you give is indexed automatically when the in-place "
+            "index does not already cover it, which takes MINUTES, so narrow it "
+            "with aggregates first; a window already covered costs nothing. "
+            "Returns "
             "example rows plus total_matches: every row matching the same "
             "words, severity and window, so the answer can say 'n shown of "
             "total_matches'. Use to read the actual log lines once a window is "
@@ -760,6 +799,62 @@ SPECS: tuple[ToolSpec, ...] = (
         filters=lambda a: search_filters(
             a["query_text"], a["category"], a["start_time"], a["end_time"]
         ),
+        # A search on otel_slice indexes its window when the in-place index does
+        # not cover it, so this call can run for minutes and must be able to
+        # report while it does. The default 45s timeout would abort the build.
+        reports_progress=True,
+        timeout=None,
+    ),
+    ToolSpec(
+        name="otel_index_tool",
+        title="Manage the in-place OTel index",
+        description=(
+            "Report what the in-place OTel full-text index covers, index a time "
+            "window so it can be searched, or release the index and reclaim its "
+            "disk. The remote OTel corpus is only searchable by text through an "
+            "inverted index built in place over its Parquet files (dataset "
+            "otel_slice), and that index covers one window at a time. You rarely "
+            "need this tool: search_logs_tool on otel_slice indexes the window it "
+            "was given automatically. Use it to see what is searchable now, to "
+            "build a window ahead of several searches, or to give the disk back. "
+            "With no arguments it builds nothing. Returns kind=catalog, one row: "
+            "exists, window_start, window_end, severities, covers, index_bytes "
+            "and built; a completed build adds build_seconds, indexed_rows, "
+            "bytes, reclaimed_bytes (what dropping the previous index returned) "
+            "and the memory_ceiling it ran under; a release returns released, "
+            "freed_bytes and db_bytes. A build takes MINUTES and replaces the "
+            "previous index, so only one index's worth of disk is ever held, and "
+            "after a release the next uncovered search has to rebuild. exists "
+            "false means nothing is searchable on otel_slice yet."
+        ),
+        kind="catalog",
+        catalog=(
+            "TIER index lifecycle. Reports what the in-place OTel index covers, "
+            "indexes a window, or releases it; params: start_time, end_time "
+            "(both or neither), release. Searching otel_slice already indexes "
+            "its own window, so reach for this to check what is searchable, to "
+            "build a window before several searches, or to return the disk. A "
+            "build takes MINUTES, has a flat cost (a wider window is no dearer) "
+            "and replaces the previous index; a covered window costs nothing. "
+            "release=true frees the disk but makes the next uncovered search "
+            "rebuild."
+        ),
+        args_model=schemas.OtelIndex,
+        run=_run_otel_index,
+        operation=_otel_index_operation,
+        filters=lambda a: {
+            "start_time": a["start_time"], "end_time": a["end_time"],
+            "release": a["release"] or None,
+        },
+        dataset_of=lambda a: "otel_slice",
+        limit_of=lambda a: None,
+        complete=True,
+        # A build runs for minutes and reports from inside itself, and it
+        # creates or drops an index on disk, so it is not read-only and takes
+        # no call timeout.
+        reports_progress=True,
+        read_only=False,
+        timeout=None,
     ),
     ToolSpec(
         name="top_in_category_by_service_tool",

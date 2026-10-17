@@ -57,7 +57,11 @@ count, then search inside it.
    aggregate on the remote corpus to find the window, then search `otel_slice`
    to read lines. That index is built *in place* over the same Parquet files:
    nothing is copied, and each match is re-read from object storage, so expect
-   about a second per search rather than milliseconds.
+   about a second per search rather than milliseconds. The window you search is
+   indexed automatically when the current index does not already cover it —
+   that build takes **minutes**, so narrow the window with aggregates first
+   rather than indexing a wide one. A window already covered costs nothing, and
+   `otel_index_tool` reports what is covered today.
 4. **Discover filter values before filtering.** `get_data_tool` returns a
    field's most common values with counts, ranked by volume. Do not guess a
    service name.

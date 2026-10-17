@@ -37,7 +37,10 @@ Two details worth knowing, both from the documentation and confirmed here:
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -178,6 +181,61 @@ def plan_external_index(
     )
 
 
+_SIZE_UNITS = {
+    "b": 1, "kb": 1000, "mb": 1000**2, "gb": 1000**3, "tb": 1000**4,
+    "kib": 1024, "mib": 1024**2, "gib": 1024**3, "tib": 1024**4,
+}
+
+
+def parse_byte_size(text: str) -> int | None:
+    """Bytes from a size as SereneDB reports it (``5.7 GiB``), else ``None``."""
+    match = re.fullmatch(
+        r"\s*([0-9]*\.?[0-9]+)\s*([KMGT]?i?B|B)?\s*", str(text), re.IGNORECASE
+    )
+    if not match:
+        return None
+    unit = (match.group(2) or "B").lower()
+    if unit not in _SIZE_UNITS:
+        return None
+    return int(float(match.group(1)) * _SIZE_UNITS[unit])
+
+
+def hold_memory_ceiling() -> dict:
+    """Hold the server to the budgeted memory ceiling before a build.
+
+    ``memory_limit`` is global and does **not** survive a container restart, and
+    a restarted SereneDB came back at 5.7 GiB -- the very value the budget
+    records as the cause of three OOM kills. Building the in-place index is the
+    operation that breaches it: two of three builds in one session were killed
+    mid-``CREATE INDEX``, each time taking the instance down and changing its
+    host port.
+
+    So the ceiling is applied here rather than left to an operator who has no
+    way of knowing the container bounced. A ceiling the planner respects turns
+    an out-of-memory *crash* into a failed query, which the caller can report.
+    A limit already at or below the budget is left alone, so a deliberately
+    tighter setting is never raised.
+    """
+    from backend.db.connection import current_memory_limit, set_global_memory_limit
+
+    budget_bytes = BUDGET.memory_limit_bytes
+    try:
+        before = current_memory_limit()
+        current = parse_byte_size(before)
+        if current is not None and current <= budget_bytes:
+            return {"changed": False, "memory_limit": before}
+        applied = set_global_memory_limit()
+    except Exception as error:  # noqa: BLE001 -- never block a build on this
+        logger.warning("Could not read or set the SereneDB memory ceiling: %s", error)
+        return {"changed": False, "memory_limit": None, "error": str(error)}
+    logger.warning(
+        "Lowered the SereneDB memory ceiling from %s to %s before the index "
+        "build (budget %.0f MiB); it reverts when the container restarts.",
+        before, applied, budget_bytes / (1024 * 1024),
+    )
+    return {"changed": True, "memory_limit": applied, "previous": before}
+
+
 def _cursor():
     from backend.db.probe import probe_cursor
 
@@ -211,10 +269,15 @@ def build_external_index(
     )
 
     with _cursor() as cur:
+        # The index being replaced is dropped before the new one is created, so
+        # its bytes are credited back here. Charging the cap for both at once
+        # refused builds for space the build itself was about to free.
+        reclaimable = _recorded_index_bytes(cur)
+        before_drop = _db_bytes(cur)
         verdict = fits(
             plan.estimated_bytes,
             dataset_id="otel_slice",
-            current_db_bytes=_db_bytes(cur),
+            current_db_bytes=before_drop - reclaimable,
         )
         if not verdict.ok:
             raise refuse(
@@ -229,9 +292,18 @@ def build_external_index(
             "budget": verdict.reason,
             "dry_run": dry_run,
             "copies_data": False,
+            "reclaimable_bytes": reclaimable,
         }
         if dry_run:
             return report
+
+        ceiling = hold_memory_ceiling()
+        report["memory_ceiling"] = ceiling.get("memory_limit")
+        if ceiling.get("changed") and progress is not None:
+            progress(
+                f"Lowered the database memory ceiling to "
+                f"{ceiling['memory_limit']} for the build."
+            )
 
         if progress is not None:
             progress(
@@ -245,6 +317,10 @@ def build_external_index(
         # one does not report a negative size.
         cur.execute("VACUUM")
         baseline = _db_bytes(cur)
+        # What dropping the previous index actually returned, measured rather
+        # than assumed: only one index exists at a time, so this is the peak
+        # the build would otherwise have added on top of itself.
+        report["reclaimed_bytes"] = max(0, before_drop - baseline)
         ensure_dictionaries(cur)
 
         severity_list = sql.SQL(", ").join(
@@ -288,8 +364,8 @@ def build_external_index(
             )
         )
         rows = int(cur.fetchone()["n"])
-        _record_build(cur, plan, rows)
         built = _db_bytes(cur)
+        _record_build(cur, plan, rows, index_bytes=built - baseline)
 
         report["rows"] = rows
         report["bytes"] = built - baseline
@@ -303,12 +379,16 @@ def build_external_index(
 
 
 def record_build_statements(
-    plan: ExternalIndexPlan, rows: int
+    plan: ExternalIndexPlan, rows: int, index_bytes: int = 0
 ) -> list[tuple[sql.Composable, tuple]]:
     """The statements that (re)write the one-row build record.
 
     Severities are stored comma-joined and the bounds as the plan's own text, so
     the record reads back exactly as the window was asked for.
+
+    ``index_bytes`` is the disk the build measured. It is kept because SereneDB
+    will not size an external index on request, and without it a replacing
+    build cannot credit back the space it is about to free.
     """
     meta = sql.Identifier(META_TABLE)
     return [
@@ -317,14 +397,16 @@ def record_build_statements(
             sql.SQL(
                 "CREATE TABLE {t} (window_start TEXT NOT NULL, "
                 "window_end TEXT NOT NULL, severities TEXT NOT NULL, "
-                "indexed_rows BIGINT NOT NULL, built_at TEXT NOT NULL)"
+                "indexed_rows BIGINT NOT NULL, built_at TEXT NOT NULL, "
+                "index_bytes BIGINT NOT NULL)"
             ).format(t=meta),
             (),
         ),
         (
             sql.SQL(
                 "INSERT INTO {t} (window_start, window_end, severities, "
-                "indexed_rows, built_at) VALUES (%s, %s, %s, %s, %s)"
+                "indexed_rows, built_at, index_bytes) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
             ).format(t=meta),
             (
                 plan.start,
@@ -332,13 +414,15 @@ def record_build_statements(
                 ",".join(plan.severities),
                 rows,
                 time.strftime("%Y-%m-%d %H:%M:%S+00", time.gmtime()),
+                max(0, int(index_bytes)),
             ),
         ),
     ]
 
 
-def _record_build(cur, plan: ExternalIndexPlan, rows: int) -> None:
-    for statement, params in record_build_statements(plan, rows):
+def _record_build(cur, plan: ExternalIndexPlan, rows: int,
+                  *, index_bytes: int = 0) -> None:
+    for statement, params in record_build_statements(plan, rows, index_bytes):
         cur.execute(statement, params or None)
 
 
@@ -413,3 +497,223 @@ def external_index_status() -> dict:
             "copied table but nothing was downloaded."
         ),
     }
+
+
+# --- Keeping the index in step with what is being searched --------------------
+# The index is built over a window (see ``build_external_index``), and the
+# window it covers is recorded in ``META_TABLE``. A search is therefore only
+# answerable from the index when its window falls inside that one, so the search
+# path asks for coverage first and builds when it is missing.
+#
+# There is no effort gate and no cost confirmation here, deliberately: a search
+# on ``otel_slice`` that cannot be answered is worth less than the minutes the
+# build costs, and the previous gating meant the agent discovered the cost by
+# failing. Builds are serialized so two concurrent searches cannot index at
+# once.
+_BUILD_LOCK = threading.Lock()
+
+
+def _as_utc(value: str) -> dt.datetime:
+    """Parse a window bound, reading a naive one as UTC.
+
+    Every session is pinned to UTC (``connection.set_session_time_zone``), and
+    the build record stores the bounds as the text they were asked for, so a
+    naive bound and an aware one must still compare.
+    """
+    parsed = dt.datetime.fromisoformat(str(value).strip().replace(" ", "T"))
+    return parsed.replace(tzinfo=dt.timezone.utc) if parsed.tzinfo is None else parsed
+
+
+def _index_present(cur) -> bool:
+    """Whether the inverted index itself exists, not merely its view.
+
+    SereneDB does not expose an external index to ``pg_relation_size`` or
+    ``information_schema``, so it is probed by name. The view outliving the
+    index is a real state -- a build creates the view first and a drop can
+    leave it behind -- and treating the view as proof of an index let a search
+    run against a relation with nothing indexed. ``probe_cursor`` is
+    autocommit, so the failed probe does not poison a transaction and needs no
+    transaction-scoped savepoint of the kind SereneDB rejects.
+    """
+    try:
+        cur.execute(
+            sql.SQL("SELECT count(*) AS n FROM {idx}").format(
+                idx=sql.Identifier(INDEX_NAME)
+            )
+        )
+        cur.fetchone()
+        return True
+    except Exception:  # noqa: BLE001 -- absence is the answer, not an error
+        return False
+
+
+def _recorded_index_bytes(cur) -> int:
+    """Disk the current index measured at build time, or 0 when unknown.
+
+    Stored in the build record because SereneDB will not size an external
+    index on request. It is what a replacing build may credit back: the old
+    index is dropped before the new one is created, so charging the budget for
+    both at once would refuse a build for space it is about to free.
+    """
+    try:
+        cur.execute(
+            sql.SQL("SELECT index_bytes FROM {t} LIMIT 1").format(
+                t=sql.Identifier(META_TABLE)
+            )
+        )
+        row = cur.fetchone()
+    except Exception:  # noqa: BLE001 -- no record, or one written before this column
+        return 0
+    return int(row["index_bytes"] or 0) if row else 0
+
+
+def covers_window(start: str | None, end: str | None,
+                  window_start: str | None, window_end: str | None) -> bool:
+    """Whether ``start..end`` falls inside the indexed ``window_start..end``.
+
+    False whenever that cannot be established -- an unasked or unrecorded
+    window, or a bound that will not parse -- so unknown coverage leads to a
+    build rather than to a search of an index that does not hold the rows.
+    """
+    if not (start and end and window_start and window_end):
+        return False
+    try:
+        return (
+            _as_utc(start) >= _as_utc(window_start)
+            and _as_utc(end) <= _as_utc(window_end)
+        )
+    except ValueError:
+        logger.warning(
+            "Could not compare %s..%s with the index record %s..%s",
+            start, end, window_start, window_end,
+        )
+        return False
+
+
+def index_coverage(start: str | None = None, end: str | None = None) -> dict:
+    """What the current in-place index covers, and whether it covers a window.
+
+    ``covers`` is ``False`` whenever that cannot be established -- no index, no
+    build record, or an unparseable bound -- so an unknown coverage leads to a
+    build rather than to a search that silently finds nothing.
+    """
+    coverage = {
+        "index": INDEX_NAME,
+        "exists": False,
+        "covers": False,
+        "window_start": None,
+        "window_end": None,
+        "severities": list(PROBLEM_SEVERITIES),
+        "index_bytes": None,
+    }
+    with _cursor() as cur:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name IN (%s, %s)",
+            (VIEW_NAME, META_TABLE),
+        )
+        present = {row["table_name"] for row in cur.fetchall()}
+        if VIEW_NAME not in present or not _index_present(cur):
+            return coverage
+        coverage["exists"] = True
+        if META_TABLE not in present:
+            return coverage
+        coverage["index_bytes"] = _recorded_index_bytes(cur) or None
+        cur.execute(
+            sql.SQL(
+                "SELECT window_start, window_end, severities FROM {t} LIMIT 1"
+            ).format(t=sql.Identifier(META_TABLE))
+        )
+        record = cur.fetchone()
+
+    if not record:
+        return coverage
+    coverage["window_start"] = str(record["window_start"])
+    coverage["window_end"] = str(record["window_end"])
+    coverage["severities"] = [
+        s for s in str(record["severities"] or "").split(",") if s
+    ]
+    coverage["covers"] = covers_window(
+        start, end, coverage["window_start"], coverage["window_end"]
+    )
+    return coverage
+
+
+def release_external_index() -> dict:
+    """Return the index's disk, reporting what was reclaimed.
+
+    Serialized with the builds so a release cannot land in the middle of one.
+    The next search over an uncovered window rebuilds, which costs minutes, so
+    this is for reclaiming space that is genuinely no longer wanted.
+    """
+    with _BUILD_LOCK:
+        before = index_coverage()
+        freed = drop_external_index()
+        return {
+            "released": before["exists"],
+            "freed_bytes": freed["freed_bytes"],
+            "db_bytes": freed["db_bytes"],
+            "window_start": before["window_start"],
+            "window_end": before["window_end"],
+            "note": (
+                "The next search over an uncovered window rebuilds the index, "
+                "which takes minutes."
+            ),
+        }
+
+
+def ensure_external_index(start: str, end: str, *,
+                          severities: tuple[str, ...] = PROBLEM_SEVERITIES,
+                          progress=None) -> dict:
+    """Make the window searchable, building the index when it is not covered.
+
+    Returns the coverage plus ``built``: ``False`` when the existing index
+    already answered for this window, ``True`` when one was built for it. A
+    build replaces the previous index, so coverage moves to the new window.
+    """
+    with _BUILD_LOCK:
+        coverage = index_coverage(start, end)
+        if coverage["covers"]:
+            return {"built": False, **coverage}
+        if progress is not None:
+            progress(
+                "The in-place OTel index does not cover "
+                f"{start}..{end}; building it over that window now."
+            )
+        report = build_external_index(
+            start, end, severities=severities, progress=progress
+        )
+        built = index_coverage(start, end)
+        return {
+            "built": True,
+            "build_seconds": report.get("build_seconds"),
+            "indexed_rows": report.get("rows"),
+            "bytes": report.get("bytes"),
+            # Space the replaced index returned, so one index's worth of disk
+            # is held at a time rather than two.
+            "reclaimed_bytes": report.get("reclaimed_bytes"),
+            # The ceiling the build actually ran under; it reverts when the
+            # container restarts, so it is reported per build.
+            "memory_ceiling": report.get("memory_ceiling"),
+            **built,
+        }
+
+
+def ensure_searchable(start: str | None, end: str | None, *, progress=None) -> dict:
+    """Coverage for a search on ``otel_slice``, indexing the window if needed.
+
+    A search without a window cannot say what to index, so it is answered from
+    whatever index exists and refused -- with the fix -- when there is none.
+    """
+    if start is None or end is None:
+        coverage = index_coverage()
+        if not coverage["exists"]:
+            raise refuse(
+                "The in-place OTel index has not been built, and a search "
+                "without a time window does not say what to index.",
+                "Search again with start_time and end_time; that window is "
+                "indexed automatically before the search runs.",
+                code="index_window_required",
+            )
+        return {"built": False, **coverage}
+    return ensure_external_index(start, end, progress=progress)

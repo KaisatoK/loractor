@@ -41,7 +41,58 @@ planned.
 
 **Bugs found only by the live run (keep their tests):** Decimal/datetime values in rows made LangChain serialize a tool result as a Python repr, so `collect_tool_results` silently dropped every search and line-id lookup (fixed by `envelope.json_safe`; regression test in `test_tool_envelope.py`); the result catalog cut cell values at 60 characters and the answer quoted a shortened hash as real (now `builders._clip` with an explicit `…[cut]` marker); the report formatter produced 4 hypotheses against a max-3 contract the prompt never stated (now in `JSON_OUTPUT_SPEC`); search applied severity only after the BM25 top-100 cut, so a severity ranked below it vanished (OpenStack 'instance' at ERROR returned 0 of 24, BGL 'error' at FATAL 0 of 345,086) -- severity and the time window now filter inside every ranked branch (`db/query.py`, live tests in `test_openstack_live.py` / `test_bgl_live.py`).
 
-**Search windows on the in-place index (`otel_slice`) are untested live.** The window and `total_matches` count there are covered by SQL-shape tests only (`test_search_window.py`): the index was not built during development. Its timestamp is re-read from object storage per candidate row, so a windowed search there may be slow; run `RUN_OTEL_LIVE=1` against a built index before relying on it.
+**The in-place index is built on demand.** `search_logs_tool` on `otel_slice`
+calls `external.ensure_searchable(start, end)` first (the MCP server does the
+same in its own `search_logs_tool`), which builds the window through the
+pre-existing `build_external_index` when `index_coverage` does not already cover
+it. No effort gate, no confirmation, one definition; `otel_index_tool` is the
+same operation made explicit. Do not reintroduce `SAVEPOINT` or
+`pg_advisory_xact_lock` here: SereneDB rejects both outright (the savepoint
+statement itself raises, so a `try`/`except` around it cannot help), which is
+what broke the earlier standing-index build. Builds are serialized with
+`external._BUILD_LOCK`.
+
+**The on-demand build is verified live.** A search on `otel_slice` for an
+uncovered window built the index and answered in one call: **408s** total for a
+1-row-group window (~405s build, 3.2s search), `total_matches` 18,341, and the
+build record then reported exactly the requested window. A sub-window of it
+searched in **1.0s** with no rebuild, and `otel_index_tool` with no arguments
+reported coverage in ~0s. `RUN_OTEL_LIVE=1 uv run pytest tests/test_otel_live.py`
+passes (20 tests) once an index exists.
+
+**The index build OOM-killed SereneDB until the memory ceiling was held.**
+`memory_limit` is global and does **not** survive a container restart: a
+restarted instance reported **5.7 GiB**, the value `budget.py` records as the
+cause of three OOM kills, while the budget declares 512 MiB. Two of three builds
+in one session died mid-`CREATE INDEX` ("server closed the connection
+unexpectedly"), each time taking the instance down and giving it a new host port
+(7891 -> 7892 -> 7893, so `SERENEDB_PORT` went stale each time).
+`external.hold_memory_ceiling()` now runs before a build and lowers the ceiling
+to the budget unless it is already at or below it; builds then completed in
+446.7s and 444.6s. `set_global_memory_limit` remains the operator-facing call --
+this is the one place that applies it automatically, because an operator cannot
+know the container bounced. **`Could not resolve hostname` is the other face of
+the same instability**: reads failed 5/5 through a view and succeeded 5/5
+minutes later with no change, while inline `read_parquet` worked throughout, so
+retry before investigating the caller. `build_external_index` itself is
+unchanged from before this work apart from the ceiling, the budget credit and
+the recorded size.
+
+**`SERENEDB_BUILD_THREADS` defaults to 16, which is the server default**, so
+`probe_cursor` currently lowers nothing. Its docstring argues fewer threads cut
+the peak footprint of exactly these fragile builds -- it is the next dial to
+turn if builds are still killed, at the cost of build time.
+
+**The build record carries `index_bytes`**, measured at build time, because
+SereneDB exposes an external index to neither `pg_relation_size` nor
+`information_schema`. A replacing build credits those bytes back to the disk
+budget (only one index exists at a time), and `index_coverage` reports them.
+**Coverage probes the index by name, not the view**: a build creates the view
+first and a drop can leave it behind, and that state was live -- treating the
+view as proof of an index let a search run against a relation with nothing
+indexed.
+
+**Search windows on the in-place index (`otel_slice`) are now exercised live.** The window and `total_matches` count have SQL-shape tests (`test_search_window.py`) and were confirmed against a built index: a windowed search returned ranked rows with an exact `total_matches` in ~1s, because the window is already inside the index rather than re-read per candidate row. Run `RUN_OTEL_LIVE=1` after changing the search or index path.
 
 **Pending (not built):** the hypothesis-test tools the brief still requires are
 requested from their owner in `docs/tool_requests.md`; `get_nearby_events_tool`
@@ -135,7 +186,7 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline 
 - DB query functions return `(sql.Composable, params)` and are wrapped by `query_runner`; each query sets `sdb_ai_allow_insecure_endpoint = true`. Every builder takes a `dataset` id resolved through `db/datasets.py` and composes SQL from canonical fields (`ts`, `severity`, `service`, `message`, `entity_id`, `template`, `record_id`, and `request_id` where declared) -- tool arguments `category`/`service` map to the `Level`/`Component` columns on both local corpora. Every pooled and probe connection runs `SET TimeZone = 'UTC'` (`connection.set_session_time_zone`), so naive window bounds mean UTC everywhere.
 - Loaders live in `db/loghub.py`: one `LoghubSpec` per corpus (`bgl`, `bgl_2k`, `openstack`, `openstack_2k`) with its own `line_parser` (`parse_bgl_line` locates fields by the `Level`/`Type` vocabulary; `parse_openstack_line` is a positional regex with a bracketed `ADDR`), `raw_names` (several files share one table with a running `LineId`), and per-spec `header_renames` (only `bgl_2k` renames its CSV `Timestamp`/`Time` headers). `EventTemplate` is derived at load; there is no event id, pid text mirror or per-row embedding.
 - Auto-complete selectors are `@` service, `^` template, `$` message text; `!` is only the case-sensitivity modifier after a selector. The only public lookup is `db.auto_complete(query)`, used by `/auto-complete` (no `dataset` parameter; always in-process -- the MCP service has no auto-complete tool): it runs the private per-corpus `_auto_complete_dataset` over the local `.log` corpora (`openstack`, `bgl`), merges the results and tags `$` suggestions with `dataset`; the chat box inserts `Line ID: n (dataset)`.
-- `find_evidence` is a **single deep agent** (`create_deep_agent`, deepagents) that calls the thirteen DB tools itself (`list_datasets_tool`, `count_by_dataset_tool`, eight bounded query tools including `get_nearby_events_tool`, plus `sweep_chunks_tool`/`investigate_chunk_tool`) — there is no subagent and no `task` tool (the deepseek harness profile in `agents/find_evidence.py` disables the auto-added general-purpose subagent). It keeps `read_file` (how the skill text is disclosed) and `write_todos`; `_EXCLUDED_TOOLS` strips `write_file`, `edit_file`, `delete`, `execute`, `glob`, `grep`, `ls` from the model request.
+- `find_evidence` is a **single deep agent** (`create_deep_agent`, deepagents) that calls the fourteen DB tools itself (`list_datasets_tool`, `count_by_dataset_tool`, eight bounded query tools including `get_nearby_events_tool`, `otel_index_tool`, plus `sweep_chunks_tool`/`investigate_chunk_tool`) — there is no subagent and no `task` tool (the deepseek harness profile in `agents/find_evidence.py` disables the auto-added general-purpose subagent). It keeps `read_file` (how the skill text is disclosed) and `write_todos`; `_EXCLUDED_TOOLS` strips `write_file`, `edit_file`, `delete`, `execute`, `glob`, `grep`, `ls` from the model request.
 - The evidence agent's **state channels depend on the transport**, so tests that
   assert the exact set must branch on `get_db_tools()[1]` (`mcp_enabled`), not on
   `TOOLS_TRANSPORT`: that env var says `mcp` even when the service is unreachable
@@ -164,7 +215,7 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline 
 `mcp_server.sh` runs the standalone FastMCP Streamable HTTP service on
 `127.0.0.1:8010/mcp` (`python -m backend.mcp_server --transport stdio` for a client
 that launches it). The pipeline defaults to local tools; set `TOOLS_TRANSPORT=mcp`
-to use the server for the thirteen DB tools and skills. `/auto-complete` is not on
+to use the server for the fourteen DB tools and skills. `/auto-complete` is not on
 the server: it always runs in-process. The synchronous pipeline uses a dedicated
 asyncio loop thread for MCP calls and falls back to local DB tools when the service
 is unavailable.

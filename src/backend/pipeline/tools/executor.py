@@ -84,12 +84,12 @@ def execute_database_tool(
     Progress events go to the graph's custom stream. They only reach the UI from
     depth <= 1, so tools must stay on the main agent.
 
-    ``with_reporter`` hands ``function`` a :class:`ProgressReporter`. Only the
-    sweep uses it: it is the one tool whose single call contains a long internal
-    loop, and reporting from inside that loop is the difference between an
-    observable operation and a blank wait. The emitted events are also kept on
-    the result as ``progress_trace`` so they remain inspectable after the run,
-    not only while it is streaming.
+    ``with_reporter`` hands ``function`` a :class:`ProgressReporter`. The sweep,
+    the OTel index build and a search that has to build that index use it: each
+    is a single call that can run for minutes, and reporting from inside it is
+    the difference between an observable operation and a blank wait. The emitted
+    events are also kept on the result as ``progress_trace`` so they remain
+    inspectable after the run, not only while it is streaming.
     """
     writer = runtime.stream_writer
     reporter = ProgressReporter(writer, operation)
@@ -101,6 +101,7 @@ def execute_database_tool(
             "message": f"Starting {operation}.",
         }
     )
+
     logger.info("Executing database tool: %s", operation)
 
     try:

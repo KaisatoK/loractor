@@ -62,6 +62,8 @@ def evidence_lines(evidence: Sequence[Evidence], records: Sequence[dict]) -> str
         head = f"- {item.id}: {call.name}({call.parameters})"
         if call.status == "failure":
             lines.append(f"{head} -> failed: {call.error_message}")
+        elif call.status == "refused":
+            lines.append(f"{head} -> refused: {call.error_message}")
         elif not item.result_ids:
             lines.append(f"{head} -> no rows")
         else:

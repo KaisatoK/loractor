@@ -2,7 +2,7 @@
 
 Local and MCP transports must expose the same evidence tool names: the dataset
 catalog, whole-dataset counts, the eight bounded query tools (nearby events
-among them) and the two sweep tools.
+among them), the OTel index-lifecycle tool and the two sweep tools.
 """
 
 from backend.pipeline.tools.mcp_tools import MCP_DB_TOOLS
@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "search_logs_tool",
     "top_in_category_by_service_tool",
     "compare_periods_tool",
+    "otel_index_tool",
     "sweep_chunks_tool",
     "investigate_chunk_tool",
 }
@@ -29,14 +30,14 @@ def test_local_and_mcp_tool_sets_match():
     local = {tool.name for tool in LOCAL_DB_TOOLS}
     remote = {tool.name for tool in MCP_DB_TOOLS}
     assert local == remote == EXPECTED_TOOLS
-    assert len(LOCAL_DB_TOOLS) == len(MCP_DB_TOOLS) == 13
+    assert len(LOCAL_DB_TOOLS) == len(MCP_DB_TOOLS) == 14
 
 
 def test_local_transport_is_default(monkeypatch):
     monkeypatch.delenv("TOOLS_TRANSPORT", raising=False)
     tools, mcp_enabled = get_db_tools()
     assert mcp_enabled is False
-    assert len(tools) == 13
+    assert len(tools) == 14
 
 
 def test_no_tool_has_an_empty_args_schema():

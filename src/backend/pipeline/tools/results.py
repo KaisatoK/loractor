@@ -109,11 +109,9 @@ def collect_tool_calls(messages, records) -> list[dict[str, Any]]:
     ``envelope.TOOL_KINDS`` (not ``read_file`` / ``write_todos``) in call order as
     ``{call_id, tool_name, arguments, status, error_message, result_ids}``.
 
-    ``status`` is ``"failure"`` when the ``ToolMessage`` has ``status == "error"``
-    (``middleware.handle_tool_errors``), carries no result, is not JSON, or its
-    envelope ``status`` is not ``"success"``; otherwise ``"success"`` (an empty
-    result is a success that produced no record). ``result_ids`` are the ``R{n}``
-    of ``records`` whose ``tool_call_id`` equals the call id.
+    ``status`` is ``"failure"`` for an unexpected error and ``"refused"`` when
+    the query was safely not run (for example because the OTel index is missing
+    at this effort). An empty successful result remains ``"success"``.
     """
     answers = {
         getattr(m, "tool_call_id", None): m
@@ -141,7 +139,9 @@ def collect_tool_calls(messages, records) -> list[dict[str, Any]]:
                 except Exception:
                     status, error = "failure", "tool result was not valid JSON"
                 else:
-                    if not isinstance(payload, dict) or payload.get("status") != "success":
+                    if isinstance(payload, dict) and payload.get("status") == "refused":
+                        status, error = "refused", _error_text(reply, payload)
+                    elif not isinstance(payload, dict) or payload.get("status") != "success":
                         status, error = "failure", _error_text(reply, payload)
             calls.append(
                 {

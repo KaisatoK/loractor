@@ -236,14 +236,15 @@ and outlives the chunk it came from.
 
 ### How the agent uses it
 
-The evidence agent has thirteen tools. One is the dataset catalog
+The evidence agent has fourteen tools. One is the dataset catalog
 (`list_datasets_tool`: per dataset, rows, first and last timestamp, severity
 levels and a window covering every row, measured on each call, so windows come
 from the data rather than a guess). One counts each whole local dataset by
 severity in a single query (`count_by_dataset_tool`, no time window), and one
 counts local rows by owning team and severity (`count_by_team_tool`, joined to
-the real `team_ownership` table). Eight are ordinary bounded queries; two are
-the sweep (`sweep_chunks_tool`, `investigate_chunk_tool`).
+the real `team_ownership` table). Eight are ordinary bounded queries; one
+manages the OTel index (`otel_index_tool`); two are the sweep
+(`sweep_chunks_tool`, `investigate_chunk_tool`).
 
 One of the bounded queries, `get_nearby_events_tool`, gives the engineer the
 lines just before and after a search hit (`before`/`after`, 0-50 each), in
@@ -252,6 +253,40 @@ anchor's process (OpenStack) or node (BGL); `same_request` keeps only its
 request id and works only on OpenStack, the one corpus that records one (it is
 refused elsewhere). An unknown line id is an empty success with a note. The rows
 are examples (`kind=context`), never a frequency.
+
+`otel_index_tool` manages the in-place OTel index, and in normal use the agent
+never has to. The index covers one window at a time (recorded in its build
+record), so `search_logs_tool` on `otel_slice` indexes the window it was given
+whenever the current index does not already cover it: a search there either
+answers or explains itself, and never fails for a missing index. There is no
+effort gate and no cost confirmation — a search that cannot be answered is worth
+less than the minutes the build costs. A window already covered costs nothing,
+and builds are serialized so two concurrent searches cannot index at once. The
+tool itself reports coverage (`exists`, `window_start`, `window_end`,
+`severities`, `index_bytes`) with no arguments, and indexes a window when given
+one, which is useful before a series of searches. The one unanswerable case is a
+search with no window when no index exists yet: that is refused, because the
+request does not say what to index.
+
+**Disk is held for one index, not two.** A build drops the previous index before
+creating the new one, so the budget credits those bytes back rather than
+charging for both at once -- otherwise a replacement could be refused over
+budget for space it was about to free. The size is measured at build time and
+kept in the build record (SereneDB will not size an external index on request),
+which is what makes the credit possible and what `index_bytes` reports.
+`otel_index_tool` with `release=true` drops the index and returns its disk,
+measured: a one-second window indexed 87,650 rows into **5.1 MiB**, and
+releasing it took the database from 423.6 MiB back to 418.6 MiB. Release only
+when the corpus is finished with -- the next uncovered search rebuilds.
+
+**A build holds the server to the budgeted memory ceiling.** `memory_limit` is
+global, does not survive a container restart, and a restarted SereneDB came back
+at **5.7 GiB** -- the value that originally caused three OOM kills. Two of three
+builds in one session were killed mid-`CREATE INDEX`, each time taking the
+instance down and changing its host port. A build now lowers the ceiling to the
+budgeted 512 MiB first (reported as `488.2 MiB`) unless it is already at or
+below it, which turns an out-of-memory *crash* into a failed query. With the
+ceiling held, the same build completed in **446.7s** and again in **444.6s**.
 
 The sweep tools are **withheld entirely below Extreme effort** rather than
 offered and refused — a visible tool gets tried eventually, and a refusal still
@@ -695,12 +730,13 @@ confidence tests below are skipped unless enabled.
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
-| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (thirteen tools), MCP server validation (no auto-complete tool) |
+| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (fourteen tools), MCP server validation (no auto-complete tool) |
 | `test_tool_specs.py` | every tool is generated from the spec table: same name, description, arguments, bounds and enums on the local tools, the pipeline's MCP wrappers and the server; catalog and kinds derived; no hand-written tool left |
 | `test_mcp_contract.py` | the server's contract: instructions, the shared result schema, size limits with the visible cut marker, actionable error messages |
 | `test_mcp_prompts_resources.py` | role prompts built from the pipeline's `evidence_brief`, completions, skill and `logs://` resources rendered from their sources |
 | `test_mcp_transport.py` | the bearer token (constant-time), Host/Origin guard, `/health`, stdio round trip; a real-server smoke test gated by `RUN_MCP_SMOKE=1` |
 | `test_nearby_events.py` | nearby events: schema, the one-statement SQL (both sides, correlation filters, omitted sides), refusals, explanatory notes, the tool on both transports with one shared description |
+| `test_otel_index_tool.py` | the in-place OTel index: window coverage, automatic indexing from search, the index tool, no SAVEPOINT or advisory lock |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_count_by_team.py` | team ownership joins, `unowned` preservation, window/category validation, data scope and measured envelope |
@@ -979,8 +1015,8 @@ TOOLS_TRANSPORT=mcp bash ./backend.sh                 # the chatbot's own pipeli
 ```
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
-dataset catalog, whole-dataset counts, the eight bounded query tools and the two
-sweep tools through the server; if the service is unreachable, the backend logs the
+dataset catalog, whole-dataset counts, the eight bounded query tools, the OTel
+index tool and the two sweep tools through the server; if the service is unreachable, the backend logs the
 failure and falls back to the in-process implementation. `/auto-complete` is not an
 MCP tool: it is a chat-box feature and is always answered in-process.
 

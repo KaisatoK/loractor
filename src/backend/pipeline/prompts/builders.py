@@ -60,9 +60,13 @@ COST_DISCIPLINE = (
     "3. Narrow before searching. Use a count to find the interesting minute, "
     "then search inside it.\n"
     "4. Text search needs an indexed dataset. On the remote corpus, aggregate "
-    "first to find the window, then search otel_slice -- an index built in "
-    "place over the same files, so it copies nothing but takes about a second "
-    "per search because each match is re-read from object storage.\n"
+    "first to find the window, then search otel_slice with that window -- an "
+    "index built in place over the same files, so it copies nothing but takes "
+    "about a second per search because each match is re-read from object "
+    "storage. The window you search is indexed automatically if the current "
+    "index does not cover it, which takes MINUTES, so narrow the window with "
+    "aggregates before searching rather than indexing a wide one. Never "
+    "attempt full-text search on otel_s3.\n"
     "5. A refusal is a useful answer, not a failure. It names what was wrong "
     "and suggests a narrower request -- follow the suggestion and retry rather "
     "than abandoning the line of enquiry.\n"
@@ -386,7 +390,7 @@ def summarized_attempts(tool_results: object, tool_calls: object = None) -> list
                 "status": call.get("status"),
                 "row_count": sum(rows.get(rid, 0) for rid in call.get("result_ids", [])),
             }
-            if call.get("status") == "failure":
+            if call.get("status") in {"failure", "refused"}:
                 item["error_message"] = call.get("error_message")
             summary.append(item)
         return summary

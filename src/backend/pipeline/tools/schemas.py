@@ -711,3 +711,61 @@ class InvestigateChunk(_Sweepable):
         str,
         Field(max_length=500, description="What the investigation is after."),
     ] = ""
+
+
+class OtelIndex(BaseModel):
+    """Report what the in-place OTel index covers, or index a window.
+
+    No ``dataset``: the tool manages exactly one object, the in-place index over
+    the remote Parquet parts, so letting the model name a corpus would only
+    invite it to point this at a corpus that has no such index.
+
+    The window is optional. Given, it is the window to make searchable; omitted,
+    the tool only reports what is covered today.
+    """
+
+    start_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Window start to make searchable, 'YYYY-MM-DD HH:MM:SS+00'. "
+                "Give it together with end_time, or neither to only report "
+                "current coverage."
+            ),
+        ),
+    ] = None
+    end_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Window end, exclusive. Required with start_time.",
+        ),
+    ] = None
+
+    release: Annotated[
+        bool,
+        Field(
+            description=(
+                "Drop the index and return its disk. Use it only when the OTel "
+                "corpus is finished with: the next search over an uncovered "
+                "window rebuilds, which costs minutes. Cannot be combined with "
+                "a window."
+            )
+        ),
+    ] = False
+
+    @model_validator(mode="after")
+    def _window_pair(self) -> Self:
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError(
+                "start_time and end_time go together: give both or neither"
+            )
+        if self.start_time is not None and self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        if self.release and self.start_time is not None:
+            raise ValueError(
+                "release drops the index; do not also ask for a window to be "
+                "indexed in the same call"
+            )
+        return self
