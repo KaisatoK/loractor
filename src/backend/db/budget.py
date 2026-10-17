@@ -69,6 +69,18 @@ Findings that shaped the design
     Neither crash lost committed data: the ``log`` table and database size came
     back intact both times.
 
+13. **A global window function over a remote extract is fatal.** The third
+    crash came from a single ``CREATE TABLE AS SELECT row_number() OVER (ORDER
+    BY "Timestamp") ... FROM read_parquet(...)``. The ordered window forces the
+    engine to buffer and sort the entire result while streaming ``Body`` from
+    object storage, which it cannot do even for a two-second window. Two rules
+    follow, both implemented in :mod:`backend.db.slices`:
+
+    * extract in **small time-sliced batches**, one statement each, sized by
+      arrival rate so no statement handles much more than ~50,000 rows;
+    * assign ids with ``row_number() OVER ()`` and **no ORDER BY** -- ids only
+      need to be unique, and ordering reintroduces the global sort.
+
 11. **``statement_timeout`` through libpq ``options`` is silently ignored.** A
     connection opened with ``-c statement_timeout=30000`` reports ``0``, while
     ``SET LOCAL statement_timeout`` inside the transaction reports the value set.
