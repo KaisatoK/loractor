@@ -275,6 +275,135 @@ class CountByDataset(BaseModel):
         return list(dict.fromkeys(value))
 
 
+# --- Planned tools (docs/tool_requests.md T2, T3) ---------------------------
+# Schemas and shared descriptions only. The tools themselves are stubs in
+# ``pipeline/tools/planned_tools.py`` and are not registered with any transport
+# yet; see AGENTS.md "Integrating new tools and tables".
+
+NEARBY_EVENTS_DESCRIPTION = (
+    "Return the log entries just before and after one anchor line, for a "
+    "before/after timeline. Inputs: dataset (a corpus with a record id), "
+    "line_id (the anchor), before (0-50, default 5), after (0-50, default 5), "
+    "same_entity (only lines with the anchor's entity_id: process id on "
+    "OpenStack, node on BGL; default false), same_request (only lines with the "
+    "anchor's request id, OpenStack only; default false). Returns kind=context "
+    "rows ordered by record_id: record_id, ts, severity, service, entity_id, "
+    "request_id, message, offset (negative before the anchor, 0 for the "
+    "anchor, positive after). An unknown line_id returns status=success with "
+    "empty data and a note, not an error. Context rows are examples, never a "
+    "frequency."
+)
+
+COUNT_BY_TEAM_DESCRIPTION = (
+    "Count log entries per owning team and severity, joining each row's "
+    "service (Component) to the team ownership table. Inputs: datasets "
+    "(optional list of local dataset ids; default every local dataset), "
+    "start_time and end_time (optional, together; omit both to count every "
+    "row), category (optional severity). Returns kind=aggregate rows {team, "
+    "severity, count} ordered by count, computed in the database over every "
+    "matching row. Services with no owner count as team 'unowned', so team "
+    "totals equal the dataset totals. Counts are log entries, not incidents."
+)
+
+
+class GetNearbyEvents(_DatasetScoped):
+    """Log entries around one anchor line (T2)."""
+
+    line_id: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "Record id of the anchor line. For a 'Line ID: n (dataset)' "
+                "reference, pass n here and that dataset as `dataset`."
+            ),
+        ),
+    ]
+    before: Annotated[
+        int, Field(ge=0, le=50, description="Lines to return before the anchor.")
+    ] = 5
+    after: Annotated[
+        int, Field(ge=0, le=50, description="Lines to return after the anchor.")
+    ] = 5
+    same_entity: Annotated[
+        bool,
+        Field(
+            description=(
+                "Only lines sharing the anchor's entity_id (process id on "
+                "OpenStack, node on BGL)."
+            )
+        ),
+    ] = False
+    same_request: Annotated[
+        bool,
+        Field(
+            description=(
+                "Only lines sharing the anchor's request id ('req-<uuid>'). "
+                "Only corpora that carry a request id support it."
+            )
+        ),
+    ] = False
+
+
+class CountByTeam(BaseModel):
+    """Log-entry counts per owning team and severity (T3)."""
+
+    datasets: Annotated[
+        list[str] | None,
+        Field(
+            min_length=1,
+            description=(
+                "Local dataset ids to count. Omit to count every local dataset."
+            ),
+        ),
+    ] = None
+    start_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Window start, 'YYYY-MM-DD HH:MM:SS'. Optional; give it with "
+                "end_time, or omit both to count every row."
+            ),
+        ),
+    ] = None
+    end_time: Annotated[
+        str | None,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Window end, exclusive. Must be after start_time.",
+        ),
+    ] = None
+    category: Annotated[
+        str | None,
+        Field(description="Exact severity to filter on, in the corpus' own casing."),
+    ] = None
+
+    @field_validator("datasets")
+    @classmethod
+    def _local_datasets(cls, value: list[str] | None) -> list[str] | None:
+        from backend.db.datasets import local_datasets
+
+        if value is None:
+            return value
+        allowed = {d.id for d in local_datasets()}
+        bad = [v for v in value if v not in allowed]
+        if bad:
+            raise ValueError(
+                f"Cannot count {', '.join(bad)} by team. Choose from: "
+                f"{', '.join(sorted(allowed))}."
+            )
+        return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def _window(self) -> Self:
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError("give start_time and end_time together, or neither")
+        if self.start_time is not None and self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
+
 class _Sweepable(_DatasetScoped):
     """Argument set for the sweep tools.
 

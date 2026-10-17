@@ -126,6 +126,22 @@ TOOL_CATALOG = {
         "line_id. Only datasets that declare a record id support it -- the raw "
         "remote corpus has no primary key and refuses this."
     ),
+    # Planned (docs/tool_requests.md T2, T3): schemas only, not callable yet.
+    # Drop the "NOT AVAILABLE YET" prefix once the tool is registered.
+    "get_nearby_events_tool": (
+        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Returns the log "
+        "entries just before and after one anchor line; params: dataset, "
+        "line_id, before, after, same_entity, same_request. Rows are examples "
+        "(kind context) with an offset from the anchor. Use for the engineer's "
+        "before/after timeline."
+    ),
+    "count_by_team_tool": (
+        "NOT AVAILABLE YET -- cannot close a gap. TIER index. Counts log "
+        "entries per owning team and severity over local datasets; params: "
+        "datasets, start_time, end_time (optional, together), category. "
+        "Unowned services count as team 'unowned'. Measured (kind aggregate). "
+        "Use to group recurring problems by team."
+    ),
 }
 
 # How the agent is expected to spend its budget. Code enforces the bounds; this
