@@ -35,13 +35,7 @@ the token, 421 for a foreign Host, the pipeline's `MCPBridge` connecting with th
 guard on for `MCP_HOST` `127.0.0.1` and `0.0.0.0`, and a stdio round trip through
 both `python -m backend.mcp_server --transport stdio` and `fastmcp run fastmcp.json`.
 
-Not done: M5 (the tool owner's tools), M6 and M7 (sweep progress, bridge and
-operations). Not run, because the environment has no SereneDB and no model:
-`RUN_*_LIVE`, `routes.sh`, `confidence.sh` and `worked_investigation.sh`. The
-classifiers' catalog text is unchanged, but the evidence agent now sees the new
-tool descriptions and a different tool order (sweep tools last), so re-run those
-before relying on the agent's tool choices. `website_url` was skipped: the
-project has no authoritative repository URL in `pyproject.toml`.
+What is left is listed once, under "Remaining tasks" below.
 
 Deviations from the plan as written: server tools are a `Tool` subclass
 (`SpecTool`) that takes the argument model's JSON schema directly, instead of
@@ -62,6 +56,86 @@ Gaps measured before the work (in-memory client against `server.mcp`):
 | Sweeps are silent for minutes | server tools take no `Context`; `sweep()` already accepts `progress=`, `investigate_chunk()` does not | connect and answer |
 | Loopback HTTP has no Host/Origin check (DNS rebinding) and the token compare is a plain `!=` | `__main__.py`, FastMCP default `host_origin_protection=False` | security |
 | Pipeline over MCP likely times out on sweeps (from code reading, not run) | `MCPBridge` applies `MCP_CALL_TIMEOUT_S=60` to every call and opens a new client per call | pipeline parity |
+
+## Remaining tasks
+
+The single list of open work. Each item points at the step that holds its
+details instead of repeating them. Tick an item here when it lands, and update
+the Status table.
+
+**Verification we could not run** (needs a reachable SereneDB and the provider keys)
+
+- [ ] `RUN_OPENSTACK_LIVE=1` and `RUN_BGL_LIVE=1` live tests (and `RUN_OTEL_LIVE=1`
+      if the remote corpus matters for the demo).
+- [ ] `bash ./routes.sh` and `bash ./confidence.sh`. The classifiers' catalog is
+      unchanged, so a flip here is unlikely to come from this work; treat one as a
+      product signal (AGENTS.md).
+- [ ] `bash ./worked_investigation.sh --topic "<a real recurring issue>"`. The
+      evidence agent now reads the new tool descriptions and gets the sweep tools
+      last, so its tool choices may differ; re-read the SQL appendix by hand.
+- [ ] The two "known" offline failures that need a database
+      (`test_bgl.py::test_an_uppercase_severity_is_refused_for_otel`,
+      `test_sampling_and_external.py::test_the_sample_query_tags_every_window`)
+      pass once SereneDB is up.
+
+**Tool selection by a real agent** (D8 dropped the scripted evaluation; a person
+with a model does this by hand)
+
+- [ ] Connect a client (Kiro: add `"ai-chatbot-logs": {"url":
+      "http://127.0.0.1:8010/mcp"}` to `.kiro/settings/mcp.json`; Claude Code:
+      `claude mcp add --transport http ...`; Claude Desktop: stdio) and confirm it
+      receives the instructions, 13 tools, 4 prompts and the resources. Whether
+      Kiro surfaces prompts and resources is unverified.
+- [ ] Ask one question per role without naming a tool and note the first tool
+      called: engineer "why did instances fail to spawn?" (catalog, then a
+      search), team lead "what problems keep recurring?" (catalog, then counts by
+      template/service), manager "what should we fix first?" (counts and trends,
+      not a search). Ask the engineer "what's going on?" with no target: it should
+      ask for one.
+- [ ] Check every number in the answers cites an executed `query`, hypotheses are
+      labelled, and no team or ranking is invented while T3/T13 are missing.
+- [ ] A wrong first tool is fixed in that tool's `description` in
+      `pipeline/tools/specs.py`, never by naming tools in a prompt.
+
+**Waiting for the tool owner** (M5)
+
+- [ ] T2 `get_nearby_events_tool` and T3 `count_by_team_tool`: flip their spec
+      entries to available once the DB functions land, then the M5 checks and the
+      AGENTS.md new-tool checklist (playbook workarounds removed, `test_registry.py`
+      count, `routes.sh`, `confidence.sh`).
+- [ ] T13 `rank_priorities_tool` (requested in `docs/tool_requests.md`):
+      server-only spec entry; assert it is absent from the pipeline's tools.
+
+**Our MCP work not started** (D6: only if time remains)
+
+- [ ] M6 long-running sweeps: progress and log notifications from the server
+      sweep tools, `progress=` on `sweep.investigate_chunk`, `MCP_MAX_PROMOTIONS`
+      (D3) and `MCP_ENABLE_SWEEP` (D2).
+- [ ] M7 bridge and operations: one persistent client, a separate timeout for the
+      sweep pair (today every bridge call gets `MCP_CALL_TIMEOUT_S=60`, so a sweep
+      over `TOOLS_TRANSPORT=mcp` likely times out -- inferred from the code, not
+      run), forwarding server progress to `tool_progress`, logging/timing/rate
+      limiting (D5) and caching (D4) middleware, the DB pool in the server
+      lifespan.
+
+**Documentation and release**
+
+- [ ] Write `setup-instruction.md` (D7): how a judge connects over HTTP and
+      stdio, the token, `FASTMCP_HTTP_ALLOWED_HOSTS` for a public host name, and
+      the SereneDB settings. Link to the server instructions (`build_instructions`)
+      instead of repeating the workflow.
+- [ ] Push the MCP commits (`5154ab5`..`42e878f`) to `origin/main`.
+- [ ] Set `website_url` on the server once the public repository URL is settled.
+
+**Outside the MCP plan, raised in the same discussion**
+
+- [ ] Show the skill an investigation used in the chatbot's progress panel. Today
+      nothing reports it: the role playbook is pasted into the `find_evidence`
+      prompt, and `read_file` / `read_skill` calls emit no `tool_progress`. Add a
+      progress line in `stream_events.progress_line` (once, per AGENTS.md), emit
+      it from `find_evidence_node` for the injected playbook, and from a
+      `wrap_tool_call` middleware for `read_file` under `skills/` and `read_skill`.
+      Open question: show only skills actually read, or the injected playbook too.
 
 ## Ownership
 
@@ -346,9 +420,7 @@ M5 whenever a tool from the tool owner lands (after M1)
 - Done: `README.md` and `AGENTS.md` carry the new offline counts and the
   one-spec-per-tool checklist; `rank_priorities_tool` is requested in
   `docs/tool_requests.md` (T13).
-- Still to do: write `setup-instruction.md` (D7) -- how a judge connects (HTTP and
-  stdio, the token, `FASTMCP_HTTP_ALLOWED_HOSTS`, the SereneDB settings); it links
-  to the server instructions rather than repeating them.
+- Still to do: see "Remaining tasks".
 
 ## Verification (each step, before marking it done)
 
@@ -381,7 +453,9 @@ M5 whenever a tool from the tool owner lands (after M1)
   signal (AGENTS.md), not a reason to keep a second catalog.
 - Richer descriptions and enums change what the pipeline's evidence agent sees
   (same `args_schema`), so routes and worked investigations can move.
-- `allowed_hosts` format (with or without port) is unverified for FastMCP 4.1.
+- Resolved: FastMCP 4.1 strips the port from both the Host header and each
+  `allowed_hosts` entry, so entries are host names only; checked against a real
+  server with `MCP_HOST` `127.0.0.1` and `0.0.0.0`.
 - Claude Desktop remote connectors are believed to be brokered from Anthropic's
   cloud and unable to reach `localhost` (not verified); `setup-instruction.md`
   should therefore document stdio for Desktop.
