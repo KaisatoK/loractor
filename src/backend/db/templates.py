@@ -26,6 +26,7 @@ per-row embedding is cheap and strictly better.
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 from psycopg2 import sql
@@ -40,6 +41,19 @@ logger = logging.getLogger(__name__)
 # embedding service from inside the server, so a batch bounds how much work one
 # statement holds open rather than how much memory it needs.
 EMBED_BATCH = 200
+
+# Most templates one build will embed.
+#
+# Guards against a corpus whose templating failed to collapse anything: at
+# ~0.083 s per call, 20,352 templates (full BGL) take ~28 minutes, so a corpus
+# with 500,000 would run for half a day unnoticed. Refusing is better than
+# discovering that at hour six.
+#
+# Deliberately not a "top N by frequency" truncation. In BGL the 100 commonest
+# templates cover 93.6% of rows, so a frequency cut would look almost free --
+# but it would drop the rare templates, and in log investigation the rare event
+# is the signal. A one-off FATAL matters more than the millionth routine line.
+MAX_TEMPLATES = int(os.getenv("SERENEDB_MAX_TEMPLATES", "50000"))
 
 # Templates nearer than this are considered candidate matches. Cosine distance,
 # so 0 is identical and 2 is opposite. Deliberately generous: the fusion ranks
@@ -82,7 +96,24 @@ def _embed_cursor():
     return probe_cursor()
 
 
-def build_templates(dataset: Dataset | str, *, rebuild: bool = False) -> dict:
+def _unembedded(cur, table: str) -> int:
+    """Templates still awaiting an embedding.
+
+    The loop's termination condition depends on this falling, so it is measured
+    from the table rather than inferred from rows-affected counts.
+    """
+    cur.execute(
+        sql.SQL("""
+            SELECT count(*) AS n FROM {t}
+            WHERE embedding IS NULL AND template_text IS NOT NULL
+        """).format(t=sql.Identifier(table))
+    )
+    return int(cur.fetchone()["n"])
+
+
+def build_templates(
+    dataset: Dataset | str, *, rebuild: bool = False, progress=None
+) -> dict:
     """Extract distinct templates, embed them, and index the vectors.
 
     Costs one embedding call per *distinct template*, not per row. The row count
@@ -120,62 +151,140 @@ def build_templates(dataset: Dataset | str, *, rebuild: bool = False) -> dict:
 
         # Distinct templates with their row counts, in one aggregate. No message
         # text is read beyond the template expression itself.
+        #
+        # Templates with no text are excluded: 34,470 BGL rows carry no message,
+        # so their template is empty, and an embedding of nothing would be a
+        # vector that matches everything equally. They stay queryable by every
+        # other means -- only semantic search cannot reach them.
         started = time.monotonic()
         cur.execute(
             sql.SQL("""
                 CREATE OR REPLACE TEMP VIEW _pending AS
                 SELECT {template} AS template_text, count(*) AS row_count
                 FROM {source}
+                WHERE {template} IS NOT NULL AND {template} <> ''
                 GROUP BY 1
             """).format(template=template_sql, source=source)
         )
         cur.execute("SELECT count(*) AS n FROM _pending")
         total = int(cur.fetchone()["n"])
         report["distinct_templates"] = total
+
+        if total > MAX_TEMPLATES:
+            raise refuse(
+                f"{ds.id} has {total:,} distinct templates, above the "
+                f"{MAX_TEMPLATES:,} cap.",
+                "Templating is not collapsing variable parts; widen the "
+                "template expression before embedding, or raise "
+                "SERENEDB_MAX_TEMPLATES if the count is genuinely correct.",
+                code="too_many_templates",
+                dataset=ds.id,
+                templates=total,
+            )
         report["extract_seconds"] = round(time.monotonic() - started, 2)
 
-        cur.execute(
-            sql.SQL("SELECT count(*) AS n FROM {t}").format(t=sql.Identifier(table))
-        )
-        already = int(cur.fetchone()["n"])
-
-        # Embed only what is missing, so an interrupted build resumes instead of
-        # paying for every template again.
+        # Two phases, because combining them does not terminate reliably.
+        #
+        # The first version embedded and inserted in one statement, re-selecting
+        # whatever was "not yet present" each round. That loops forever on a
+        # NULL template, since `existing = pending` is never true for NULL, and
+        # it silently re-embedded rows -- a run reported 38,371 of 20,353 done.
+        #
+        # Rows are now inserted without embeddings, then embeddings are filled
+        # in where they are missing. Both phases are idempotent and an
+        # interrupted build resumes where it stopped.
         started = time.monotonic()
+
+        # Ids continue from the current maximum. `row_number()` alone restarts
+        # at 1, so a resumed build would hand out ids that already exist and the
+        # update below would then target the wrong rows.
+        cur.execute(
+            sql.SQL("SELECT COALESCE(max(template_id), 0) AS m FROM {t}").format(
+                t=sql.Identifier(table)
+            )
+        )
+        id_offset = int(cur.fetchone()["m"])
+
+        cur.execute(
+            sql.SQL("""
+                INSERT INTO {t} (template_id, template_text, row_count)
+                SELECT {offset} + row_number() OVER (),
+                       p.template_text, p.row_count
+                FROM _pending p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {t} e WHERE e.template_text = p.template_text
+                )
+            """).format(t=sql.Identifier(table), offset=sql.Literal(id_offset))
+        )
+        report["rows_inserted"] = max(cur.rowcount, 0)
+
         embedded = 0
-        while True:
+        report["incomplete_reason"] = None
+
+        # Termination is enforced three ways rather than trusted:
+        #
+        # 1. an arithmetic ceiling on iterations, from the work outstanding;
+        # 2. the count of unembedded rows must *strictly decrease* each round;
+        # 3. the loop stops as soon as nothing is outstanding.
+        #
+        # The second is the one that matters. `UPDATE SET embedding =
+        # ai_embed(...)` reports rows affected even when the function yields
+        # NULL, so a single template the embedding service cannot handle would
+        # otherwise be re-selected forever at a steady 200 rows per round,
+        # looking like healthy progress. Counting what is left cannot be fooled
+        # that way.
+        remaining = _unembedded(cur, table)
+        max_rounds = remaining // EMBED_BATCH + 2
+
+        for _ in range(max_rounds):
+            if not remaining:
+                break
+
             cur.execute(
                 sql.SQL("""
-                    INSERT INTO {t} (template_id, template_text, row_count, embedding)
-                    SELECT
-                        {offset} + row_number() OVER (),
-                        p.template_text,
-                        p.row_count,
-                        ai_embed(p.template_text, {model}, 'local_ai')
-                               ::FLOAT[{dim}]
-                    FROM _pending p
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM {t} e WHERE e.template_text = p.template_text
+                    UPDATE {t} SET embedding =
+                        ai_embed(template_text, {model}, 'local_ai')
+                            ::FLOAT[{dim}]
+                    WHERE template_id IN (
+                        SELECT template_id FROM {t}
+                        WHERE embedding IS NULL AND template_text IS NOT NULL
+                        ORDER BY template_id
+                        LIMIT {batch}
                     )
-                    LIMIT {batch}
                 """).format(
                     t=sql.Identifier(table),
-                    offset=sql.Literal(already + embedded),
                     model=sql.Literal(EMBEDDING_MODEL),
                     dim=sql.Literal(EMBEDDING_DIMENSION),
                     batch=sql.Literal(EMBED_BATCH),
                 )
             )
-            inserted = max(cur.rowcount, 0)
-            embedded += inserted
-            logger.info(
-                "Embedded %d/%d templates for %s", already + embedded, total, ds.id
-            )
-            if inserted == 0:
+
+            still_left = _unembedded(cur, table)
+            if still_left >= remaining:
+                # No forward progress: the batch at the head of the queue cannot
+                # be embedded. Stop and say so, rather than spin.
+                report["incomplete_reason"] = (
+                    f"embedding stopped making progress with {still_left:,} "
+                    "templates left; the next batch could not be embedded"
+                )
+                logger.warning(
+                    "Embedding stalled for %s at %d remaining", ds.id, still_left
+                )
                 break
 
+            embedded += remaining - still_left
+            remaining = still_left
+            logger.info("Embedded %d/%d templates for %s", embedded, total, ds.id)
+            if progress is not None:
+                progress(embedded, total)
+        else:
+            if remaining:
+                report["incomplete_reason"] = (
+                    f"hit the {max_rounds}-round ceiling with {remaining:,} left"
+                )
+
         report["embedded"] = embedded
-        report["already_present"] = already
+        report["unembedded"] = remaining
         report["embed_seconds"] = round(time.monotonic() - started, 2)
 
         cur.execute(

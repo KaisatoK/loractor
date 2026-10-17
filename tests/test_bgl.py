@@ -72,8 +72,7 @@ def test_bgl_is_not_chunk_sweepable():
     assert not resolve("bgl").supports(Capability.CHUNK_SWEEP)
 
 
-def test_bgl_maps_every_canonical_field():
-    """A corpus missing a canonical field would force callers to special-case."""
+def test_bgl_maps_the_canonical_fields_it_actually_has():
     bgl = resolve("bgl")
     for name in (
         "ts",
@@ -82,20 +81,41 @@ def test_bgl_maps_every_canonical_field():
         "message",
         "entity_id",
         "template",
-        "event_id",
         "record_id",
     ):
         assert bgl.sql_for(name) is not None
 
 
+def test_bgl_does_not_claim_an_event_id_it_does_not_have():
+    """loghub publishes parsed EventIds only for its 2,000-line samples.
+
+    The full log carries none, so the field is unmapped and the '#' selector is
+    not offered, rather than mapping a column that does not exist and failing at
+    query time. otel_s3 omits record_id on the same principle.
+    """
+    from backend.db.errors import QueryRefused
+
+    bgl = resolve("bgl")
+    assert "event_id" not in bgl.fields
+    assert "#" not in bgl.selectors
+    with pytest.raises((QueryRefused, KeyError)):
+        bgl.sql_for("event_id")
+
+
 # --- The vocabulary each corpus owns ----------------------------------------
 def test_severity_vocabulary_is_per_dataset_and_uppercase_for_bgl():
+    """Six levels, confirmed against the full 4.7M-row corpus.
+
+    FAILURE is absent from loghub's 2,000-line sample, so a vocabulary taken
+    from the sample would have refused 1,714 real rows as unknown.
+    """
     assert resolve("bgl").severity_values == (
         "INFO",
         "WARNING",
         "ERROR",
         "SEVERE",
         "FATAL",
+        "FAILURE",
     )
 
 
@@ -224,18 +244,28 @@ def test_an_unknown_corpus_is_refused_with_the_loadable_list():
     assert "bgl" in excinfo.value.refusal.suggestion
 
 
-def test_the_loader_derives_a_real_timestamp_from_epoch_seconds():
+def test_the_raw_loader_computes_its_timestamp_while_parsing():
     """loghub's own ``Time`` string is unparseable, so the epoch column is the
-    only usable source."""
+    only usable source -- and the raw path converts it client-side.
+
+    Doing it in SQL would mean staging 743 MB of corpus twice.
+    """
     spec = loghub.spec_for("bgl")
-    derived = dict(spec.derived)
-    assert "Timestamp" in derived
-    assert "EpochSeconds" in derived["Timestamp"]
+    assert spec.source_kind is loghub.SourceKind.RAW_LINES
+    assert "Timestamp" in [name for name, _ in spec.columns]
+
+    parsed = loghub.parse_raw_line(
+        spec,
+        "- 1117838570 2005.06.03 R02-M1-N0-C:J12-U11 "
+        "2005-06-03-15.42.50.675872 R02-M1-N0-C:J12-U11 RAS KERNEL INFO "
+        "instruction cache parity error corrected",
+    )
+    assert parsed["EpochSeconds"] == "1117838570"
 
 
-def test_derived_expressions_quote_their_identifiers():
+def test_the_structured_sample_loader_quotes_its_derived_identifiers():
     """Unquoted names fold to lower case and fail against CamelCase columns."""
-    for _, expression in loghub.spec_for("bgl").derived:
+    for _, expression in loghub.spec_for("bgl_2k").derived:
         assert '"' in expression
 
 
@@ -244,6 +274,7 @@ def test_every_selector_column_is_in_the_token_index():
     selector column missing from it fails at query time rather than at load."""
     bgl = resolve("bgl")
     spec = loghub.spec_for("bgl")
+    assert spec.token_columns
     token_columns = {name for name, _ in spec.token_columns}
 
     for char, field_name in bgl.selectors.items():

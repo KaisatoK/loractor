@@ -256,3 +256,38 @@ def test_slice_columns_include_the_generated_record_id():
     assert "line_id" in slices.SLICE_COLUMNS
     assert "Body" in slices.SLICE_COLUMNS
     assert "EventTemplate" in slices.SLICE_COLUMNS
+
+
+# --- Loop termination -------------------------------------------------------
+def test_batching_terminates_for_every_severity_set():
+    """``_batches`` is a while loop, so its step must always advance.
+
+    The step is floored at one second by :data:`slices.BATCH_SECONDS`; a zero
+    step would hang the build before a single row was read.
+    """
+    for severities in (
+        PROBLEM_SEVERITIES,
+        ("fatal", "warn"),
+        ("fatal",),
+        ("error",),
+    ):
+        assert slices.batch_seconds_for(severities) >= 1
+
+
+def test_batch_count_is_bounded_by_the_window():
+    """A generous cap, but a finite one: no plan may produce endless batches."""
+    plan = slices.plan_slice(PROBLEM_SEVERITIES, max_wall_seconds=100_000)
+    batches = list(slices._batches(plan))
+    assert len(batches) <= plan.window_seconds + 1
+
+
+def test_a_degenerate_window_yields_no_batches_rather_than_hanging():
+    """An empty or inverted window must terminate immediately."""
+    from dataclasses import replace
+
+    plan = slices.plan_slice(max_rows=50_000)
+    empty = replace(plan, end=plan.start)
+    assert list(slices._batches(empty)) == []
+
+    inverted = replace(plan, end=plan.start - (plan.end - plan.start))
+    assert list(slices._batches(inverted)) == []

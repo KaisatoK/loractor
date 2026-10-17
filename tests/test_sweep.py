@@ -382,3 +382,33 @@ def test_coverage_handles_an_empty_corpus_without_dividing_by_zero():
     record = triage.coverage(0, 0, 0, 0, 0, 0)
     assert record["fraction_profiled"] == 0.0
     assert record["fraction_rows_sampled"] == 0.0
+
+
+# --- Loop termination -------------------------------------------------------
+def test_chunk_lookup_terminates_on_every_moment(plan):
+    """``_locate`` is a binary search in a while loop.
+
+    Checked across the boundaries where an off-by-one would stop it narrowing:
+    before the first chunk, exactly on each edge, and past the last.
+    """
+    from datetime import timedelta
+
+    from backend.db.profile import _locate
+
+    chunks = plan
+    probes = [chunks[0].ts_lo - timedelta(seconds=5), chunks[-1].ts_hi]
+    for chunk in (chunks[0], chunks[1], chunks[len(chunks) // 2], chunks[-1]):
+        probes += [chunk.ts_lo, chunk.ts_hi, chunk.ts_lo + timedelta(microseconds=1)]
+
+    for moment in probes:
+        found = _locate(chunks, moment)
+        if found is not None:
+            assert found.ts_lo <= moment < found.ts_hi
+
+
+def test_chunk_lookup_on_an_empty_map_returns_nothing():
+    from datetime import UTC, datetime
+
+    from backend.db.profile import _locate
+
+    assert _locate([], datetime(2025, 9, 23, tzinfo=UTC)) is None

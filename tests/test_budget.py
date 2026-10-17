@@ -84,9 +84,16 @@ def test_view_backed_index_is_cheaper_than_materializing():
 
 
 def test_per_row_costs_match_what_was_measured():
-    # view+index measured 73.4 and 74.1 B/row; materialized measured 293.0.
+    """Both figures come from completed builds, not extrapolation.
+
+    The materialized cost was revised down from 300 to 155: the original came
+    from a 100k-row CTAS probe (226 B table + 67 B index), but a real
+    150,557-row slice build measured 4.19 MB of table and 19.12 MB of index --
+    154.9 B/row, about half the probe's figure, because the probe was too small
+    for compression and index structure to amortise.
+    """
     assert 70 <= INDEX_BYTES_PER_ROW <= 90
-    assert 280 <= MATERIALIZED_BYTES_PER_ROW <= 320
+    assert 140 <= MATERIALIZED_BYTES_PER_ROW <= 170
 
 
 def test_build_throughput_uses_the_conservative_measurement():
@@ -133,17 +140,20 @@ def test_max_indexable_rows_inverts_the_estimate():
 
 
 def test_build_time_binds_before_disk_for_the_slice():
-    """The constraint the plan missed.
+    """The constraint the original plan missed.
 
-    At the measured 80 B/row the 1 GiB slice allowance would hold over 13M rows,
-    but the measured 6,000 rows/s means a 300-second build reaches far fewer.
-    Sizing must take the smaller of the two.
+    Disk would permit millions of rows; the measured 6,000 rows/s means a
+    300-second build reaches far fewer. Sizing must take the smaller of the two.
+
+    The margin narrowed when the slice allowance was cut from 1 GiB to 256 MiB,
+    but the ordering is the point, not the magnitude -- and 1 GiB was dead
+    allocation the slice could never reach anyway.
     """
     disk_limited = max_indexable_rows(BUDGET.otel_slice_allowance_bytes)
     both_limited = max_buildable_rows(
         BUDGET.otel_slice_allowance_bytes, MAX_SLICE_BUILD_SECONDS
     )
-    assert disk_limited > 10_000_000
+    assert disk_limited > 1_000_000
     assert both_limited < disk_limited
     assert estimate_build_seconds(both_limited) <= MAX_SLICE_BUILD_SECONDS
 
@@ -189,11 +199,18 @@ def test_fits_refuses_a_build_over_its_allowance_with_a_row_suggestion():
 
 
 def test_fits_refuses_when_the_total_cap_would_be_passed():
-    """The per-dataset allowance can pass while the total cap fails."""
+    """The per-dataset allowance can pass while the total cap fails.
+
+    Uses a request comfortably inside its own allowance, so the only thing that
+    can refuse it is the database-wide cap.
+    """
+    request = 32 * MIB
+    assert request < BUDGET.openstack_allowance_bytes
+
     verdict = fits(
-        500 * MIB,
-        dataset_id="otel_slice",
-        current_db_bytes=BUDGET.total_disk_bytes - 100 * MIB,
+        request,
+        dataset_id="openstack",
+        current_db_bytes=BUDGET.total_disk_bytes - 8 * MIB,
     )
     assert not verdict.ok
     assert "cap" in verdict.reason

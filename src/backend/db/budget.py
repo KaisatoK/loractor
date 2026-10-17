@@ -256,8 +256,18 @@ PROBLEM_SEVERITIES: tuple[str, ...] = ("error", "fatal", "warn")
 INDEX_BYTES_PER_ROW: int = int(os.getenv("SERENEDB_INDEX_BYTES_PER_ROW", "80"))
 """Disk per searchable row for a view-backed inverted index. Measured 73-74."""
 
+# 155 B/row, measured on a completed build rather than extrapolated.
+#
+# The earlier 300 came from a 100k-row CTAS probe (226 B table + 67 B index).
+# A real 150,557-row slice build then measured 4.19 MB of table and 19.12 MB of
+# index -- 154.9 B/row total, roughly half the probe's figure, because the probe
+# was too small for compression and index structure to amortise.
+#
+# Corpus-dependent, and this is the pessimistic end: the slice stores OTel JSON
+# bodies averaging ~168 B, where BGL's messages average ~45 B. Overridable, and
+# the loader measures actual size after each build.
 MATERIALIZED_BYTES_PER_ROW: int = int(
-    os.getenv("SERENEDB_MATERIALIZED_BYTES_PER_ROW", "300")
+    os.getenv("SERENEDB_MATERIALIZED_BYTES_PER_ROW", "155")
 )
 """Disk per row when rows are stored as well as indexed. Measured 293."""
 
@@ -310,11 +320,26 @@ class Budget:
     openstack_allowance_bytes: int = 64 * MIB
     """The existing demo table with its per-row embeddings (measured: 14.0 MiB)."""
 
-    bgl_allowance_bytes: int = 384 * MIB
-    """Local loghub BGL: inverted index plus template embeddings."""
+    bgl_allowance_bytes: int = 1280 * MIB
+    """Local loghub BGL in full: 4,747,963 rows, inverted index, templates.
 
-    otel_slice_allowance_bytes: int = 1 * GIB
-    """The standing severity-filtered + time-bounded OTel search slice."""
+    Raised from 384 MiB, which could not hold the full corpus. The full BGL log
+    is 4.7M lines / 743 MB raw; at the 154.9 B/row measured on the OTel slice
+    that is ~700 MiB, and BGL's messages are shorter than OTel's JSON bodies so
+    the real figure should be lower. 1.25 GiB leaves margin for the text index,
+    which measured 4.5x its table on the slice.
+    """
+
+    otel_slice_allowance_bytes: int = 256 * MIB
+    """The standing severity-filtered + time-bounded OTel search slice.
+
+    Reduced from 1 GiB, which was dead allocation. The slice is bounded by
+    **build time**, not disk: reading message text costs ~660 s per row group,
+    so the 1,800 s wall-clock cap permits roughly three row groups -- about
+    235k rows, or ~36 MiB at the measured 154.9 B/row. An allowance of 1 GiB
+    reserved space the slice could never reach, at the expense of a corpus that
+    needed it.
+    """
 
     promotion_allowance_bytes: int = 768 * MIB
     """One promoted sweep chunk at a time. Serialized, so this is not per-chunk
@@ -375,8 +400,8 @@ class BudgetVerdict:
 def estimate_index_bytes(rows: int, *, materialized: bool = False) -> int:
     """Disk ``rows`` searchable rows are expected to occupy.
 
-    ``materialized`` picks the 293 B/row figure for corpora that store their
-    rows; the default 80 B/row is the view-backed index path.
+    ``materialized`` picks the measured 155 B/row figure for corpora that store
+    their rows; the default 80 B/row is the view-backed index path.
     """
     per_row = MATERIALIZED_BYTES_PER_ROW if materialized else INDEX_BYTES_PER_ROW
     return int(rows * per_row)

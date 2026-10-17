@@ -582,9 +582,13 @@ BGL = Dataset(
             TEMPLATE: Field(
                 column="EventTemplate", text_indexed=True, token_indexed=True
             ),
-            EVENT_ID: Field(
-                column="EventId", text_indexed=True, token_indexed=True
-            ),
+            # No EVENT_ID. loghub publishes parsed EventId/EventTemplate only
+            # for its 2,000-line samples; the full 4.7M-line log carries
+            # neither, so templates are derived at load and there is no event
+            # id to map. Synthesising one would produce a hash no user would
+            # ever type, while the template selector already answers "this kind
+            # of event". otel_s3 omits record_id for the same reason -- a
+            # canonical field is mapped only where the corpus really has it.
             RECORD_ID: Field(column="LineId"),
         }
     ),
@@ -600,14 +604,17 @@ BGL = Dataset(
     # UPPERCASE, unlike OTel. A global severity constant would have been wrong
     # for one corpus or the other; the refusal names the right correction per
     # dataset because the vocabulary belongs to the dataset.
-    severity_values=("INFO", "WARNING", "ERROR", "SEVERE", "FATAL"),
+    # Six levels, confirmed against the full 4.7M-row corpus. FAILURE was
+    # missing from the 2,000-line sample and would have been refused as unknown
+    # on 1,714 real rows.
+    severity_values=("INFO", "WARNING", "ERROR", "SEVERE", "FATAL", "FAILURE"),
     ts_cast="timestamptz",
     index_name=f"{BGL_TABLE}_idx",
     token_index_name=f"{BGL_TABLE}_token_idx",
+    # Four selectors, not five: no event id to scope to.
     selectors=MappingProxyType(
         {
             "@": SERVICE,
-            "#": EVENT_ID,
             "^": TEMPLATE,
             "!": ENTITY_ID,
             "$": MESSAGE,
@@ -615,7 +622,7 @@ BGL = Dataset(
     ),
     default_window_seconds=86_400,
     max_rows=1_000,
-    row_estimate=2_000,
+    row_estimate=4_747_963,
 )
 
 register(BGL)
