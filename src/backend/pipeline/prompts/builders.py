@@ -24,43 +24,81 @@ ANSWER_EFFORT_NOTES = {
 # tests/test_confidence_prompts.py). The scope and confidence classifiers see it
 # so they reason about what evidence is still retrievable before choosing a
 # route -- in particular whether another find_evidence round could help at all.
+#
+# Each entry names the TIER it reads, because cost differs by orders of
+# magnitude between them and the agent is expected to spend cheaply first:
+#
+#   index   -- a local inverted index. Fast, exact, no object-storage traffic.
+#   remote  -- Parquet in object storage, read in place. Costs network and time
+#              in proportion to the time window, and aggregates are approximate.
 TOOL_CATALOG = {
     "get_trend_tool": (
-        "Counts one known pid/service/event_id BY MINUTE over a time window; "
-        "params: start_time, end_time, type=(kind, exact value), category (severity). "
+        "TIER index|remote. Counts one known service/entity/event per time "
+        "bucket; params: dataset, start_time, end_time, type=(field, exact "
+        "value), bucket (second|minute|hour|day), category (severity). "
         "Use to see how one known entity's volume moves over time."
     ),
     "count_by_category_tool": (
-        "Counts log rows grouped by severity/type; "
-        "params: start_time, end_time, type (pid|service|event_id|general), category (severity). "
-        "Use to quantify volume overall or per pid/service/event_id."
+        "TIER index|remote. CHEAPEST aggregate: reads only the timestamp, "
+        "severity and grouping columns, never message text; params: dataset, "
+        "start_time, end_time, type (general|service|entity_id|event_id), "
+        "category, limit. Use this FIRST to find where the problem is before "
+        "paying to search text."
     ),
     "search_logs_tool": (
-        "Searches message text (optionally filtered by severity); "
-        "params: query_text, category (severity), limit. "
-        "Use to find and read the actual log lines."
+        "TIER index ONLY. Searches message text and ranks by relevance; "
+        "params: dataset, query_text, category, limit. Requires an indexed "
+        "dataset -- it is refused on the raw remote corpus, which has no "
+        "index. Use to read the actual log lines once a window is narrowed."
     ),
     "top_in_category_by_service_tool": (
-        "Ranks services by log volume within a window, optionally one severity; "
-        "params: start_time, end_time, category (severity), limit. "
+        "TIER index|remote. Ranks a field's values by log volume in a window; "
+        "params: dataset, start_time, end_time, field, category, limit. "
         "Use to locate the noisiest services."
     ),
     "compare_periods_tool": (
-        "Compares service/severity counts between a baseline and a recent window; "
-        "params: baseline_start, baseline_end, recent_start, recent_end, limit. "
-        "Use to detect what changed between two time ranges."
+        "TIER index|remote. Compares counts between a baseline and a recent "
+        "window; params: dataset, baseline_start/end, recent_start/end, field, "
+        "limit. Scans BOTH windows, so it costs roughly twice a single count. "
+        "Use to detect what changed."
     ),
     "get_data_tool": (
-        "Lists the known pids/services/event_ids in the log; "
-        "params: type (pid|service|event_id). "
-        "Use to discover valid filter values before querying."
+        "TIER index|remote. Lists a field's most common values with counts; "
+        "params: dataset, start_time, end_time, type, limit. Ranked by volume, "
+        "so the first rows are the significant ones. Use to discover a valid "
+        "filter value before requesting a trend. Refused for fields whose "
+        "distinct set is effectively unbounded, such as trace ids."
     ),
     "get_log_by_line_id_tool": (
-        "Fetches one complete log row by its line_id (primary key); "
-        "params: line_id. "
-        "Use to resolve a 'Line ID: n' reference into the full log record."
+        "TIER index. Fetches one complete row by primary key; params: dataset, "
+        "line_id. Only datasets that declare a record id support it -- the raw "
+        "remote corpus has no primary key and refuses this."
     ),
 }
+
+# How the agent is expected to spend its budget. Code enforces the bounds; this
+# tells the model why they exist so it plans within them instead of hitting them.
+COST_DISCIPLINE = (
+    "Datasets differ in size by six orders of magnitude, so cost discipline is "
+    "part of the task.\n"
+    "1. Every query that scans rows REQUIRES a time window, and the window is "
+    "the main cost control. On the remote corpus one second is already about "
+    "560,000 rows.\n"
+    "2. Work cheap to expensive: counts and trends (which read two or three "
+    "columns) before text search (which reads message bodies).\n"
+    "3. Narrow before searching. Use a count to find the interesting minute, "
+    "then search inside it.\n"
+    "4. Text search needs an indexed dataset. On the remote corpus, aggregate "
+    "first to find the window, then search the indexed slice.\n"
+    "5. A refusal is a useful answer, not a failure. It names what was wrong "
+    "and suggests a narrower request -- follow the suggestion and retry rather "
+    "than abandoning the line of enquiry.\n"
+    "6. Results from a dataset that does not promise exact counts are "
+    "APPROXIMATE and must be described that way in the answer. Never present "
+    "an approximate aggregate as an exact figure.\n"
+    "7. Each tool result carries query_stats describing what it actually read. "
+    "Use those numbers when stating how much data the investigation covered."
+)
 
 # Mission of the pipeline, given to the scope classifier as context so it can
 # judge whether a request is underspecified *relative to what this service does*.
@@ -77,14 +115,32 @@ PIPELINE_MISSION = (
 # Short, code-owned vocabulary used by the scope judgment. The database schema
 # is intentionally not sent: the scope gate only needs to know what counts as a
 # queryable target, not how every table is implemented.
+#
+# ``dataset`` is included because the corpus is now part of what makes a request
+# answerable -- a question about the OTel demo app cannot be served from the
+# OpenStack sample, and a request with no resolvable time window cannot be
+# served from the remote corpus at all.
 QUERYABLE_TARGETS = [
+    "dataset or corpus (which system's logs)",
     "service",
-    "pid",
-    "event_id",
-    "event_template or error/message text",
+    "entity id (process id, trace id, or node)",
+    "event id",
+    "event template or error/message text",
     "severity",
     "time window",
 ]
+
+
+def dataset_catalog() -> dict:
+    """What corpora exist, how big they are, and what each supports.
+
+    Sent to the scope gate so it can judge whether a request names a corpus this
+    service can actually serve. Deliberately carries no table, index, or column
+    names -- the model selects a dataset *id*, and the registry resolves it.
+    """
+    from backend.db.datasets import catalog
+
+    return catalog()
 
 
 def summarized_attempts(tool_results: object) -> list[dict]:
@@ -150,6 +206,7 @@ class PipelinePrompts:
                 "latest_answer": state["latest_answer"],
                 "mission": PIPELINE_MISSION,
                 "queryable_targets": QUERYABLE_TARGETS,
+                "datasets": dataset_catalog(),
                 "tool_catalog": TOOL_CATALOG,
             },
             "questions": {
@@ -407,7 +464,16 @@ class PipelinePrompts:
             f"Effort level: {state.get('effort', 'Medium')}.\n"
             f"Tool-call budget: at most {spec.max_tool_calls} tool calls in this investigation (hard limit; to-do updates count).\n"
             f"Hypothesis budget: define at most {spec.max_hypotheses} hypotheses (never more than 3).\n"
+            f"Scan budget: at most ~{spec.max_rows_scanned:,} rows read across "
+            "the whole investigation. Each tool result reports what it actually "
+            "read in query_stats.\n"
             "</effort guidance>\n"
+            "<cost discipline>\n"
+            f"{COST_DISCIPLINE}\n"
+            "</cost discipline>\n"
+            "<datasets>\n"
+            f"{dataset_catalog()}\n"
+            "</datasets>\n"
             "<request>\n"
             f"{state['normalized']}\n"
             "</request>\n"

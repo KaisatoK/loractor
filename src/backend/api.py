@@ -20,6 +20,7 @@ from backend.db.datasets import UnknownDatasetError
 from backend.observability import RequestContextMiddleware, metrics
 from backend.pipeline.agents import generate_answer
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.cost import investigation_cost
 from backend.pipeline.graph import chatbot, prompts
 from backend.pipeline.roles import ROLE_OBJECTIVES
 from backend.pipeline.state import PipelineState, RoleName
@@ -471,7 +472,8 @@ def chat_reframe(req: ReframeRequest, user: dict = Depends(require_user)) -> dic
     )
     structured = generate_answer(prompts.reframe(state))
     valid_ids = {record.get("id") for record in req["tool_results"] or []}
-    answer = serialize_answer(structured, valid_ids)
+    cost = investigation_cost(req.get("tool_results") or [])
+    answer = serialize_answer(structured, valid_ids, cost.get("note", ""))
     return {"answer": answer}
 
 

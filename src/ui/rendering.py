@@ -86,7 +86,7 @@ def canonicalize(text: str) -> list[tuple[str, str]]:
 
 
 def render_answer(container, text: str, results: list | None) -> None:
-    """Render prose and swap each result marker for its data table."""
+    """Render prose, swap each result marker for its data table, show the cost."""
     by_id = {r["id"]: r for r in (results or [])}
     rendered: set[str] = set()
 
@@ -107,6 +107,90 @@ def render_answer(container, text: str, results: list | None) -> None:
             width="stretch",
             hide_index=True,
         )
+
+    render_cost_panel(container, results)
+
+
+def cost_rows(results: list | None) -> list[dict]:
+    """Per-query cost rows for the panel, derived from each result's stats.
+
+    Pure, so the table's contents are testable without Streamlit. Returns an
+    empty list when no tool reported cost, which is the signal to show nothing.
+    """
+    rows: list[dict] = []
+    for record in results or []:
+        stats = record.get("query_stats")
+        if not isinstance(stats, dict):
+            continue
+        rows_scanned = int(stats.get("est_rows_scanned") or 0)
+        rows.append(
+            {
+                "Result": record.get("id"),
+                "Dataset": stats.get("dataset") or "-",
+                "Rows out": int(stats.get("row_count") or record.get("row_count") or 0),
+                "Rows scanned": f"{rows_scanned:,}" if rows_scanned else "-",
+                "Read": _human_bytes(int(stats.get("est_bytes_read") or 0)),
+                "Time": f"{int(stats.get('elapsed_ms') or 0)} ms",
+                # Badged rather than hidden: an approximate aggregate must never
+                # be mistaken for an exact count.
+                "Exact": "~approx" if stats.get("approximate") else "exact",
+            }
+        )
+    return rows
+
+
+def cost_total(results: list | None) -> str:
+    """One-line total for the panel caption, or an empty string."""
+    rows = [
+        r.get("query_stats")
+        for r in (results or [])
+        if isinstance(r.get("query_stats"), dict)
+    ]
+    if not rows:
+        return ""
+
+    scanned = sum(int(s.get("est_rows_scanned") or 0) for s in rows)
+    read = sum(int(s.get("est_bytes_read") or 0) for s in rows)
+    elapsed = sum(int(s.get("elapsed_ms") or 0) for s in rows)
+    approximate = sum(1 for s in rows if s.get("approximate"))
+
+    parts = [f"{len(rows)} queries", f"{elapsed / 1000:.1f}s"]
+    if scanned:
+        parts.insert(1, f"~{scanned:,} rows scanned")
+    if read:
+        parts.insert(2, _human_bytes(read))
+    if approximate:
+        parts.append(f"{approximate} approximate")
+    return " · ".join(parts)
+
+
+def render_cost_panel(container, results: list | None) -> None:
+    """Show what the investigation actually read, in a collapsed expander.
+
+    Collapsed because it is supporting detail, present because the product
+    promises to report data volume, timings, and whether a figure is exact.
+    """
+    rows = cost_rows(results)
+    if not rows:
+        return
+
+    # Write through the expander object rather than the streamlit module, so this
+    # stays consistent with how the rest of the renderer takes its container.
+    panel = container.expander(
+        f"Data queried — {cost_total(results)}", expanded=False
+    )
+    panel.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
+def _human_bytes(num_bytes: int) -> str:
+    if not num_bytes:
+        return "-"
+    size = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(size) < 1024.0 or unit == "TiB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TiB"  # pragma: no cover
 
 
 def _is_table_line(line: str) -> bool:

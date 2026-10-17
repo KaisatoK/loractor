@@ -25,6 +25,7 @@ from backend.pipeline.agents import (
 )
 from backend.pipeline.agents.evidence_report import generate_evidence_report
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
     classifier,
@@ -192,8 +193,12 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
 def answer_node(state: PipelineState) -> PipelineState:
     _emit_stage("answer")
     structured = generate_answer(prompts.answer(state))
-    valid_ids = {record.get("id") for record in state.get("tool_results") or []}
-    answer = serialize_answer(structured, valid_ids)
+    records = state.get("tool_results") or []
+    valid_ids = {record.get("id") for record in records}
+    # Cost is measured from the tool results' own query_stats, not narrated by
+    # the model, so the volume the answer reports cannot be wrong.
+    cost = investigation_cost(records)
+    answer = serialize_answer(structured, valid_ids, cost.get("note", ""))
     # The answer agent drafts the optional follow-up; confidence decides whether
     # to show it, so keep the draft in state either way.
     if isinstance(structured, dict):

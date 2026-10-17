@@ -25,12 +25,20 @@ _MARKER_RE = re.compile(
 )
 
 
-def serialize_answer(answer: Any, valid_ids: set[str]) -> str:
+def serialize_answer(
+    answer: Any, valid_ids: set[str], cost_note: str = ""
+) -> str:
     """Render structured answer blocks as the marker text the UI expects.
 
     Text blocks become prose; table blocks become a ``[[RESULT:Rx]]`` marker on
     its own line. Table blocks whose id is absent from ``valid_ids`` are dropped
     and repeated ids are collapsed. The model decides how many tables to show.
+
+    ``cost_note`` is appended as a final prose block. It is computed off-model
+    from the tool results' own ``query_stats`` (see
+    :mod:`backend.pipeline.cost`), so what the answer claims about data volume
+    is measured rather than asserted, and it persists with the message instead
+    of living only in the UI.
     """
     blocks = _read_blocks(answer)
     pieces: list[str] = []
@@ -47,6 +55,9 @@ def serialize_answer(answer: Any, valid_ids: set[str]) -> str:
             prose = re.sub(r"[ \t]{2,}", " ", _MARKER_RE.sub("", text or "")).strip()
             if prose:
                 pieces.append(prose)
+
+    if cost_note:
+        pieces.append(cost_note)
 
     return "\n\n".join(pieces)
 
