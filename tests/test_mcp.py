@@ -27,6 +27,25 @@ def test_mcp_server_lists_tools_and_skills():
     asyncio.run(run())
 
 
+def test_mcp_server_serves_nearby_events_and_validates_it():
+    async def run():
+        async with Client(server.mcp) as client:
+            listed = {tool.name: tool for tool in await client.list_tools()}
+            tool = listed["get_nearby_events_tool"]
+            assert "offset" in tool.description and "same_request" in tool.description
+            assert {"line_id", "same_entity", "same_request"} <= set(
+                tool.input_schema["properties"]
+            )
+            for bad in ({"line_id": 0}, {"line_id": 1, "before": 51},
+                        {"line_id": 1, "dataset": "t"}):
+                result = await client.call_tool(
+                    "get_nearby_events_tool", bad, raise_on_error=False
+                )
+                assert result.is_error, bad
+
+    asyncio.run(run())
+
+
 def test_mcp_server_validates_inputs():
     async def run():
         async with Client(server.mcp) as client:
@@ -85,3 +104,28 @@ def test_skill_path_is_sandboxed():
         server.read_skill("../README")
     with pytest.raises(Exception):
         server.read_skill("/etc/passwd")
+
+
+def test_mcp_server_serves_count_by_team_and_validates_it():
+    async def run():
+        async with Client(server.mcp) as client:
+            listed = {tool.name: tool for tool in await client.list_tools()}
+            tool = listed["count_by_team_tool"]
+            assert "ownership table" in tool.description
+            assert {"datasets", "start_time", "end_time", "category"} <= set(
+                tool.input_schema["properties"]
+            )
+            for bad in (
+                {"datasets": ["otel_s3"]},
+                {"start_time": "2017-05-16 00:00:00"},
+                {
+                    "start_time": "2017-05-17 00:00:00",
+                    "end_time": "2017-05-16 00:00:00",
+                },
+            ):
+                result = await client.call_tool(
+                    "count_by_team_tool", bad, raise_on_error=False
+                )
+                assert result.is_error, bad
+
+    asyncio.run(run())

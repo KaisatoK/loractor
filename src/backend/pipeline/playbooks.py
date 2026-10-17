@@ -7,9 +7,9 @@ clients through ``read_skill``, so Claude connected to the MCP server gets the
 same role behavior.
 
 The ownership mapping is read from the fictional ``team_ownership.csv``. It lets
-the agent and the answer name owning teams before a database team-count tool
-exists; team *totals* are never asked of the model (see ``pipeline/priority.py``
-and AGENTS.md "Integrating new tools and tables").
+the agent and the answer name owning teams, while measured team totals come
+from ``count_by_team_tool``. Components not listed in the file remain
+``unowned``.
 """
 
 import functools
@@ -67,7 +67,11 @@ def role_answer_rules(
 
 @functools.lru_cache(maxsize=1)
 def ownership_map() -> dict[str, str]:
-    """``component -> team`` from the ownership CSV (empty if it is absent)."""
+    """``component -> team`` from the ownership CSV (empty if absent).
+
+    ``team_for`` is retained for component-level recommendations. Measured
+    team totals must come from the database team-count tool instead.
+    """
     from backend.db.ownership import read_ownership_csv
 
     if not Path(OWNERSHIP_CSV_PATH).is_file():
@@ -81,10 +85,21 @@ def team_for(component: str | None) -> str:
 
 
 def ownership_context() -> str:
-    """Compact ``team: component, ...`` lines for prompts."""
-    teams: dict[str, list[str]] = {}
-    for component, team in ownership_map().items():
-        teams.setdefault(team, []).append(component)
-    lines = [f"- {team}: {', '.join(sorted(components))}" for team, components in teams.items()]
-    lines.append(f"- {UNOWNED_TEAM}: any component not listed above")
-    return "Fictional team-ownership mapping (component -> owning team):\n" + "\n".join(lines)
+    """Compact corpus-scoped ``team: component, ...`` lines for prompts."""
+    from backend.db.ownership import read_ownership_csv
+
+    by_dataset: dict[str, dict[str, list[str]]] = {}
+    if Path(OWNERSHIP_CSV_PATH).is_file():
+        for dataset, component, team in read_ownership_csv():
+            by_dataset.setdefault(dataset, {}).setdefault(team, []).append(component)
+
+    lines = ["Fictional team-ownership mapping, grouped by corpus:"]
+    for dataset in sorted(by_dataset):
+        lines.append(f"{dataset}:")
+        for team in sorted(by_dataset[dataset]):
+            components = ", ".join(sorted(by_dataset[dataset][team]))
+            lines.append(f"- {team}: {components}")
+        lines.append(f"- {UNOWNED_TEAM}: any {dataset} component not listed above")
+    if not by_dataset:
+        lines.append(f"- {UNOWNED_TEAM}: any component not listed above")
+    return "\n".join(lines)

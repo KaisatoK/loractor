@@ -37,6 +37,7 @@ from backend.db import loghub  # noqa: E402
 from backend.db.datasets import (  # noqa: E402
     DEFAULT_DATASET_ID,
     Capability,
+    catalog,
     dataset_ids,
     resolve,
 )
@@ -89,6 +90,24 @@ def test_openstack_maps_the_canonical_fields_it_actually_has():
         "record_id",
     ):
         assert openstack.sql_for(name) is not None
+
+
+def test_openstack_derives_a_request_id_from_addr():
+    """``request_id`` is the first word of ``ADDR`` when it is a ``req-`` id,
+    derived at query time, so it needs no new column and no reload."""
+    openstack = resolve("openstack")
+    request = openstack.field("request_id")
+    assert request.column is None and request.expression
+    assert '"ADDR"' in request.expression and "'req-'" in request.expression
+    # A bare % would be read as a placeholder by psycopg2 in any query with
+    # parameters, and every nearby-events query has one.
+    assert "%" not in request.expression
+    assert "request_id" in catalog()["openstack"]["fields"]
+
+
+def test_openstack_spec_stores_the_column_request_id_reads():
+    spec = loghub.spec_for("openstack")
+    assert "ADDR" in set(spec.all_column_names)
 
 
 def test_openstack_does_not_claim_an_event_id_it_does_not_have():

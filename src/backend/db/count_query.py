@@ -336,3 +336,144 @@ def count_by_dataset(
     stats = QueryStats(dataset=",".join(ids), approximate=False)
     stats.notes.append("counted over every row of each dataset; no time window")
     return query, [], stats
+
+
+@query_runner
+def count_by_team(
+    datasets: tuple[str, ...] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    category: str | None = None,
+) -> tuple[sql.Composable, list, QueryStats]:
+    """Count local log rows by owning team and severity.
+
+    The ownership table is joined by both corpus and component. A LEFT JOIN is
+    deliberate: components absent from the fictional mapping are retained as
+    ``unowned`` instead of silently disappearing from team totals. With a
+    window, the same half-open bounds are applied independently to each local
+    dataset; without one, every local row is counted.
+    """
+    from backend.db.catalog_query import existing_relations
+    from backend.db.config import OWNERSHIP_TABLE, UNOWNED_TEAM
+
+    countable = {d.id for d in local_datasets()}
+    ids = tuple(dict.fromkeys(datasets)) if datasets else tuple(sorted(countable))
+    resolved = [resolve(dataset_id) for dataset_id in ids]
+
+    remote = [d.id for d in resolved if d.id not in countable]
+    if remote:
+        raise refuse(
+            f"{', '.join(remote)} cannot be counted by team: only local "
+            "datasets with exact counts are supported.",
+            "Use count_by_category_tool grouped by service with a time window "
+            f"for {', '.join(remote)} instead.",
+            code="not_countable_by_team",
+        )
+
+    relation_names = tuple(dict.fromkeys(
+        [d.sources[0] for d in resolved] + [OWNERSHIP_TABLE]
+    ))
+    present = {
+        row["table_name"]
+        for row in existing_relations(relation_names)
+    }
+    missing_logs = [d.id for d in resolved if d.sources[0] not in present]
+    if missing_logs:
+        raise refuse(
+            f"Not loaded: {', '.join(missing_logs)}.",
+            "Load the local corpora with `bash ./setup.sh`.",
+            code="not_loaded",
+        )
+    if OWNERSHIP_TABLE not in present:
+        raise refuse(
+            f"The ownership table '{OWNERSHIP_TABLE}' is not loaded.",
+            "Run `uv run python -m backend.db.ownership` and retry.",
+            code="ownership_not_loaded",
+        )
+
+    eligible: list[Dataset] = []
+    skipped: list[str] = []
+    for dataset in resolved:
+        if category is None or category in dataset.severity_values:
+            eligible.append(dataset)
+            continue
+        case_matches = [
+            value for value in dataset.severity_values
+            if value.lower() == category.lower()
+        ]
+        if case_matches:
+            raise refuse(
+                f"Severity '{category}' is the wrong case for '{dataset.id}'.",
+                f"Use '{case_matches[0]}'. This corpus' values are: "
+                f"{', '.join(dataset.severity_values)}.",
+                code="severity_case",
+                corrected=case_matches[0],
+            )
+        skipped.append(dataset.id)
+
+    if not eligible:
+        known = sorted({value for d in resolved for value in d.severity_values})
+        raise refuse(
+            f"'{category}' is not present in the requested local datasets.",
+            f"Use one of: {', '.join(known)}.",
+            code="unknown_severity",
+            severity_values=known,
+        )
+
+    branches: list[sql.Composable] = []
+    params: list = []
+    for dataset in eligible:
+        window = None
+        if start_time is not None or end_time is not None:
+            window = build_window(dataset, start_time, end_time)
+
+        service = sql.SQL("t.{column}").format(
+            column=dataset.sql_for("service")
+        )
+        severity = sql.SQL("t.{column}").format(
+            column=dataset.sql_for("severity")
+        )
+        team = sql.SQL("COALESCE(o.team, {unowned})").format(
+            unowned=sql.Literal(UNOWNED_TEAM)
+        )
+        clauses: list[tuple[sql.Composable, list]] = []
+        if window is not None:
+            clauses.append(pred.ts_filter(dataset, window, alias="t"))
+        clauses.append(pred.severity_filter(dataset, category))
+        clause, branch_params = pred.where(*clauses)
+        params.extend(branch_params)
+
+        branches.append(sql.SQL(
+            "SELECT {dataset} AS dataset, {team} AS team, {severity} AS severity, "
+            "count(*) AS count "
+            "FROM {relation} AS t "
+            "LEFT JOIN {ownership} AS o ON o.dataset = {corpus} "
+            "AND o.component = {service} "
+            "{clause} "
+            "GROUP BY {team}, {severity}"
+        ).format(
+            dataset=sql.Literal(dataset.id),
+            team=team,
+            severity=severity,
+            relation=dataset.scan_relation(),
+            ownership=sql.Identifier(OWNERSHIP_TABLE),
+            corpus=sql.Literal(dataset.corpus_name),
+            service=service,
+            clause=clause,
+        ))
+
+    query = sql.SQL(
+        "SELECT dataset, team, severity, count "
+        "FROM ({branches}) AS counted "
+        "ORDER BY count DESC, dataset, team, severity"
+    ).format(branches=sql.SQL(" UNION ALL ").join(branches))
+    stats = QueryStats(dataset=",".join(ids), approximate=False)
+    if start_time is None and end_time is None:
+        stats.notes.append("counted over every row of each requested local dataset")
+    else:
+        stats.notes.append("counted in the requested half-open time window")
+    if skipped:
+        stats.notes.append(
+            f"Skipped datasets without severity '{category}': {', '.join(skipped)}"
+        )
+    return query, params, stats

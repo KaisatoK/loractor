@@ -16,21 +16,36 @@ What failed, in which component, and what happened just before and after?
    timestamp, service and template of the best hits. The result's
    `total_matches` counts every matching line, so say "n shown of
    total_matches"; it is the number of matching log entries, not a frequency
-   over time (step 3 measures that).
-2. **Nearby events.** When a nearby-events tool is available (planned:
-   `get_nearby_events_tool`, events around a `line_id`), call it on the most
-   relevant hit. Until then, approximate from the hit's `record_id` (search
-   returns it; lines follow the original file order): call
-   `get_log_by_line_id_tool` with `line_id` = `record_id - 1` and `record_id + 1`
-   (more neighbours if the budget allows), and use
-   `get_trend_tool` for the hit's template (or service) over the window. Say that the timeline
-   is approximate (adjacent lines, not a time-bounded slice).
-3. **Isolated or recurring?** One `count_by_category_tool` (type `template` or
-   `service`) over the whole dataset window (`window_start`..`window_end` from
-   `list_datasets_tool`, when you do not have it yet), so the answer can say whether this
-   error appears once or many times. This is a database count, not the number of
-   search hits.
-4. Optional, when a hypothesis needs it: one query that could contradict it
+   over time (step 4 measures that).
+2. **Nearby events.** Call `get_nearby_events_tool` on the most relevant hit:
+   `line_id` = its `record_id`, the same `dataset`. The rows are the lines just
+   before and after it in file order, each with an `offset` (negative before,
+   0 for the hit, positive after), so they give the before/after timeline
+   directly. To follow one process or node, set `same_entity=true`; on a dataset
+   whose fields include `request_id` (listed per dataset under `<datasets>`),
+   `same_request=true` follows one API request. Read the tool's request-context
+   summary: if the request id covers thousands of lines across the dataset, it
+   is a service's periodic-task context, not a user request; in that case,
+   follow the actual API request on the unfiltered neighbouring rows instead.
+   The tool refuses `same_request` on a dataset without that field; use
+   `same_entity` there.
+   When budget allows, one unfiltered call plus one filtered call shows both what
+   the system was doing at the time and what the failing process or request did.
+   A note in the result explains an empty or anchor-only timeline; report it
+   rather than treating it as "nothing happened".
+3. **Measure local spread when the failure is clustered.** If the anchor's
+   second or minute contains several `ERROR`/`FATAL` rows, call
+   `count_by_category_tool` with `type="entity_id"` over that same short window.
+   Use a `limit` large enough to include every relevant entity, rather than
+   accepting a top-10 view. This measures whether the event is isolated to one
+   process/node or spread across processors, nodes or components; do not infer
+   the spread from the number of context rows.
+4. **Isolated or recurring?** Call `count_by_category_tool` once with
+   `type="template"` or `type="service"` over the whole dataset window
+   (`window_start`..`window_end` from `list_datasets_tool`, when you do not
+   have it yet), so the answer can say whether this error appears once or many
+   times. This is a database count, not the number of search hits.
+5. Optional, when a hypothesis needs it: one query that could contradict it
    (a counterexample: the same error without the suspected preceding event).
 
 ## Answer must contain

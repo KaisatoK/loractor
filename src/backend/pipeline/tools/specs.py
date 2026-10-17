@@ -42,11 +42,14 @@ from typing import Any
 from pydantic import BaseModel
 
 from backend.db import (
+    add_burst_summary,
     compare_periods,
     count_by_dataset,
     count_by_field,
+    count_by_team,
     get_field_values,
     get_log_by_record_id,
+    get_nearby_events,
     get_trend,
     list_datasets,
     top_by_field,
@@ -183,6 +186,27 @@ def count_by_dataset_operation(datasets: list[str] | None) -> str:
     return f"count log entries by severity in {scope}"
 
 
+def count_by_team_operation(datasets: list[str] | None, start_time: str | None,
+                            end_time: str | None, category: str | None) -> str:
+    scope = ", ".join(datasets) if datasets else "every local dataset"
+    operation = f"count log entries by owning team and severity in {scope}"
+    if start_time and end_time:
+        operation += f" from {start_time} to {end_time}"
+    if category:
+        operation += f" for '{category}'"
+    return operation
+
+
+def nearby_operation(line_id: int, dataset: str, before: int, after: int,
+                     same_entity: bool, same_request: bool) -> str:
+    operation = f"fetch {before} lines before and {after} after {dataset} line {line_id}"
+    narrowed = [label for label, wanted in (("entity", same_entity),
+                                            ("request", same_request)) if wanted]
+    if narrowed:
+        operation += f" with the same {' and '.join(narrowed)}"
+    return operation
+
+
 # --- The sweep's two adapters ------------------------------------------------------
 def _relay(reporter):
     """Forward sweep events to the tool-progress stream.
@@ -285,9 +309,31 @@ def _run_values(args, progress):
 
 def _run_trend(args, progress):
     field, value = args["type"]
-    return get_trend(
-        args["start_time"], args["end_time"], field, value, args["dataset"],
-        args["bucket"], args["category"], args["group_by"],
+    # The burst summary (consecutive non-zero bucket runs and their totals) is
+    # derived in code from the returned grid, so it costs no second query.
+    return add_burst_summary(
+        get_trend(
+            args["start_time"], args["end_time"], field, value, args["dataset"],
+            args["bucket"], args["category"], args["group_by"],
+        ),
+        group_by=args["group_by"],
+    )
+
+
+def _run_nearby(args, progress):
+    return get_nearby_events(
+        args["line_id"], args["dataset"], args["before"], args["after"],
+        args["same_entity"], args["same_request"],
+    )
+
+
+def _run_count_by_team(args, progress):
+    datasets = args["datasets"]
+    return count_by_team(
+        datasets=tuple(datasets) if datasets else None,
+        start_time=args["start_time"],
+        end_time=args["end_time"],
+        category=args["category"],
     )
 
 
@@ -420,7 +466,8 @@ SPECS: tuple[ToolSpec, ...] = (
             "a window. Find the exact value with get_data_tool first. Returns "
             "kind=trend rows {bucket, [severity,] count, prev_count, trend} for "
             "EVERY bucket in the window, with count 0 where nothing was logged, so "
-            "a gap shows as a gap; `query_stats.notes` names the bucket used. "
+            "a gap shows as a gap; `query_stats.notes` names the bucket used and "
+            "summarizes consecutive non-zero bucket runs with their totals. "
             "Measured counts of log entries. A window that would need more than 240 "
             "points is refused with a coarser bucket suggested."
         ),
@@ -431,7 +478,8 @@ SPECS: tuple[ToolSpec, ...] = (
             "value), bucket (second|minute|hour|day|week|month; omit it and the "
             "window picks one), category (severity), group_by ('severity' for one "
             "series per level). Every bucket in the window is returned, 0 where "
-            "nothing was logged, so a gap shows as a gap. "
+            "nothing was logged, so a gap shows as a gap. query_stats.notes also "
+            "summarizes consecutive non-zero bucket runs with their measured totals. "
             "Use to see how one known entity's volume moves over time."
         ),
         args_model=schemas.GetTrend,
@@ -719,46 +767,99 @@ SPECS: tuple[ToolSpec, ...] = (
         complete=True,
         open_world=False,
     ),
-    # Planned (docs/tool_requests.md T2, T3): declared so the catalog, the kinds
-    # and the schemas exist, but not offered by any transport until the tool owner
-    # supplies ``run`` and sets ``available=True``. Drop the "NOT AVAILABLE YET"
-    # prefix of the catalog line then.
     ToolSpec(
         name="get_nearby_events_tool",
         title="Events around a log line",
-        description=schemas.NEARBY_EVENTS_DESCRIPTION,
+        description=(
+            "Return the log lines just before and after one anchor line, for the "
+            "engineer's before/after timeline. Use it on a search hit's record_id "
+            "or a 'Line ID: n (dataset)' reference, after search_logs_tool or "
+            "get_log_by_line_id_tool found the line. Neighbours follow record-id "
+            "(file) order, not a time window; same_entity narrows them to the "
+            "anchor's process (OpenStack) or node (BGL), same_request to its "
+            "request id (OpenStack only; refused elsewhere). Datasets without a "
+            "record id (the OTel tiers) are refused. Returns kind=context rows "
+            "ordered by record_id: record_id, ts, severity, service, entity_id, "
+            "request_id (OpenStack), message, template and offset (negative "
+            "before the anchor, 0 for the anchor, positive after); with "
+            "same_request, `query_stats.notes` also summarizes the whole request "
+            "(rows, first and last timestamp, components). An unknown line_id, or "
+            "an anchor with no value for the flagged field, is a success with "
+            "empty or anchor-only data and a note. Context rows are examples, "
+            "never a frequency: count with count_by_category_tool."
+        ),
         kind="context",
         catalog=(
-            "NOT AVAILABLE YET -- cannot close a gap. TIER index. Returns the log "
-            "entries just before and after one anchor line; params: dataset, "
-            "line_id, before, after, same_entity, same_request. Rows are examples "
-            "(kind context) with an offset from the anchor. Use for the engineer's "
-            "before/after timeline."
+            "TIER index. Returns the log entries just before and after one anchor "
+            "line, in file order; params: dataset (openstack or bgl), line_id (a "
+            "search hit's record_id), before, after (0-50, default 5), "
+            "same_entity (only the anchor's process or node), same_request (only "
+            "the anchor's request id; OpenStack only). Rows are examples (kind "
+            "context) with an offset from the anchor, never a frequency. Use for "
+            "the engineer's before/after timeline."
         ),
         args_model=schemas.GetNearbyEvents,
-        run=None,
-        operation=lambda a: f"get events around {a['dataset']} line {a['line_id']}",
+        run=_run_nearby,
+        operation=lambda a: nearby_operation(
+            a["line_id"], a["dataset"], a["before"], a["after"],
+            a["same_entity"], a["same_request"],
+        ),
+        filters=lambda a: {
+            "line_id": a["line_id"],
+            "before": a["before"],
+            "after": a["after"],
+            "same_entity": a["same_entity"],
+            "same_request": a["same_request"],
+        },
+        limit_of=lambda a: None,
+        # The row count is what was asked for, not a cap that cut anything off.
+        complete=True,
         open_world=False,
-        available=False,
     ),
     ToolSpec(
         name="count_by_team_tool",
         title="Count entries per team",
-        description=schemas.COUNT_BY_TEAM_DESCRIPTION,
+        description=(
+            "Count log entries per owning team and severity in the local "
+            "datasets, joining each row's service (Component) to the "
+            "team_ownership table by corpus and component. Use it to group "
+            "recurring problems by team, or to say which team owns most of the "
+            "errors; for a breakdown by service use count_by_category_tool. Omit "
+            "the window to count every row. Services with no owner count as team "
+            "'unowned', so team totals equal the dataset totals. Returns "
+            "kind=aggregate rows {dataset, team, severity, count} ordered by "
+            "count, computed in the database over every matching row: measured "
+            "log entries, not incidents, with no row cap. The remote corpus, an "
+            "unloaded dataset and a missing ownership table are refused with a "
+            "suggestion; a severity absent from some datasets counts only the "
+            "others and says so in `query_stats.notes`."
+        ),
         kind="aggregate",
         catalog=(
-            "NOT AVAILABLE YET -- cannot close a gap. TIER index. Counts log "
-            "entries per owning team and severity over local datasets; params: "
-            "datasets, start_time, end_time (optional, together), category. "
-            "Unowned services count as team 'unowned'. Measured (kind aggregate). "
-            "Use to group recurring problems by team."
+            "TIER index. Counts log entries per owning team and severity over local "
+            "datasets; params: datasets, start_time, end_time (optional paired "
+            "window), category. Returns measured kind=aggregate rows with "
+            "dataset, team, severity and count, ordered by count. It joins the "
+            "ownership mapping and counts unowned services as team 'unowned'. "
+            "Use to group recurring problems by team; counts are log entries, not "
+            "incidents."
         ),
         args_model=schemas.CountByTeam,
-        run=None,
-        operation=lambda a: "count log entries per owning team and severity",
+        run=_run_count_by_team,
+        operation=lambda a: count_by_team_operation(
+            a["datasets"], a["start_time"], a["end_time"], a["category"]
+        ),
+        filters=lambda a: {
+            "datasets": a["datasets"],
+            "start_time": a["start_time"],
+            "end_time": a["end_time"],
+            "category": a["category"],
+        },
+        # Several datasets: named in the filters, as for count_by_dataset_tool.
         dataset_of=lambda a: None,
+        limit_of=lambda a: None,
+        complete=True,
         open_world=False,
-        available=False,
     ),
 )
 

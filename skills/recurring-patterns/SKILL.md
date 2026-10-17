@@ -20,11 +20,10 @@ Which problems recur, how often, and which components or teams are involved?
    database counts are the measured frequency. For a question across datasets,
    `count_by_dataset_tool` counts each whole local dataset by severity in one
    call.
-3. **Teams involved.** When a team-count tool is available (planned:
-   `count_by_team_tool`, a join of the component column to the `team_ownership` table),
-   use it. Until then, use the service counts and the team-ownership mapping
-   supplied in the prompt to name the owning team of each component; do not add
-   counts up yourself.
+3. **Teams involved.** Call `count_by_team_tool` for the same local datasets and
+   period. It joins the component column to the real `team_ownership` table and
+   returns measured rows by `dataset`, `team`, and severity. Components absent
+   from the mapping appear as `unowned`; do not add team counts up yourself.
 4. **Trend.** `get_trend_tool` for the top one to three recurring templates or
    services over the same period, to show whether each is rising, flat or bursty.
    Omit `bucket` and the window picks one; every bucket is returned, 0 where

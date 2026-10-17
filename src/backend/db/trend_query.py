@@ -27,7 +27,7 @@ from backend.db.connection import bulk_query
 from backend.db.datasets import Dataset, DatasetKind, resolve
 from backend.db.errors import refuse
 from backend.db.pruning import plan_and_guard
-from backend.db.stats import QueryStats
+from backend.db.stats import QueryResult, QueryStats
 from backend.db.windows import build_window
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,74 @@ def choose_bucket(window_seconds: float, series: int = 1) -> str:
     return pred.BUCKETS[-1]
 
 
+
+
+def _format_burst_bucket(bucket: object) -> str:
+    """Keep burst notes readable while preserving the bucket value."""
+    return str(bucket).replace("+00:00", "Z")
+
+
+def _non_zero_bursts(rows: list[dict]) -> list[tuple[object, object, int]]:
+    """Return consecutive non-zero bucket runs and their measured totals."""
+    bursts: list[tuple[object, object, int]] = []
+    start = end = None
+    total = 0
+    for row in rows:
+        count = int(row.get("count") or 0)
+        if count > 0:
+            if start is None:
+                start = row.get("bucket")
+                total = 0
+            end = row.get("bucket")
+            total += count
+        elif start is not None:
+            bursts.append((start, end, total))
+            start = end = None
+            total = 0
+    if start is not None:
+        bursts.append((start, end, total))
+    return bursts
+
+
+def add_burst_summary(result: QueryResult, *, group_by: str | None = None) -> QueryResult:
+    """Add code-derived summaries of consecutive non-zero trend buckets.
+
+    The trend already returns a zero-filled grid. Summarising that returned data
+    avoids another database query and makes repeated bursts visible even when a
+    model does not inspect every trend row. With a severity grouping, each
+    severity gets its own independent run list. The first ten runs per series
+    are reported; the table remains the complete measured result.
+    """
+    if not result:
+        result.stats.notes.append("non-zero bucket runs: none")
+        return result
+
+    series: dict[object, list[dict]] = {}
+    for row in result:
+        key = row.get("severity") if group_by == "severity" else None
+        series.setdefault(key, []).append(row)
+
+    descriptions: list[str] = []
+    for key, rows in series.items():
+        bursts = _non_zero_bursts(rows)
+        label = ""
+        if key is not None:
+            label = f"{key}: "
+        if not bursts:
+            descriptions.append(f"{label}none")
+            continue
+        shown = bursts[:10]
+        text = "; ".join(
+            f"{_format_burst_bucket(start)}–{_format_burst_bucket(end)} "
+            f"({total} log entries)"
+            for start, end, total in shown
+        )
+        if len(bursts) > len(shown):
+            text += f"; +{len(bursts) - len(shown)} more runs"
+        descriptions.append(label + text)
+
+    result.stats.notes.append("non-zero bucket runs: " + " | ".join(descriptions))
+    return result
 @bulk_query
 def get_trend(
     start_time: str,

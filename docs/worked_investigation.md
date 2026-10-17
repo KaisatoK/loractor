@@ -1,81 +1,95 @@
 # Worked investigation
 
-Topic: **Unknown base file warnings**. The same agent and base corpus answer three role-specific questions; each role gets different evidence and a different next step.
+Topic: **Which recurring errors should the team investigate first?**. The same agent and base corpus answer three role-specific questions; each role gets different evidence and a different next step.
 
-_Generated 2026-10-17 15:05 UTC by `bash ./worked_investigation.sh`; this file is regenerated from live runs, do not edit by hand._
+_Generated 2026-10-17 21:06 UTC by `bash ./worked_investigation.sh`; this file is regenerated from live runs, do not edit by hand._
 
 ## Data scope
 - Datasets queried: bgl, openstack
-- Time windows: 2017-05-16 00:00:00 – 2017-08-14 00:00:00; 2017-05-01 00:00:00 – 2017-07-30 00:00:00; 2016-05-01 00:00:00 – 2016-07-30 00:00:00; 2017-05-01 00:00:00 – 2017-07-30 00:00:00
+- Time windows: 2017-05-14 19:39:01 – 2017-05-17 12:02:36; 2005-06-03 22:42:50 – 2006-01-04 16:00:06
 - Roles run: Engineer, Team lead, Manager
 
 ## Engineer
-**Question:** What failed involving Unknown base file warnings, in which component, and what happened just before and after?
+**Question:** What failed involving Which recurring errors should the team investigate first?, in which component, and what happened just before and after?
+
+**Route:** `clarify` · **Effort:** High · **Datasets:** not reported
+> Route was `clarify`, not an investigation; the answer below is the assistant's reply, with no evidence behind it.
+> ⚠ No full-text search result was captured for this role.
+
+### Tool calls
+_No tool results were captured._
+
+### Executed queries
+_none_
+
+### Relevant results
+_none_
+
+### Evidence report
+_No evidence report (no investigation ran for this route)._
+
+### Answer for the engineer
+Which log corpus should I look at — BGL, OpenStack, or OTel?
+
+### Recommended action
+_none recorded_
+
+## Team lead
+**Question:** Which problems involving Which recurring errors should the team investigate first? recur, how often, and which components or teams are involved?
 
 **Route:** `find_evidence` · **Effort:** High · **Datasets:** openstack
 
 ### Tool calls
 | id | tool | kind | arguments | rows | truncated |
 | --- | --- | --- | --- | --- | --- |
-| R1 | search_logs_tool | search | `{"query_text": "Unknown base file", "dataset": "openstack", "limit": 20}` | 20 | yes |
-| R2 | get_log_by_line_id_tool | lookup | `{"dataset": "openstack", "line_id": 56}` | 1 | no |
-| R3 | get_log_by_line_id_tool | lookup | `{"dataset": "openstack", "line_id": 58}` | 1 | no |
-| R4 | count_by_category_tool | aggregate | `{"dataset": "openstack", "start_time": "2017-05-16 00:00:00", "end_time": "2017-08-14 00:00:00", "type": "template", "l…` | 2 | no |
-| R5 | get_log_by_line_id_tool | lookup | `{"dataset": "openstack", "line_id": 59}` | 1 | no |
-| R6 | get_log_by_line_id_tool | lookup | `{"dataset": "openstack", "line_id": 60}` | 1 | no |
+| R1 | list_datasets_tool | catalog | `{}` | 4 | no |
+| R2 | count_by_category_tool | aggregate | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": "template", "c…` | 46 | no |
+| R3 | count_by_category_tool | aggregate | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": "template", "c…` | 15 | no |
+| R4 | count_by_category_tool | aggregate | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": "template", "c…` | 1 | no |
+| R5 | count_by_team_tool | aggregate | `{"datasets": ["openstack"], "start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36"}` | 10 | no |
+| R6 | count_by_category_tool | aggregate | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": "service", "li…` | 17 | no |
+| R7 | get_trend_tool | trend | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": ["template", "…` | 66 | no |
+| R8 | get_trend_tool | trend | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": ["service", "o…` | 66 | no |
+| R9 | search_logs_tool | search | `{"query_text": "Unknown base file", "dataset": "openstack", "category": "WARNING", "start_time": "2017-05-14 19:39:01",…` | 2 | yes |
+| R10 | search_logs_tool | search | `{"query_text": "Error during ComputeManager._run_image_cache_manager_pass", "dataset": "openstack", "category": "ERROR"…` | 2 | yes |
+| R11 | get_trend_tool | trend | `{"dataset": "openstack", "end_time": "2017-05-17 12:02:36", "start_time": "2017-05-14 19:39:01", "type": ["service", "k…` | 66 | no |
+| R12 | priority_score | derived | `{"dimension": "template", "from": ["R2", "R3", "R4", "R7"]}` | 10 | yes |
 
 ### Executed queries
-**R1** search_logs_tool
+**R1** list_datasets_tool
 
 ```sql
-WITH query_embedding AS (
-SELECT ai_embed('Unknown base file', 'nomic-embed-text:v1.5', 'local_ai')::FLOAT[768] AS emb
-),
-fused AS (
-SELECT "LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
-FROM (
-SELECT "LineId", BM25("openstack_idx".tableoid) AS s
-FROM "openstack_idx"
-WHERE "Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)])
-ORDER BY s DESC
-LIMIT 100
-) lex
-UNION ALL
-SELECT r."LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY m.dist, r."LineId") AS rank
-FROM (
-SELECT template_text, embedding <=> q.emb AS dist
-FROM "openstack_templates", query_embedding q
-WHERE embedding <=> q.emb < 1.0
-ORDER BY dist
-LIMIT 20
-) m
-JOIN "openstack_idx" r ON r."EventTemplate" = m.template_text
-)
-SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Pid" AS "entity_id", t."Content" AS "message",
-SUM(1.0 / (60 + f.rank)) AS relevance
-FROM fused f
-JOIN "openstack" t ON t."LineId" = f.rid
-GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Pid", t."Content"
-ORDER BY relevance DESC
-LIMIT 20
+SELECT table_name FROM information_schema.tables WHERE table_name IN ('bgl', 'openstack', 'otel_ext', 'otel_ext_meta');
+SELECT "Level" AS severity, count(*) AS count, min("Timestamp") AS first_ts, max("Timestamp") AS last_ts
+FROM "bgl"
+GROUP BY "Level"
+ORDER BY count DESC;
+SELECT "Level" AS severity, count(*) AS count, min("Timestamp") AS first_ts, max("Timestamp") AS last_ts
+FROM "openstack"
+GROUP BY "Level"
+ORDER BY count DESC
 ```
 
-**R2** get_log_by_line_id_tool
+**R2** count_by_category_tool
 
 ```sql
-SELECT "LineId" AS record_id, "Timestamp" AS "ts", "Level" AS "severity", "Component" AS "service", "Pid" AS "entity_id", "Content" AS "message", "EventTemplate" AS template
+SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
 FROM "openstack"
-WHERE "LineId" = 56
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'ERROR'
+GROUP BY "EventTemplate", "Level"
+ORDER BY count DESC
+LIMIT 50
 ```
 
-**R3** get_log_by_line_id_tool
+**R3** count_by_category_tool
 
 ```sql
-SELECT "LineId" AS record_id, "Timestamp" AS "ts", "Level" AS "severity", "Component" AS "service", "Pid" AS "entity_id", "Content" AS "message", "EventTemplate" AS template
+SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
 FROM "openstack"
-WHERE "LineId" = 58
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'WARNING'
+GROUP BY "EventTemplate", "Level"
+ORDER BY count DESC
+LIMIT 50
 ```
 
 **R4** count_by_category_tool
@@ -83,544 +97,479 @@ WHERE "LineId" = 58
 ```sql
 SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
 FROM "openstack"
-WHERE "Timestamp" >= '2017-05-16 00:00:00'::timestamptz AND "Timestamp" < '2017-08-14 00:00:00'::timestamptz AND "Level" = 'WARNING'
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'CRITICAL'
 GROUP BY "EventTemplate", "Level"
 ORDER BY count DESC
-LIMIT 20
+LIMIT 10
 ```
 
-**R5** get_log_by_line_id_tool
+**R5** count_by_team_tool
 
 ```sql
-SELECT "LineId" AS record_id, "Timestamp" AS "ts", "Level" AS "severity", "Component" AS "service", "Pid" AS "entity_id", "Content" AS "message", "EventTemplate" AS template
-FROM "openstack"
-WHERE "LineId" = 59
+SELECT table_name FROM information_schema.tables WHERE table_name IN ('openstack', 'team_ownership');
+SELECT dataset, team, severity, count FROM (SELECT 'openstack' AS dataset, COALESCE(o.team, 'unowned') AS team, t."Level" AS severity, count(*) AS count FROM "openstack" AS t LEFT JOIN "team_ownership" AS o ON o.dataset = 'OpenStack' AND o.component = t."Component" WHERE "t"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "t"."Timestamp" < '2017-05-17 12:02:36'::timestamptz GROUP BY COALESCE(o.team, 'unowned'), t."Level") AS counted ORDER BY count DESC, dataset, team, severity
 ```
 
-**R6** get_log_by_line_id_tool
+**R6** count_by_category_tool
 
 ```sql
-SELECT "LineId" AS record_id, "Timestamp" AS "ts", "Level" AS "severity", "Component" AS "service", "Pid" AS "entity_id", "Content" AS "message", "EventTemplate" AS template
+SELECT "Component" AS "service", "Level" AS severity, count(*) AS count
 FROM "openstack"
-WHERE "LineId" = 60
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz
+GROUP BY "Component", "Level"
+ORDER BY count DESC
+LIMIT 50
 ```
+
+**R7** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('hour', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "openstack"
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "EventTemplate" = 'Unknown base file: /var/lib/nova/instances/_base/<*>' AND "Level" = 'WARNING'
+GROUP BY CAST(date_trunc('hour', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('hour', '2017-05-14 19:39:01'::timestamptz), '2017-05-17 12:02:36'::timestamptz,
+CAST('1 hour' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2017-05-17 12:02:36'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
+)
+SELECT
+bucket,
+count,
+LAG(count) OVER (ORDER BY bucket) AS prev_count,
+CASE
+WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
+WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
+WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
+ELSE 'flat'
+END AS trend
+FROM filled
+ORDER BY bucket
+LIMIT 240
+```
+
+**R8** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('hour', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "openstack"
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Component" = 'oslo_service.periodic_task' AND "Level" = 'ERROR'
+GROUP BY CAST(date_trunc('hour', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('hour', '2017-05-14 19:39:01'::timestamptz), '2017-05-17 12:02:36'::timestamptz,
+CAST('1 hour' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2017-05-17 12:02:36'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
+)
+SELECT
+bucket,
+count,
+LAG(count) OVER (ORDER BY bucket) AS prev_count,
+CASE
+WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
+WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
+WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
+ELSE 'flat'
+END AS trend
+FROM filled
+ORDER BY bucket
+LIMIT 240
+```
+
+**R9** search_logs_tool
+
+```sql
+WITH fused AS (
+SELECT rid, ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
+FROM (
+SELECT "i"."LineId" AS rid, BM25("i".tableoid) AS s
+FROM "openstack_idx" "i" JOIN "openstack" "bt" ON "bt"."LineId" = "i"."LineId"
+WHERE "i"."Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)]) AND "i"."Level" @@ 'WARNING' AND "bt"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "bt"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+ORDER BY s DESC
+LIMIT 100
+) lex
+)
+SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Pid" AS "entity_id", t."Content" AS "message",
+SUM(1.0 / (60 + f.rank)) AS relevance
+FROM fused f
+JOIN "openstack" t ON t."LineId" = f.rid
+WHERE "t"."Level" = 'WARNING' AND "t"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "t"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Pid", t."Content"
+ORDER BY relevance DESC
+LIMIT 2;
+SELECT count(*) AS n
+FROM "openstack_idx" "i" JOIN "openstack" "bt" ON "bt"."LineId" = "i"."LineId"
+WHERE "i"."Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)]) AND "i"."Level" @@ 'WARNING' AND "bt"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "bt"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+```
+
+**R10** search_logs_tool
+
+```sql
+WITH fused AS (
+SELECT rid, ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
+FROM (
+SELECT "i"."LineId" AS rid, BM25("i".tableoid) AS s
+FROM "openstack_idx" "i" JOIN "openstack" "bt" ON "bt"."LineId" = "i"."LineId"
+WHERE "i"."Content" @@ ts_any([ts_levenshtein('Error', 1), ts_levenshtein('during', 1), ts_levenshtein('ComputeManager', 1), ts_levenshtein('run', 1), ts_levenshtein('image', 1), ts_levenshtein('cache', 1), ts_levenshtein('manager', 1), ts_levenshtein('pass', 1)]) AND "i"."Level" @@ 'ERROR' AND "bt"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "bt"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+ORDER BY s DESC
+LIMIT 100
+) lex
+)
+SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Pid" AS "entity_id", t."Content" AS "message",
+SUM(1.0 / (60 + f.rank)) AS relevance
+FROM fused f
+JOIN "openstack" t ON t."LineId" = f.rid
+WHERE "t"."Level" = 'ERROR' AND "t"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "t"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Pid", t."Content"
+ORDER BY relevance DESC
+LIMIT 2;
+SELECT count(*) AS n
+FROM "openstack_idx" "i" JOIN "openstack" "bt" ON "bt"."LineId" = "i"."LineId"
+WHERE "i"."Content" @@ ts_any([ts_levenshtein('Error', 1), ts_levenshtein('during', 1), ts_levenshtein('ComputeManager', 1), ts_levenshtein('run', 1), ts_levenshtein('image', 1), ts_levenshtein('cache', 1), ts_levenshtein('manager', 1), ts_levenshtein('pass', 1)]) AND "i"."Level" @@ 'ERROR' AND "bt"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "bt"."Timestamp" < '2017-05-17 12:02:36'::timestamptz
+```
+
+**R11** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('hour', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "openstack"
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Component" = 'keystonemiddleware.auth_token'
+GROUP BY CAST(date_trunc('hour', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('hour', '2017-05-14 19:39:01'::timestamptz), '2017-05-17 12:02:36'::timestamptz,
+CAST('1 hour' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2017-05-17 12:02:36'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
+)
+SELECT
+bucket,
+count,
+LAG(count) OVER (ORDER BY bucket) AS prev_count,
+CASE
+WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
+WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
+WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
+ELSE 'flat'
+END AS trend
+FROM filled
+ORDER BY bucket
+LIMIT 240
+```
+
+**R12** computed in code from R2, R3, R4, R7: score = 0.4*volume_share + 0.3*error_share + 0.2*trend_up + 0.1*breadth (unmeasured terms dropped, weights renormalized)
 
 ### Relevant results
-**R1** (search, first 5 of 20 rows)
+**R1** (catalog, first 4 of 4 rows)
 
-| record_id | ts | severity | service | entity_id | message | relevance |
-| --- | --- | --- | --- | --- | --- | --- |
-| 57 | 2017-05-16 00:00:20.345000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03278688524590164 |
-| 238 | 2017-05-16 00:01:45.116000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.031746031746031744 |
-| 241 | 2017-05-16 00:01:50.149000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03125 |
-| 327 | 2017-05-16 00:02:25.118000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03076923076923077 |
-| 147 | 2017-05-16 00:01:01.698000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.030621785881252923 |
+| dataset | kind | exact_counts | available | rows | rows_exact | first_timestamp | last_timestamp | span_seconds | max_window_seconds | whole_span_fits_one_window | window_start | window_end | levels | timestamp_source | note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bgl | native_table | True | True | 4747963 | True | 2005-06-03 22:42:50+00:00 | 2006-01-04 16:00:05+00:00 | 18551835.0 | 31536000 | True | 2005-06-03 22:42:50 | 2006-01-04 16:00:06 | [{'severity': 'INFO', 'count': 3735823}, {'severity': 'FATAL', 'count': 855501}, {'severity': 'ERROR', 'count': 112355}… | rows | Exact: counted over every row. Each level's count is the number of log entries at that severity in the whole dataset. |
+| openstack | native_table | True | True | 207820 | True | 2017-05-14 19:39:01.445000+00:00 | 2017-05-17 12:02:35.320000+00:00 | 231813.875 | 7776000 | True | 2017-05-14 19:39:01 | 2017-05-17 12:02:36 | [{'severity': 'INFO', 'count': 204506}, {'severity': 'WARNING', 'count': 3118}, {'severity': 'ERROR', 'count': 194}, {'… | rows | Exact: counted over every row. Each level's count is the number of log entries at that severity in the whole dataset. |
+| otel_s3 | remote_parquet | False | True | 1000000000 | True | 2025-09-23 00:00:00+00:00 | 2025-09-23 00:29:24.039037+00:00 | 1764.039 | 300 | False | 2025-09-23 00:00:00+00 | 2025-09-23 00:29:25+00 | [{'severity': 'info', 'count': None}, {'severity': 'error', 'count': None}, {'severity': 'information', 'count': None},… | parquet_footers | Rows and span from the footers of 1 file(s) (1,624 row groups); no row was read. Levels are the declared vocabulary, NO… |
+| otel_slice | external_index | True | False |  |  |  |  |  | 86400 |  |  |  | [] |  | The in-place index has not been built, so there is nothing to search on this dataset. |
 
-**R2** (lookup, first 1 of 1 rows)
-
-| record_id | ts | severity | service | entity_id | message | template |
-| --- | --- | --- | --- | --- | --- | --- |
-| 56 | 2017-05-16 00:00:20.106000+00:00 | INFO | nova.osapi_compute.wsgi.server | 25746 | 10.11.10.1 "GET /v2/54fadb412c4e40cdbaed9335e4c35a9e/servers/detail HTTP/1.1" status: 200 len: 211 time: 0.1072969 | <*> "GET <*>" status: <*> len: <*> time: <*>.<*> |
-
-**R3** (lookup, first 1 of 1 rows)
-
-| record_id | ts | severity | service | entity_id | message | template |
-| --- | --- | --- | --- | --- | --- | --- |
-| 58 | 2017-05-16 00:00:20.346000+00:00 | INFO | nova.virt.libvirt.imagecache | 2931 | Removable base files: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | Removable base files: <*> |
-
-**R4** (aggregate, first 2 of 2 rows)
+**R2** (aggregate, first 5 of 46 rows)
 
 | template | severity | count |
 | --- | --- | --- |
-| Unknown base file: <*> | WARNING | 30 |
-| While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | WARNING | 1 |
+| File "/usr/lib/python2.<*>/dist-packages/nova/virt/libvirt/imagecache.py", line <*>, in _age_and_verify_cached_images | ERROR | 8 |
+| backing_file = images.qemu_img_info(path, format).backing_file | ERROR | 8 |
+| File "/usr/lib/python2.<*>/dist-packages/nova/virt/libvirt/driver.py", line <*>, in manage_image_cache | ERROR | 8 |
+| File "/usr/lib/python2.<*>/dist-packages/nova/virt/libvirt/utils.py", line <*>, in get_disk_backing_file | ERROR | 8 |
+|  | ERROR | 8 |
 
-**R5** (lookup, first 1 of 1 rows)
+**R3** (aggregate, first 5 of 15 rows)
 
-| record_id | ts | severity | service | entity_id | message | template |
-| --- | --- | --- | --- | --- | --- | --- |
-| 59 | 2017-05-16 00:00:20.349000+00:00 | INFO | nova.virt.libvirt.imagecache | 2931 | Removing base or swap file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | Removing base or swap file: <*> |
+| template | severity | count |
+| --- | --- | --- |
+| Unknown base file: /var/lib/nova/instances/_base/<*> | WARNING | 3059 |
+| While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | WARNING | 45 |
+| Identity response: <!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML <*>.<*>//EN"> | WARNING | 2 |
+| couldn't obtain the vcpu count from domain id: <*>-cd1a-<*>-<*>-<*>, exception: Requested operation is not valid: cpu a… | WARNING | 1 |
+| couldn't obtain the vcpu count from domain id: <*>-cc4c-<*>-96af-<*>, exception: Requested operation is not valid: cpu … | WARNING | 1 |
 
-**R6** (lookup, first 1 of 1 rows)
+**R4** (aggregate, first 1 of 1 rows)
 
-| record_id | ts | severity | service | entity_id | message | template |
-| --- | --- | --- | --- | --- | --- | --- |
-| 60 | 2017-05-16 00:00:21.067000+00:00 | INFO | nova.api.openstack.wsgi | 25746 | HTTP exception thrown: No instances found for any event | HTTP exception thrown: No instances found for any event |
+| template | severity | count |
+| --- | --- | --- |
+| Unable to validate token: Failed to fetch token data from identity server | CRITICAL | 2 |
 
-### Evidence report
-**Summary:** The failure signal is a WARNING from nova.virt.libvirt.imagecache (PID 2931) at 2017-05-16 00:00:20.345 UTC (line 57): `Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`. This template was counted exactly 30 times as WARNING over 2017-05-16 00:00:00 to 2017-08-14 00:00:00; an ERROR-severity service count returned no rows. Immediately before, line 56 is a nova.osapi_compute.wsgi.server GET /v2/.../servers/detail returning 200. Immediately after, the same imagecache process logs `Removable base files: ...` at 00:00:20.346 (line 58) and `Removing base or swap file: ...` at 00:00:20.349 (line 59). Line 60 at 00:00:21.067 is a separate nova.api.openstack.wsgi process (PID 25746) logging `HTTP exception thrown: No instances found for any event`. The search results show the same path re-flagged repeatedly from 00:00:20 to 00:12:05, but the search was truncated at 20 rows and does not measure frequency.
-- **E1** search_logs_tool — available; results R1
-- **E2** get_data_tool — unavailable; results none
-- **E3** get_log_by_line_id_tool — available; results R2
-- **E4** get_log_by_line_id_tool — available; results R3
-- **E5** count_by_category_tool — available; results R4
-- **E6** get_trend_tool — unavailable; results none
-- **E7** count_by_category_tool — unavailable; results none
-- **E8** get_log_by_line_id_tool — available; results R5
-- **E9** get_log_by_line_id_tool — available; results R6
-- Hypothesis (supported): The WARNING is the image-cache periodic audit flagging an orphan base file, then classifying it as removable and attempting deletion.; next check: Inspect `/var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742` and its `.info` sidecar on the compute node for 2017-05-16 00:00-00:12 UTC to verify whether it lacks instance/image metadata.
-- Hypothesis (inconclusive): The same base file survives each deletion attempt, causing the identical warning to recur about every 35-45 seconds for roughly 12 minutes.; next check: Check whether the `Unknown base file` warning recurs after 00:12:05 in nova.virt.libvirt.imagecache / PID 2931; if it does, inspect the instance spawn or snapshot path that may recreate the file.
-- Hypothesis (unsupported): The `HTTP exception thrown: No instances found for any event` at line 60 is a downstream effect of the unknown base file.; contradicted by E1, E8; next check: Trace the `No instances found for any event` API call at 00:00:21.067 from PID 25746 and compare its instance/event identifiers with the base-file path to confirm no shared request linkage.
+**R5** (aggregate, first 5 of 10 rows)
 
-### Answer for the engineer
-## What failed
+| dataset | team | severity | count |
+| --- | --- | --- | --- |
+| openstack | API Gateway | INFO | 102862 |
+| openstack | Virtualization | INFO | 52563 |
+| openstack | Compute Platform | INFO | 48215 |
+| openstack | Virtualization | WARNING | 3071 |
+| openstack | Scheduling | INFO | 866 |
 
-The failure signal is a WARNING at 2017-05-16 00:00:20.345 UTC, line 57, entity_id 2931, from `nova.virt.libvirt.imagecache`:
+**R6** (aggregate, first 5 of 17 rows)
 
-`Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`
+| service | severity | count |
+| --- | --- | --- |
+| nova.osapi_compute.wsgi.server | INFO | 78330 |
+| nova.virt.libvirt.imagecache | INFO | 42239 |
+| nova.compute.manager | INFO | 24739 |
+| nova.metadata.wsgi.server | INFO | 20403 |
+| nova.compute.claims | INFO | 16520 |
 
-The component is the libvirt image cache on the compute node (Virtualization team). The template `Unknown base file: <*>` was counted exactly 30 times at WARNING severity over 2017-05-16 00:00:00 to 2017-08-14 00:00:00; that count is the only measured frequency here. The search below returned 20 rows and was truncated, so the rows shown are examples of the matching warnings, not a frequency measure.
+**R7** (trend, first 5 of 66 rows)
 
-_R1: search_logs_tool_
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2017-05-14 19:00:00+00:00 | 37 |  | initial |
+| 2017-05-14 20:00:00+00:00 | 119 | 37 | up |
+| 2017-05-14 21:00:00+00:00 | 114 | 119 | down |
+| 2017-05-14 22:00:00+00:00 | 0 | 114 | down |
+| 2017-05-14 23:00:00+00:00 | 0 | 0 | flat |
+
+**R8** (trend, first 5 of 66 rows)
+
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2017-05-14 19:00:00+00:00 | 0 |  | initial |
+| 2017-05-14 20:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 21:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 22:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 23:00:00+00:00 | 0 | 0 | flat |
+
+**R9** (search, first 2 of 2 rows)
 
 | record_id | ts | severity | service | entity_id | message | relevance |
 | --- | --- | --- | --- | --- | --- | --- |
-| 57 | 2017-05-16 00:00:20.345000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03278688524590164 |
-| 238 | 2017-05-16 00:01:45.116000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.031746031746031744 |
-| 241 | 2017-05-16 00:01:50.149000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03125 |
-| 327 | 2017-05-16 00:02:25.118000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03076923076923077 |
-| 147 | 2017-05-16 00:01:01.698000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.030621785881252923 |
+| 122906 | 2017-05-16 21:41:01.026000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.01639344262295082 |
+| 127395 | 2017-05-16 22:14:15.118000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.016129032258064516 |
 
-## Timeline before and after
+**R10** (search, first 2 of 2 rows)
 
-1. 00:00:20.106 (line 56) — INFO, `nova.osapi_compute.wsgi.server`, entity_id 25746: `GET /v2/54fadb412c4e40cdbaed9335e4c35a9e/servers/detail` returns status 200, length 211, time 0.107s.
-2. 00:00:20.345 (line 57) — WARNING, `nova.virt.libvirt.imagecache`, entity_id 2931: `Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`.
-3. 00:00:20.346 (line 58) — INFO, same service and entity_id 2931: `Removable base files: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`.
-4. 00:00:20.349 (line 59) — INFO, same service and entity_id 2931: `Removing base or swap file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`.
-5. 00:00:21.067 (line 60) — INFO, `nova.api.openstack.wsgi`, entity_id 25746: `HTTP exception thrown: No instances found for any event`.
+| record_id | ts | severity | service | entity_id | message | relevance |
+| --- | --- | --- | --- | --- | --- | --- |
+| 45613 | 2017-05-16 03:19:45.356000+00:00 | ERROR | oslo_service.periodic_task | 2931 | Error during ComputeManager._run_image_cache_manager_pass | 0.01639344262295082 |
+| 105555 | 2017-05-16 19:33:00.935000+00:00 | ERROR | oslo_service.periodic_task | 2931 | Error during ComputeManager._run_image_cache_manager_pass | 0.016129032258064516 |
 
-Within four milliseconds the image-cache process reclassifies the same path as removable and logs a removal attempt, so the warning sits inside a cleanup path rather than an isolated exception. The rows do not show why the file was unrecognized, whether the removal succeeded, or any link between the image-cache warning and the later API exception, which comes from a different service and process. An ERROR-severity service aggregate over the same window returned no rows, and the day-bucketed trend request and the service catalog query were refused, so how the 30 counted warnings are distributed across the window is not known.
+**R11** (trend, first 5 of 66 rows)
+
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2017-05-14 19:00:00+00:00 | 0 |  | initial |
+| 2017-05-14 20:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 21:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 22:00:00+00:00 | 0 | 0 | flat |
+| 2017-05-14 23:00:00+00:00 | 0 | 0 | flat |
+
+**R12** (derived, first 5 of 10 rows)
+
+| rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Unknown base file: /var/lib/nova/instances/_base/<*> | 3059 | 0 | 92.3 | 0.0 | 1.0 | n/a | 0.632 |
+| 2 | Error during ComputeManager._run_image_cache_manager_pass | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 3 | Exit code: <*> | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 4 | File "/usr/lib/python2.<*>/dist-packages/nova/compute/manager.py", line <*>, in _run_image_cache_manager_pass | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 5 | File "/usr/lib/python2.<*>/dist-packages/nova/virt/images.py", line <*>, in qemu_img_info | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+
+### Evidence report
+**Summary:** OpenStack (nova) corpus, full measured window 2017-05-14 19:39:01–2017-05-17 12:02:36 UTC, with 207,820 exact log entries: WARNING 3,118, ERROR 194, CRITICAL 2. Top recurring patterns are image-cache 'Unknown base file' WARNINGs (3,059 entries, 98.1% of WARNINGs, emitted by nova.virt.libvirt.imagecache); image-cache InvalidDiskInfo ERRORs (192 entries representing 8 failures, 99.0% of ERRORs, via oslo_service.periodic_task/nova.compute.manager call path); power-state mismatch WARNINGs (45); vCPU affinity WARNINGs (12); and auth-token validation failures (6 entries, including the only 2 CRITICALs). Teams involved are Virtualization, Compute Platform, and API Gateway. Highest-priority investigation is the joint image-cache chain (3,251 entries, about 98% of everything above INFO), then the 8 InvalidDiskInfo failures, then API Gateway auth CRITICALs, then power-state mismatch. Counts are log entries, not incidents.
+- **E1** list_datasets_tool — available; results R1
+- **E2** count_by_category_tool — available; results R2
+- **E3** count_by_category_tool — available; results R3
+- **E4** count_by_category_tool — available; results R4
+- **E5** count_by_team_tool — available; results R5
+- **E6** count_by_category_tool — available; results R6
+- **E7** get_trend_tool — available; results R7
+- **E8** get_trend_tool — available; results R8
+- **E9** search_logs_tool — available; results R9
+- **E10** search_logs_tool — available; results R10
+- **E11** get_trend_tool — available; results R11
+- Hypothesis (inconclusive): Stale image-cache records for deleted or rebuilt instance disks drive both the 'Unknown base file' warnings and the InvalidDiskInfo failures.; next check: Query image lifecycle, garbage-collection, and instance-delete events, and correlate the 8 failing instance disk UUIDs with the warned _base file.
+- Hypothesis (inconclusive): The auth-token failures are one identity-server (Keystone) availability problem.; next check: Retrieve Keystone/identity-server logs for 05-16 and 05-17 06:00 and the unmodified auth response with HTTP status.
+- Hypothesis (inconclusive): Zero-count trend buckets are real quiet periods rather than boundaries between separate nova runs.; next check: Obtain run or partition labels that distinguish the three nova runs and compare them with the zero buckets.
+
+### Answer for the team lead
+## Period and scope
+
+The measured window is 2017-05-14 19:39:01 through 2017-05-17 12:02:36 UTC on the OpenStack (nova) corpus, covering all 207,820 log entries in that window: 204,506 INFO, 3,118 WARNING, 194 ERROR and 2 CRITICAL. Counts below are log entries, not incidents. Only the OpenStack corpus was aggregated; BGL was catalogued but not queried, and the OTel index was unavailable, so nothing here describes those corpora.
+
+## Recurring patterns (counts)
+
+Four patterns account for essentially all of the non-INFO volume.
+
+- **Unknown base file** (WARNING) — 3,059 entries from `nova.virt.libvirt.imagecache`, the largest single template in the corpus. An illustrative example line reads `Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742` (two retrieved rows, same base-file hash); the search is an example only and does not establish frequency.
+- **Image-cache InvalidDiskInfo failures** (ERROR) — 192 entries from `oslo_service.periodic_task`, produced by `ComputeManager._run_image_cache_manager_pass` through the imagecache, utils and qemu-img code path. The traceback line templates each appear 8 times, and the trend shows 8 hourly buckets of 24 entries each, consistent with 8 separate traceback failures of 24 lines apiece.
+- **Power-state mismatch** (WARNING) — 45 entries from `nova.compute.manager` (`While synchronizing instance power states…`).
+- **vCPU affinity not supported** (WARNING) — 12 entries from `nova.virt.libvirt.driver`.
+- **Auth-token validation failures** — 6 entries from `keystonemiddleware.auth_token` (2 WARNING, 2 ERROR, 2 CRITICAL); this is the only source of CRITICAL entries in the window.
+
+Severity counts by emitting component are shown below.
+
+_R6: count_by_category_tool_
+
+| service | severity | count |
+| --- | --- | --- |
+| nova.osapi_compute.wsgi.server | INFO | 78330 |
+| nova.virt.libvirt.imagecache | INFO | 42239 |
+| nova.compute.manager | INFO | 24739 |
+| nova.metadata.wsgi.server | INFO | 20403 |
+| nova.compute.claims | INFO | 16520 |
+
+## Trend
+
+The `Unknown base file` WARNING dominates the trend and is present at roughly 120–136 entries per hour throughout its active periods (for example 133 at 05-16 00:00, 136 at 05-16 20:00, 135 at 05-17 02:00), with step-downs to about 52–53 entries in the 06:00 hours of 05-16 and 05-17, followed by zero-count hours. The InvalidDiskInfo ERRORs are bursty rather than continuous: 24 entries at 05-16 03:00, then 24-entry bursts at 05-16 16:00, 17:00, 19:00, 20:00, 22:00, 05-17 00:00 and 05-17 05:00, and zero elsewhere. The `keystonemiddleware.auth_token` entries occur as 3 entries at 05-16 06:00 and 3 entries at 05-17 06:00, with zero elsewhere. The hourly trend for the dominant template follows.
+
+_R7: get_trend_tool_
+
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2017-05-14 19:00:00+00:00 | 37 |  | initial |
+| 2017-05-14 20:00:00+00:00 | 119 | 37 | up |
+| 2017-05-14 21:00:00+00:00 | 114 | 119 | down |
+| 2017-05-14 22:00:00+00:00 | 0 | 114 | down |
+| 2017-05-14 23:00:00+00:00 | 0 | 0 | flat |
+
+The zero-count stretches should not automatically be read as recovery: the underlying table appears to concatenate three separate nova runs, so gaps may be run boundaries rather than the condition clearing. That remains unresolved and limits any statement about whether these patterns are improving or worsening over the window; neither pattern shows a sustained rising trend within its active hours.
+
+## Teams and components involved
+
+- **Virtualization** — `nova.virt.libvirt.imagecache` (3,059 WARNING) and `nova.virt.libvirt.driver` (12 WARNING); 3,071 WARNING entries in total for the team.
+- **Compute Platform** — `oslo_service.periodic_task` (192 ERROR via the `nova.compute.manager` call path) and `nova.compute.manager` (45 WARNING); 192 ERROR and 45 WARNING entries.
+- **API Gateway** — `keystonemiddleware.auth_token` (2 WARNING, 2 ERROR, 2 CRITICAL).
+- **Scheduling** — INFO only (866 entries from `nova.scheduler.host_manager`); no WARNING, ERROR or CRITICAL entries.
+
+The computed priority ranking places the `Unknown base file` template first, and the image-cache traceback lines next as a group.
+
+_R12: priority_score_
+
+| rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Unknown base file: /var/lib/nova/instances/_base/<*> | 3059 | 0 | 92.3 | 0.0 | 1.0 | n/a | 0.632 |
+| 2 | Error during ComputeManager._run_image_cache_manager_pass | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 3 | Exit code: <*> | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 4 | File "/usr/lib/python2.<*>/dist-packages/nova/compute/manager.py", line <*>, in _run_image_cache_manager_pass | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+| 5 | File "/usr/lib/python2.<*>/dist-packages/nova/virt/images.py", line <*>, in qemu_img_info | 8 | 8 | 0.2 | 100.0 | n/a | n/a | 0.334 |
+
+## Investigate first
+
+The measured ordering puts the joint image-cache chain first, because it carries both the highest volume (3,059 WARNING entries) and the only recurring ERROR group (192 entries representing 8 failures) on the same call path, spanning Virtualization and Compute Platform. The 8 InvalidDiskInfo failures come next as the concentrated error event, then the API Gateway auth CRITICALs, which are the most severe but the least frequent (2 entries).
+
+What the logs do not establish is why: there are no image lifecycle, garbage-collection or instance-delete events in this corpus, and nothing links the 8 failing instance disk UUIDs to the warned `_base` file, so a stale image-cache explanation remains a hypothesis. Likewise, the auth failures are unresolved: no identity-server logs are present and the HTML response body is truncated, so the HTTP status behind the CRITICALs is unknown. The concrete next checks are listed in the recommendations.
 
 **Measured** (shown by the cited query results)
-- **F1** Line 57 at 2017-05-16 00:00:20.345 UTC is a WARNING from nova.virt.libvirt.imagecache (entity_id 2931) with the message `Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`. — R1 (examples) (row-level evidence, not a frequency)
-- **F2** The template `Unknown base file: <*>` was counted exactly 30 times at WARNING severity in the openstack dataset over 2017-05-16 00:00:00 to 2017-08-14 00:00:00. — R4 (count)
-- **F3** Immediately before the warning, line 56 at 00:00:20.106 UTC records nova.osapi_compute.wsgi.server (entity_id 25746) returning 200 for `GET /v2/54fadb412c4e40cdbaed9335e4c35a9e/servers/detail` in 0.107s. — R2 (record) (row-level evidence, not a frequency)
-- **F4** Immediately after the warning, the same imagecache process and entity_id 2931 logs `Removable base files: <path>` at 00:00:20.346 UTC (line 58) and `Removing base or swap file: <path>` at 00:00:20.349 UTC (line 59) for the same base-file path. — R3 (record), R5 (record) (row-level evidence, not a frequency)
-- **F5** Line 60 at 00:00:21.067 UTC is an INFO entry from a different service, nova.api.openstack.wsgi (entity_id 25746), with the message `HTTP exception thrown: No instances found for any event`. — R6 (record) (row-level evidence, not a frequency)
+- **F1** The measured scope is the OpenStack corpus from 2017-05-14 19:39:01 to 2017-05-17 12:02:36 UTC, with 207,820 exact log entries: 204,506 INFO, 3,118 WARNING, 194 ERROR and 2 CRITICAL. — R1 (value list) (row-level evidence, not a frequency)
+- **F2** The template `Unknown base file: /var/lib/nova/instances/_base/<*>` accounts for 3,059 WARNING entries, the largest single template in the window, emitted by `nova.virt.libvirt.imagecache`. — R3 (count), R6 (count)
+- **F3** The image-cache InvalidDiskInfo error path appears as 192 ERROR entries from `oslo_service.periodic_task`; individual traceback line templates appear 8 times each and the trend shows 8 buckets of 24 entries, consistent with 8 traceback failures of 24 lines. — R2 (count), R6 (count), R8 (trend)
+- **F4** Power-state synchronisation mismatch accounts for 45 WARNING entries from `nova.compute.manager`. — R3 (count), R6 (count)
+- **F5** vCPU-affinity 'couldn't obtain the vcpu count' warnings account for 12 WARNING entries from `nova.virt.libvirt.driver`. — R3 (count), R6 (count)
+- **F6** `keystonemiddleware.auth_token` produced 6 entries in total (2 WARNING, 2 ERROR, 2 CRITICAL), and the 2 CRITICAL entries ('Unable to validate token: Failed to fetch token data from identity server') are the only CRITICAL entries in the window; the trend shows 3 entries at 05-16 06:00 and 3 at 05-17 06:00. — R4 (count), R6 (count), R11 (trend)
+- **F7** By owning team the non-INFO load is Virtualization 3,071 WARNING, Compute Platform 192 ERROR plus 45 WARNING, and API Gateway 2 CRITICAL plus 2 ERROR plus 2 WARNING; Scheduling has INFO entries only. — R5 (count)
+- **F8** The computed priority ranking places `Unknown base file: /var/lib/nova/instances/_base/<*>` first with score 0.632, followed by the image-cache traceback line templates at 0.334. — R12 (computed)
 
 **Hypotheses** (not confirmed by the logs)
-- **F6** The WARNING is the image-cache audit flagging an orphan base file, then classifying it as removable and attempting deletion, rather than a standalone exception; this is supported by the same-PID removable and removal lines but the missing metadata itself is not shown. — R1 (examples), R3 (record), R5 (record)
-- **F7** The base file appears to survive the removal attempt, since the same path is re-flagged at WARNING repeatedly between 00:00:20.345 and later timestamps in the retrieved examples; the logs do not show why removal did not stop the recurrence. — R1 (examples)
-- **F8** The `No instances found for any event` exception at line 60 is not shown to be a downstream effect of the unknown base file; it comes from a different service and process, and no row links the two events. — R6 (record), R5 (record)
+- **F9** Stale image-cache records for deleted or rebuilt instance disks may drive both the 'Unknown base file' warnings and the InvalidDiskInfo failures; this is unconfirmed because no image lifecycle, garbage-collection or instance-delete events are present and the 8 failing disk UUIDs cannot be linked to the warned base file. — R2 (count), R3 (count), R7 (trend), R8 (trend)
+- **F10** The auth-token failures may be a single identity-server (Keystone) availability problem recurring at 06:00 on 05-16 and 05-17; this is unconfirmed because no identity-server logs are in the corpus and the response body is truncated, so the HTTP status is unknown. — R4 (count), R6 (count), R11 (trend)
 
 **Limitations** (what the data does not establish)
-- **F9** Why the base file was unrecognized, whether its removal succeeded, and how the 30 counted WARNING entries are distributed over the window cannot be determined: the search was truncated at 20 rows, the ERROR-severity service aggregate returned no rows, and the service catalog and hourly trend queries were refused. — R1 (examples), R4 (count)
+- **F11** Zero-count trend buckets cannot be read as recovery: the table appears to concatenate three separate nova runs, so gaps may be run boundaries rather than the condition clearing. — R7 (trend), R8 (trend), R11 (trend)
+- **F12** Only the OpenStack corpus was aggregated; BGL was catalogued but not queried and the OTel index was unavailable, so these counts say nothing about those corpora. — R1 (value list)
 
 **Recommended next steps**
-1. **Inspect /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 and its .info sidecar on the compute node for 2017-05-16 00:00-00:12 UTC; missing instance/image metadata would confirm the orphan-base-file explanation, while a valid .info with matching image metadata would refute it.** — The warning and the removal attempt name this exact path within 4 ms (F1, F4), and the orphan-audit explanation is supported but unproven (F6). (owner: Virtualization; based on F1, F4, F6)
-2. **Check whether `Unknown base file` recurs for nova.virt.libvirt.imagecache / entity_id 2931 after 00:12:05 UTC; further recurrences after a logged removal would confirm repeated removal failure, while none would refute it.** — The same path is re-flagged in the retrieved examples after the removal line, and the cause of the recurrence is unknown (F7, F2, F9). (owner: Virtualization; based on F7, F2, F9)
-3. **Trace the `No instances found for any event` request at 00:00:21.067 UTC from nova.api.openstack.wsgi entity_id 25746 and compare its instance/event identifiers with the base-file path; a shared instance or request linkage would confirm a relation, its absence would refute one.** — Line 60 comes from a different service and process and no row ties it to the image-cache warning (F5, F8). (owner: API Gateway; based on F5, F8)
+1. **Open the image-cache chain first: query image lifecycle, garbage-collection and instance-delete events, and correlate the 8 failing instance disk UUIDs with the warned /var/lib/nova/instances/_base file.** — This chain carries the highest measured volume (3,059 WARNING entries) and the only recurring ERROR group (192 entries, 8 failures) on the same call path, ranked first at 0.632. (owner: Virtualization; based on F2, F3, F8, F9)
+2. **Retrieve Keystone/identity-server logs for 05-16 06:00 and 05-17 06:00 together with the unmodified auth response including HTTP status.** — These 6 entries include the only 2 CRITICALs in the window and recur at the same hour on consecutive days, but the cause is currently unconfirmable from nova logs alone. (owner: API Gateway; based on F6, F10)
+3. **Attach run or partition labels to the three nova runs and re-run the trends with those labels before drawing any conclusion about improvement or deterioration.** — Zero-count buckets may be run boundaries, so the current trend cannot support a recovery claim for any pattern. (owner: Compute Platform; based on F4, F11)
 
-Query cost: 6 queries in 0.22s, slowest R1 at 0.15s (67% of the total).
+Query cost: 11 queries in 0.78s, slowest R1 at 0.53s (69% of the total), ~4,955,783 rows scanned, ~6,369,901 rows/s.
 
 ### Recommended action
-1. **Inspect /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 and its .info sidecar on the compute node for 2017-05-16 00:00-00:12 UTC; missing instance/image metadata would confirm the orphan-base-file explanation, while a valid .info with matching image metadata would refute it.** — The warning and the removal attempt name this exact path within 4 ms (F1, F4), and the orphan-audit explanation is supported but unproven (F6). (owner: Virtualization; based on F1, F4, F6)
-2. **Check whether `Unknown base file` recurs for nova.virt.libvirt.imagecache / entity_id 2931 after 00:12:05 UTC; further recurrences after a logged removal would confirm repeated removal failure, while none would refute it.** — The same path is re-flagged in the retrieved examples after the removal line, and the cause of the recurrence is unknown (F7, F2, F9). (owner: Virtualization; based on F7, F2, F9)
-3. **Trace the `No instances found for any event` request at 00:00:21.067 UTC from nova.api.openstack.wsgi entity_id 25746 and compare its instance/event identifiers with the base-file path; a shared instance or request linkage would confirm a relation, its absence would refute one.** — Line 60 comes from a different service and process and no row ties it to the image-cache warning (F5, F8). (owner: API Gateway; based on F5, F8)
+1. **Open the image-cache chain first: query image lifecycle, garbage-collection and instance-delete events, and correlate the 8 failing instance disk UUIDs with the warned /var/lib/nova/instances/_base file.** — This chain carries the highest measured volume (3,059 WARNING entries) and the only recurring ERROR group (192 entries, 8 failures) on the same call path, ranked first at 0.632. (owner: Virtualization; based on F2, F3, F8, F9)
+2. **Retrieve Keystone/identity-server logs for 05-16 06:00 and 05-17 06:00 together with the unmodified auth response including HTTP status.** — These 6 entries include the only 2 CRITICALs in the window and recur at the same hour on consecutive days, but the cause is currently unconfirmable from nova logs alone. (owner: API Gateway; based on F6, F10)
+3. **Attach run or partition labels to the three nova runs and re-run the trends with those labels before drawing any conclusion about improvement or deterioration.** — Zero-count buckets may be run boundaries, so the current trend cannot support a recovery claim for any pattern. (owner: Compute Platform; based on F4, F11)
 
-## Team lead
-**Question:** Which problems involving Unknown base file warnings recur, how often, and which components or teams are involved?
+## Manager
+**Question:** Which observed problems involving Which recurring errors should the team investigate first? deserve attention first, and what should happen next?
 
 **Route:** `find_evidence` · **Effort:** High · **Datasets:** bgl, openstack
 
 ### Tool calls
 | id | tool | kind | arguments | rows | truncated |
 | --- | --- | --- | --- | --- | --- |
-| R1 | search_logs_tool | search | `{"query_text": "Unknown base file", "dataset": "bgl", "limit": 5}` | 5 | yes |
-| R2 | search_logs_tool | search | `{"query_text": "Unknown base file", "dataset": "openstack", "limit": 5}` | 5 | yes |
-| R3 | count_by_category_tool | aggregate | `{"category": null, "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "limit": 20, "start_time": "2017-05-01 00…` | 2 | no |
-| R4 | count_by_category_tool | aggregate | `{"category": "WARNING", "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "limit": 40, "start_time": "2017-05-…` | 2 | no |
-| R5 | count_by_category_tool | aggregate | `{"category": "WARNING", "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "limit": 20, "start_time": "2017-05-…` | 2 | no |
-| R6 | get_trend_tool | trend | `{"bucket": "day", "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00", "type…` | 1 | no |
-| R7 | priority_score | derived | `{"dimension": "template", "from": ["R4"]}` | 2 | no |
+| R1 | list_datasets_tool | catalog | `{}` | 4 | no |
+| R2 | count_by_team_tool | aggregate | `{"datasets": ["bgl"], "start_time": "2005-06-03 22:42:50", "end_time": "2006-01-04 16:00:06"}` | 15 | no |
+| R3 | count_by_team_tool | aggregate | `{"datasets": ["openstack"], "start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36"}` | 10 | no |
+| R4 | count_by_category_tool | aggregate | `{"dataset": "bgl", "start_time": "2005-06-03 22:42:50", "end_time": "2006-01-04 16:00:06", "type": "template", "categor…` | 15 | yes |
+| R5 | count_by_category_tool | aggregate | `{"dataset": "openstack", "start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "type": "template", "c…` | 15 | yes |
+| R6 | count_by_category_tool | aggregate | `{"category": "ERROR", "dataset": "bgl", "end_time": "2006-01-04 16:00:06", "limit": 12, "start_time": "2005-06-03 22:42…` | 12 | yes |
+| R7 | get_trend_tool | trend | `{"dataset": "bgl", "start_time": "2005-06-03 22:42:50", "end_time": "2006-01-04 16:00:06", "type": ["severity", "FATAL"…` | 8 | no |
+| R8 | top_in_category_by_service_tool | aggregate | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "category": "ERROR", "…` | 2 | no |
+| R9 | get_trend_tool | trend | `{"start_time": "2017-05-14 19:39:01", "end_time": "2017-05-17 12:02:36", "dataset": "openstack", "type": ["severity", "…` | 66 | no |
+| R10 | top_in_category_by_service_tool | aggregate | `{"category": "ERROR", "dataset": "bgl", "end_time": "2006-01-04 16:00:06", "field": "service", "limit": 10, "start_time…` | 3 | no |
+| R11 | get_trend_tool | trend | `{"bucket": "month", "dataset": "bgl", "end_time": "2006-01-04 16:00:06", "start_time": "2005-06-03 22:42:50", "type": […` | 8 | no |
+| R12 | priority_score | derived | `{"dimension": "template", "from": ["R4", "R5", "R6", "R11"]}` | 10 | yes |
 
 ### Executed queries
-**R1** search_logs_tool
+**R1** list_datasets_tool
 
 ```sql
-WITH query_embedding AS (
-SELECT ai_embed('Unknown base file', 'nomic-embed-text:v1.5', 'local_ai')::FLOAT[768] AS emb
-),
-fused AS (
-SELECT "LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
-FROM (
-SELECT "LineId", BM25("bgl_idx".tableoid) AS s
-FROM "bgl_idx"
-WHERE "Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)])
-ORDER BY s DESC
-LIMIT 100
-) lex
-UNION ALL
-SELECT r."LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY m.dist, r."LineId") AS rank
-FROM (
-SELECT template_text, embedding <=> q.emb AS dist
-FROM "bgl_templates", query_embedding q
-WHERE embedding <=> q.emb < 1.0
-ORDER BY dist
-LIMIT 20
-) m
-JOIN "bgl_idx" r ON r."EventTemplate" = m.template_text
-)
-SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Node" AS "entity_id", t."Content" AS "message",
-SUM(1.0 / (60 + f.rank)) AS relevance
-FROM fused f
-JOIN "bgl" t ON t."LineId" = f.rid
-GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Node", t."Content"
-ORDER BY relevance DESC
-LIMIT 5
-```
-
-**R2** search_logs_tool
-
-```sql
-WITH query_embedding AS (
-SELECT ai_embed('Unknown base file', 'nomic-embed-text:v1.5', 'local_ai')::FLOAT[768] AS emb
-),
-fused AS (
-SELECT "LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
-FROM (
-SELECT "LineId", BM25("openstack_idx".tableoid) AS s
-FROM "openstack_idx"
-WHERE "Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)])
-ORDER BY s DESC
-LIMIT 100
-) lex
-UNION ALL
-SELECT r."LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY m.dist, r."LineId") AS rank
-FROM (
-SELECT template_text, embedding <=> q.emb AS dist
-FROM "openstack_templates", query_embedding q
-WHERE embedding <=> q.emb < 1.0
-ORDER BY dist
-LIMIT 20
-) m
-JOIN "openstack_idx" r ON r."EventTemplate" = m.template_text
-)
-SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Pid" AS "entity_id", t."Content" AS "message",
-SUM(1.0 / (60 + f.rank)) AS relevance
-FROM fused f
-JOIN "openstack" t ON t."LineId" = f.rid
-GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Pid", t."Content"
-ORDER BY relevance DESC
-LIMIT 5
-```
-
-**R3** count_by_category_tool
-
-```sql
-SELECT "Level" AS severity, count(*) AS count
+SELECT table_name FROM information_schema.tables WHERE table_name IN ('bgl', 'openstack', 'otel_ext', 'otel_ext_meta');
+SELECT "Level" AS severity, count(*) AS count, min("Timestamp") AS first_ts, max("Timestamp") AS last_ts
+FROM "bgl"
+GROUP BY "Level"
+ORDER BY count DESC;
+SELECT "Level" AS severity, count(*) AS count, min("Timestamp") AS first_ts, max("Timestamp") AS last_ts
 FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz
 GROUP BY "Level"
 ORDER BY count DESC
-LIMIT 20
+```
+
+**R2** count_by_team_tool
+
+```sql
+SELECT table_name FROM information_schema.tables WHERE table_name IN ('bgl', 'team_ownership');
+SELECT dataset, team, severity, count FROM (SELECT 'bgl' AS dataset, COALESCE(o.team, 'unowned') AS team, t."Level" AS severity, count(*) AS count FROM "bgl" AS t LEFT JOIN "team_ownership" AS o ON o.dataset = 'BGL' AND o.component = t."Component" WHERE "t"."Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "t"."Timestamp" < '2006-01-04 16:00:06'::timestamptz GROUP BY COALESCE(o.team, 'unowned'), t."Level") AS counted ORDER BY count DESC, dataset, team, severity
+```
+
+**R3** count_by_team_tool
+
+```sql
+SELECT table_name FROM information_schema.tables WHERE table_name IN ('openstack', 'team_ownership');
+SELECT dataset, team, severity, count FROM (SELECT 'openstack' AS dataset, COALESCE(o.team, 'unowned') AS team, t."Level" AS severity, count(*) AS count FROM "openstack" AS t LEFT JOIN "team_ownership" AS o ON o.dataset = 'OpenStack' AND o.component = t."Component" WHERE "t"."Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "t"."Timestamp" < '2017-05-17 12:02:36'::timestamptz GROUP BY COALESCE(o.team, 'unowned'), t."Level") AS counted ORDER BY count DESC, dataset, team, severity
 ```
 
 **R4** count_by_category_tool
 
 ```sql
 SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "Level" = 'WARNING'
+FROM "bgl"
+WHERE "Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "Timestamp" < '2006-01-04 16:00:06'::timestamptz AND "Level" = 'FATAL'
 GROUP BY "EventTemplate", "Level"
 ORDER BY count DESC
-LIMIT 40
-```
-
-**R5** count_by_category_tool
-
-```sql
-SELECT "Component" AS "service", "Level" AS severity, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "Level" = 'WARNING'
-GROUP BY "Component", "Level"
-ORDER BY count DESC
-LIMIT 20
-```
-
-**R6** get_trend_tool
-
-```sql
-WITH bucket_counts AS (
-SELECT date_trunc('day', "Timestamp") AS bucket, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "EventTemplate" = 'Unknown base file: <*>'
-GROUP BY date_trunc('day', "Timestamp")
-)
-SELECT
-bucket,
-count,
-LAG(count) OVER (ORDER BY bucket) AS prev_count,
-CASE
-WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
-WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
-WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
-ELSE 'flat'
-END AS trend
-FROM bucket_counts
-ORDER BY bucket
-LIMIT 240
-```
-
-**R7** computed in code from R4: score = 0.4*volume_share + 0.3*error_share + 0.2*trend_up + 0.1*breadth (unmeasured terms dropped, weights renormalized)
-
-### Relevant results
-**R1** (search, first 5 of 5 rows)
-
-| record_id | ts | severity | service | entity_id | message | relevance |
-| --- | --- | --- | --- | --- | --- | --- |
-| 3098842 | 2005-08-23 11:50:05+00:00 | FATAL | APP | R77-M0-N4-I:J18-U11 | ciod: LOGIN chdir(/home/germann2/BGL-demo) failed: No such file or directory | 0.01639344262295082 |
-| 3605131 | 2005-10-17 10:56:22+00:00 | FATAL | APP | R40-M0-N4-I:J18-U11 | ciod: Error reading message prefix after UNKNOWN on CioStream socket to 172.16.96.116:47599: Link has been severed | 0.01639344262295082 |
-| 3098843 | 2005-08-23 11:50:05+00:00 | FATAL | APP | R54-M1-N8-I:J18-U11 | ciod: LOGIN chdir(/home/germann2/BGL-demo) failed: No such file or directory | 0.016129032258064516 |
-| 3037769 | 2005-08-13 06:54:10+00:00 | FATAL | APP | R00-M0-N8-I:J18-U01 | ciod: Error reading message prefix after UNKNOWN on CioStream socket to 172.16.96.116:55135: Link has been severed | 0.016129032258064516 |
-| 3098844 | 2005-08-23 11:50:05+00:00 | FATAL | APP | R54-M1-N8-I:J18-U01 | ciod: LOGIN chdir(/home/germann2/BGL-demo) failed: No such file or directory | 0.015873015873015872 |
-
-**R2** (search, first 5 of 5 rows)
-
-| record_id | ts | severity | service | entity_id | message | relevance |
-| --- | --- | --- | --- | --- | --- | --- |
-| 57 | 2017-05-16 00:00:20.345000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03278688524590164 |
-| 238 | 2017-05-16 00:01:45.116000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.031746031746031744 |
-| 241 | 2017-05-16 00:01:50.149000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03125 |
-| 327 | 2017-05-16 00:02:25.118000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03076923076923077 |
-| 147 | 2017-05-16 00:01:01.698000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.030621785881252923 |
-
-**R3** (aggregate, first 2 of 2 rows)
-
-| severity | count |
-| --- | --- |
-| INFO | 1969 |
-| WARNING | 31 |
-
-**R4** (aggregate, first 2 of 2 rows)
-
-| template | severity | count |
-| --- | --- | --- |
-| Unknown base file: <*> | WARNING | 30 |
-| While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | WARNING | 1 |
-
-**R5** (aggregate, first 2 of 2 rows)
-
-| service | severity | count |
-| --- | --- | --- |
-| nova.virt.libvirt.imagecache | WARNING | 30 |
-| nova.compute.manager | WARNING | 1 |
-
-**R6** (trend, first 1 of 1 rows)
-
-| bucket | count | prev_count | trend |
-| --- | --- | --- | --- |
-| 2017-05-16 00:00:00+00:00 | 30 |  | initial |
-
-**R7** (derived, first 2 of 2 rows)
-
-| rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Unknown base file: <*> | 30 | 0 | 96.8 | 0.0 | n/a | n/a | 0.553 |
-| 2 | While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | 1 | 0 | 3.2 | 0.0 | n/a | n/a | 0.018 |
-
-### Evidence report
-**Summary:** In the measured OpenStack window 2017-05-01 00:00:00 to 2017-07-30 00:00:00 UTC, the only recurring warning-level pattern is 'Unknown base file: <*>' from nova.virt.libvirt.imagecache: 30 WARNING log entries, about 97% of the 31 WARNING entries in the window. The only other warning is one nova.compute.manager power-state synchronization log entry (Compute Platform). All 1,969 remaining entries are INFO, and no ERROR or CRITICAL entries were present in the measured window. The trend is a single burst on 2017-05-16 with 30 entries and no other day in the 90-day window. Investigate first nova.virt.libvirt.imagecache / Virtualization because it carries the only recurring warning pattern and nearly all warning volume in the measured period. Corpus-wide frequency is unknown: the measured window returned 2,000 log entries while the catalogue describes about 207,820 rows, and the dataset's full time range was not supplied.
-- **E1** search_logs_tool — available; results R1
-- **E2** search_logs_tool — available; results R2
-- **E3** count_by_category_tool — unavailable; results none
-- **E4** count_by_category_tool — unavailable; results none
-- **E5** count_by_category_tool — unavailable; results none
-- **E6** count_by_category_tool — available; results R3
-- **E7** count_by_category_tool — available; results R4
-- **E8** count_by_category_tool — available; results R5
-- **E9** get_trend_tool — available; results R6
-- **E10** get_log_by_line_id_tool — unavailable; results none
-
-### Answer for the team lead
-## Period and scope
-
-All counts below cover the OpenStack dataset from **2017-05-01 00:00:00 to 2017-07-30 00:00:00 UTC** (90 days). The aggregate and trend queries were exact (results reported approximate: false), so these are measured counts of log entries, not incidents.
-
-The window returned **2,000 log entries**: 1,969 INFO and 31 WARNING, with no ERROR or CRITICAL rows. The counts describe the measured window only: that window contains roughly 1% of the catalogue's ~207,820 rows and the dataset's full time range was not supplied, so corpus-wide frequency is not established. The BGL dataset was searched as well, but it returned 5 truncated rows that do not contain the queried phrase and no usable count, so BGL contributes no frequency evidence.
-
-## Recurring patterns (counts)
-
-Only one warning template recurs in the measured window: **`Unknown base file: <*>`**, with **30 WARNING log entries** — 96.8% of all 31 WARNING entries. The only other warning is a single power-state synchronization entry (1 log entry, 3.2%). Every other row in the window is INFO, and none is ERROR or CRITICAL.
-
-_R4: count_by_category_tool_
-
-| template | severity | count |
-| --- | --- | --- |
-| Unknown base file: <*> | WARNING | 30 |
-| While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | WARNING | 1 |
-
-## Trend
-
-The `Unknown base file: <*>` warnings are not distributed across the period: all 30 entries fall in a single daily bucket on **2017-05-16**, and no other day in the 90-day window has any entry for this template. Because the burst day has no prior count (prev_count: None), no rising or falling trend can be computed; the measured shape is one isolated burst, not a sustained increase.
-
-_R6: get_trend_tool_
-
-| bucket | count | prev_count | trend |
-| --- | --- | --- | --- |
-| 2017-05-16 00:00:00+00:00 | 30 |  | initial |
-
-## Teams and components involved
-
-Two components carry warning volume, each mapped to one owning team:
-
-- **nova.virt.libvirt.imagecache → Virtualization** — 30 WARNING log entries.
-- **nova.compute.manager → Compute Platform** — 1 WARNING log entry.
-
-The computed priority ranking agrees, placing the unknown-base-file template first by a wide margin; its volume share dominates the score, while the trend and breadth terms were dropped as unmeasured. A truncated five-row search example shows the warnings referencing the same base-file path and entity_id 2931 on 2017-05-16, but examples do not establish how often the condition occurs or how many distinct hosts or instances are affected.
-
-_R5: count_by_category_tool_
-
-| service | severity | count |
-| --- | --- | --- |
-| nova.virt.libvirt.imagecache | WARNING | 30 |
-| nova.compute.manager | WARNING | 1 |
-
-_R7: priority_score_
-
-| rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Unknown base file: <*> | 30 | 0 | 96.8 | 0.0 | n/a | n/a | 0.553 |
-| 2 | While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | 1 | 0 | 3.2 | 0.0 | n/a | n/a | 0.018 |
-
-## Investigate first
-
-Start with **nova.virt.libvirt.imagecache (Virtualization)**. It holds the only recurring warning pattern, nearly all warning volume in the measured period (30 of 31 entries), and the top priority rank (0.553 versus 0.018). The power-state synchronization warning from nova.compute.manager (Compute Platform) is a single entry and is a lower-priority follow-up. What the logs do not show is why the base file was unknown, whether the 30 entries represent one host, many instances, or repeated retries, and whether the pattern recurs outside the measured window.
-
-**Measured** (shown by the cited query results)
-- **F1** In 2017-05-01 to 2017-07-30 UTC the OpenStack dataset held 31 WARNING log entries: 30 for template 'Unknown base file: <*>' and 1 for 'While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor.' — R4 (count)
-- **F2** Severity totals in the measured window were 1,969 INFO and 31 WARNING log entries, with no ERROR or CRITICAL rows returned. — R3 (count)
-- **F3** nova.virt.libvirt.imagecache accounts for 30 WARNING log entries and nova.compute.manager for 1. — R5 (count)
-- **F4** The 'Unknown base file: <*>' trend is a single day bucket on 2017-05-16 with 30 entries; no other day in the 90-day window has entries for this template, and prev_count is absent so no direction of change is computed. — R6 (trend)
-- **F5** The priority ranking places 'Unknown base file: <*>' first with score 0.553 and volume share 96.8%, and the power-state synchronization template second with score 0.018 and volume share 3.2%; trend and breadth terms were dropped as unmeasured. — R7 (computed)
-
-**Hypotheses** (not confirmed by the logs)
-- **F6** The repeated warnings may reflect image-cache or base-file state on a single compute host: all five retrieved example lines reference the same base-file path and entity_id 2931 on 2017-05-16, but the logs do not confirm the cause or the number of distinct hosts or instances involved. — R2 (examples)
-
-**Limitations** (what the data does not establish)
-- **F7** Corpus-wide frequency is not established: the measured window returned 2,000 log entries against a catalogue figure of about 207,820 rows, and the dataset's full time range was not supplied, so recurrence outside 2017-05-01 to 2017-07-30 is unknown. — R3 (count)
-- **F8** The BGL search returned 5 truncated rows that do not contain the queried phrase and provided no usable count, so no BGL frequency can be reported and no BGL component or team is implicated by counts. — R1 (examples)
-- **F9** The measured data contains no ERROR or CRITICAL entries, so these warnings cannot be tied to error-level failures and the operational impact of the unknown base file condition remains unknown. — R3 (count)
-
-**Recommended next steps**
-1. **Pull every nova.virt.libvirt.imagecache log entry on 2017-05-16 for entity_id 2931 and inspect the image-cache base-file state and _base directory on that host.** — It is the only recurring warning pattern, holds 30 of 31 WARNING entries, ranks first in the priority score, and is concentrated in one day, so it is the highest-value place to start. (owner: Virtualization; based on F1, F3, F4, F5, F6)
-2. **Re-run the template and service counts over adjacent and wider windows within the tool's 90-day limit, and count distinct entity_id values for the template, to separate one host's repeated retries from a wider pattern.** — Log entries are not incidents; the breadth term is unmeasured and the window covers only a small fraction of the catalogue, so recurrence and blast radius are currently unknown. (based on F6, F7)
-3. **Review the single power-state synchronization warning from nova.compute.manager and confirm whether it coincides with the image-cache burst day.** — It is the only other warning in the window but accounts for just 1 log entry and 3.2% of warning volume, so it is a lower-priority check after the image-cache pattern. (owner: Compute Platform; based on F1, F3, F5)
-
-Query cost: 6 queries in 0.58s, slowest R1 at 0.40s (69% of the total).
-
-### Recommended action
-1. **Pull every nova.virt.libvirt.imagecache log entry on 2017-05-16 for entity_id 2931 and inspect the image-cache base-file state and _base directory on that host.** — It is the only recurring warning pattern, holds 30 of 31 WARNING entries, ranks first in the priority score, and is concentrated in one day, so it is the highest-value place to start. (owner: Virtualization; based on F1, F3, F4, F5, F6)
-2. **Re-run the template and service counts over adjacent and wider windows within the tool's 90-day limit, and count distinct entity_id values for the template, to separate one host's repeated retries from a wider pattern.** — Log entries are not incidents; the breadth term is unmeasured and the window covers only a small fraction of the catalogue, so recurrence and blast radius are currently unknown. (based on F6, F7)
-3. **Review the single power-state synchronization warning from nova.compute.manager and confirm whether it coincides with the image-cache burst day.** — It is the only other warning in the window but accounts for just 1 log entry and 3.2% of warning volume, so it is a lower-priority check after the image-cache pattern. (owner: Compute Platform; based on F1, F3, F5)
-
-## Manager
-**Question:** Which observed problems involving Unknown base file warnings deserve attention first, and what should happen next?
-
-**Route:** `find_evidence` · **Effort:** High · **Datasets:** openstack
-
-### Tool calls
-| id | tool | kind | arguments | rows | truncated |
-| --- | --- | --- | --- | --- | --- |
-| R1 | count_by_category_tool | aggregate | `{"dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00", "type": "general"}` | 2 | no |
-| R2 | count_by_category_tool | aggregate | `{"dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00", "type": "service"}` | 12 | no |
-| R3 | search_logs_tool | search | `{"dataset": "openstack", "query_text": "Unknown base file", "limit": 5}` | 5 | yes |
-| R4 | compare_periods_tool | aggregate | `{"baseline_end": "2016-07-30 00:00:00", "baseline_start": "2016-05-01 00:00:00", "recent_end": "2017-07-30 00:00:00", "…` | 2 | no |
-| R5 | count_by_category_tool | aggregate | `{"dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00", "type": "template", "c…` | 2 | no |
-| R6 | get_trend_tool | trend | `{"bucket": "day", "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00", "type…` | 1 | no |
-| R7 | count_by_category_tool | aggregate | `{"category": "WARNING", "dataset": "openstack", "end_time": "2017-07-30 00:00:00", "start_time": "2017-05-01 00:00:00",…` | 1 | no |
-| R8 | priority_score | derived | `{"dimension": "template", "from": ["R5"]}` | 2 | no |
-
-### Executed queries
-**R1** count_by_category_tool
-
-```sql
-SELECT "Level" AS severity, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz
-GROUP BY "Level"
-ORDER BY count DESC
-LIMIT 50
-```
-
-**R2** count_by_category_tool
-
-```sql
-SELECT "Component" AS "service", "Level" AS severity, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz
-GROUP BY "Component", "Level"
-ORDER BY count DESC
-LIMIT 50
-```
-
-**R3** search_logs_tool
-
-```sql
-WITH query_embedding AS (
-SELECT ai_embed('Unknown base file', 'nomic-embed-text:v1.5', 'local_ai')::FLOAT[768] AS emb
-),
-fused AS (
-SELECT "LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY s DESC) AS rank
-FROM (
-SELECT "LineId", BM25("openstack_idx".tableoid) AS s
-FROM "openstack_idx"
-WHERE "Content" @@ ts_any([ts_levenshtein('Unknown', 1), ts_levenshtein('base', 1), ts_levenshtein('file', 1)])
-ORDER BY s DESC
-LIMIT 100
-) lex
-UNION ALL
-SELECT r."LineId" AS rid,
-ROW_NUMBER() OVER (ORDER BY m.dist, r."LineId") AS rank
-FROM (
-SELECT template_text, embedding <=> q.emb AS dist
-FROM "openstack_templates", query_embedding q
-WHERE embedding <=> q.emb < 1.0
-ORDER BY dist
-LIMIT 20
-) m
-JOIN "openstack_idx" r ON r."EventTemplate" = m.template_text
-)
-SELECT t."LineId" AS "record_id", t."Timestamp" AS "ts", t."Level" AS "severity", t."Component" AS "service", t."Pid" AS "entity_id", t."Content" AS "message",
-SUM(1.0 / (60 + f.rank)) AS relevance
-FROM fused f
-JOIN "openstack" t ON t."LineId" = f.rid
-GROUP BY t."LineId", t."Timestamp", t."Level", t."Component", t."Pid", t."Content"
-ORDER BY relevance DESC
-LIMIT 5
-```
-
-**R4** compare_periods_tool
-
-```sql
-WITH baseline AS (
-SELECT "Level" AS grp, "Level" AS sev, count(*) AS n
-FROM "openstack" WHERE "Timestamp" >= '2016-05-01 00:00:00'::timestamptz AND "Timestamp" < '2016-07-30 00:00:00'::timestamptz
-GROUP BY "Level", "Level"
-), recent AS (
-SELECT "Level" AS grp, "Level" AS sev, count(*) AS n
-FROM "openstack" WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz
-GROUP BY "Level", "Level"
-)
-SELECT
-COALESCE(r.grp, b.grp) AS "severity",
-COALESCE(r.sev, b.sev) AS severity,
-COALESCE(b.n, 0) AS baseline_count,
-COALESCE(r.n, 0) AS recent_count,
-COALESCE(r.n, 0) - COALESCE(b.n, 0) AS volume_change,
-ROUND(
-(COALESCE(r.n, 0) - COALESCE(b.n, 0)) * 100.0
-/ NULLIF(b.n, 0), 2
-) AS percentage_change
-FROM recent r
-FULL OUTER JOIN baseline b ON r.grp = b.grp AND r.sev = b.sev
-ORDER BY volume_change DESC
-LIMIT 10
+LIMIT 15
 ```
 
 **R5** count_by_category_tool
@@ -628,20 +577,44 @@ LIMIT 10
 ```sql
 SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
 FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "Level" = 'WARNING'
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'ERROR'
 GROUP BY "EventTemplate", "Level"
 ORDER BY count DESC
-LIMIT 25
+LIMIT 15
 ```
 
-**R6** get_trend_tool
+**R6** count_by_category_tool
 
 ```sql
-WITH bucket_counts AS (
-SELECT date_trunc('day', "Timestamp") AS bucket, count(*) AS count
-FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "EventTemplate" = 'Unknown base file: <*>'
-GROUP BY date_trunc('day', "Timestamp")
+SELECT "EventTemplate" AS "template", "Level" AS severity, count(*) AS count
+FROM "bgl"
+WHERE "Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "Timestamp" < '2006-01-04 16:00:06'::timestamptz AND "Level" = 'ERROR'
+GROUP BY "EventTemplate", "Level"
+ORDER BY count DESC
+LIMIT 12
+```
+
+**R7** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('month', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "bgl"
+WHERE "Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "Timestamp" < '2006-01-04 16:00:06'::timestamptz AND "Level" = 'FATAL'
+GROUP BY CAST(date_trunc('month', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('month', '2005-06-03 22:42:50'::timestamptz), '2006-01-04 16:00:06'::timestamptz,
+CAST('1 month' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2006-01-04 16:00:06'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
 )
 SELECT
 bucket,
@@ -653,186 +626,331 @@ WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
 WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
 ELSE 'flat'
 END AS trend
-FROM bucket_counts
+FROM filled
 ORDER BY bucket
 LIMIT 240
 ```
 
-**R7** count_by_category_tool
+**R8** top_in_category_by_service_tool
 
 ```sql
-SELECT "Pid" AS "entity_id", "Level" AS severity, count(*) AS count
+SELECT "Component" AS "service", count(*) AS count
 FROM "openstack"
-WHERE "Timestamp" >= '2017-05-01 00:00:00'::timestamptz AND "Timestamp" < '2017-07-30 00:00:00'::timestamptz AND "Level" = 'WARNING'
-GROUP BY "Pid", "Level"
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'ERROR'
+GROUP BY "Component"
 ORDER BY count DESC
-LIMIT 20
+LIMIT 10
 ```
 
-**R8** computed in code from R5: score = 0.4*volume_share + 0.3*error_share + 0.2*trend_up + 0.1*breadth (unmeasured terms dropped, weights renormalized)
+**R9** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('hour', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "openstack"
+WHERE "Timestamp" >= '2017-05-14 19:39:01'::timestamptz AND "Timestamp" < '2017-05-17 12:02:36'::timestamptz AND "Level" = 'WARNING'
+GROUP BY CAST(date_trunc('hour', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('hour', '2017-05-14 19:39:01'::timestamptz), '2017-05-17 12:02:36'::timestamptz,
+CAST('1 hour' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2017-05-17 12:02:36'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
+)
+SELECT
+bucket,
+count,
+LAG(count) OVER (ORDER BY bucket) AS prev_count,
+CASE
+WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
+WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
+WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
+ELSE 'flat'
+END AS trend
+FROM filled
+ORDER BY bucket
+LIMIT 240
+```
+
+**R10** top_in_category_by_service_tool
+
+```sql
+SELECT "Component" AS "service", count(*) AS count
+FROM "bgl"
+WHERE "Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "Timestamp" < '2006-01-04 16:00:06'::timestamptz AND "Level" = 'ERROR'
+GROUP BY "Component"
+ORDER BY count DESC
+LIMIT 10
+```
+
+**R11** get_trend_tool
+
+```sql
+WITH bucket_counts AS MATERIALIZED (
+SELECT CAST(date_trunc('month', "Timestamp") AS timestamptz) AS bucket, count(*) AS count
+FROM "bgl"
+WHERE "Timestamp" >= '2005-06-03 22:42:50'::timestamptz AND "Timestamp" < '2006-01-04 16:00:06'::timestamptz AND "EventTemplate" = 'idoproxydb hit ASSERT condition: ASSERT expression=<*> Source file=idotransportmgr.cpp Source line=<*> Function=int IdoTransportMgr::SendPacket(IdoUdpMgr*, BglCtlPavTrace*)'
+GROUP BY CAST(date_trunc('month', "Timestamp") AS timestamptz)
+),
+grid AS (
+SELECT s.bucket
+FROM generate_series(
+date_trunc('month', '2005-06-03 22:42:50'::timestamptz), '2006-01-04 16:00:06'::timestamptz,
+CAST('1 month' AS INTERVAL)
+) AS s(bucket)
+WHERE s.bucket < '2006-01-04 16:00:06'::timestamptz
+),
+filled AS (
+SELECT g.bucket, COALESCE(c.count, 0) AS count
+FROM grid g
+LEFT JOIN bucket_counts c ON c.bucket = g.bucket
+)
+SELECT
+bucket,
+count,
+LAG(count) OVER (ORDER BY bucket) AS prev_count,
+CASE
+WHEN LAG(count) OVER (ORDER BY bucket) IS NULL THEN 'initial'
+WHEN count > LAG(count) OVER (ORDER BY bucket) THEN 'up'
+WHEN count < LAG(count) OVER (ORDER BY bucket) THEN 'down'
+ELSE 'flat'
+END AS trend
+FROM filled
+ORDER BY bucket
+LIMIT 240
+```
+
+**R12** computed in code from R4, R5, R6, R11: score = 0.4*volume_share + 0.3*error_share + 0.2*trend_up + 0.1*breadth (unmeasured terms dropped, weights renormalized)
 
 ### Relevant results
-**R1** (aggregate, first 2 of 2 rows)
+**R1** (catalog, first 4 of 4 rows)
 
-| severity | count |
-| --- | --- |
-| INFO | 1969 |
-| WARNING | 31 |
+| dataset | kind | exact_counts | available | rows | rows_exact | first_timestamp | last_timestamp | span_seconds | max_window_seconds | whole_span_fits_one_window | window_start | window_end | levels | timestamp_source | note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bgl | native_table | True | True | 4747963 | True | 2005-06-03 22:42:50+00:00 | 2006-01-04 16:00:05+00:00 | 18551835.0 | 31536000 | True | 2005-06-03 22:42:50 | 2006-01-04 16:00:06 | [{'severity': 'INFO', 'count': 3735823}, {'severity': 'FATAL', 'count': 855501}, {'severity': 'ERROR', 'count': 112355}… | rows | Exact: counted over every row. Each level's count is the number of log entries at that severity in the whole dataset. |
+| openstack | native_table | True | True | 207820 | True | 2017-05-14 19:39:01.445000+00:00 | 2017-05-17 12:02:35.320000+00:00 | 231813.875 | 7776000 | True | 2017-05-14 19:39:01 | 2017-05-17 12:02:36 | [{'severity': 'INFO', 'count': 204506}, {'severity': 'WARNING', 'count': 3118}, {'severity': 'ERROR', 'count': 194}, {'… | rows | Exact: counted over every row. Each level's count is the number of log entries at that severity in the whole dataset. |
+| otel_s3 | remote_parquet | False | True | 1000000000 | True | 2025-09-23 00:00:00+00:00 | 2025-09-23 00:29:24.039037+00:00 | 1764.039 | 300 | False | 2025-09-23 00:00:00+00 | 2025-09-23 00:29:25+00 | [{'severity': 'info', 'count': None}, {'severity': 'error', 'count': None}, {'severity': 'information', 'count': None},… | parquet_footers | Rows and span from the footers of 1 file(s) (1,624 row groups); no row was read. Levels are the declared vocabulary, NO… |
+| otel_slice | external_index | True | False |  |  |  |  |  | 86400 |  |  |  | [] |  | The in-place index has not been built, so there is nothing to search on this dataset. |
 
-**R2** (aggregate, first 5 of 12 rows)
+**R2** (aggregate, first 5 of 15 rows)
 
-| service | severity | count |
-| --- | --- | --- |
-| nova.osapi_compute.wsgi.server | INFO | 809 |
-| nova.virt.libvirt.imagecache | INFO | 306 |
-| nova.compute.manager | INFO | 261 |
-| nova.metadata.wsgi.server | INFO | 208 |
-| nova.compute.claims | INFO | 168 |
+| dataset | team | severity | count |
+| --- | --- | --- | --- |
+| bgl | BG/L Kernel | INFO | 3698211 |
+| bgl | BG/L Kernel | FATAL | 855292 |
+| bgl | BG/L Control System | ERROR | 88529 |
+| bgl | Hardware Ops | INFO | 36906 |
+| bgl | Hardware Ops | ERROR | 23825 |
 
-**R3** (search, first 5 of 5 rows)
+**R3** (aggregate, first 5 of 10 rows)
 
-| record_id | ts | severity | service | entity_id | message | relevance |
-| --- | --- | --- | --- | --- | --- | --- |
-| 57 | 2017-05-16 00:00:20.345000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03278688524590164 |
-| 238 | 2017-05-16 00:01:45.116000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.031746031746031744 |
-| 241 | 2017-05-16 00:01:50.149000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03125 |
-| 327 | 2017-05-16 00:02:25.118000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.03076923076923077 |
-| 147 | 2017-05-16 00:01:01.698000+00:00 | WARNING | nova.virt.libvirt.imagecache | 2931 | Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742 | 0.030621785881252923 |
+| dataset | team | severity | count |
+| --- | --- | --- | --- |
+| openstack | API Gateway | INFO | 102862 |
+| openstack | Virtualization | INFO | 52563 |
+| openstack | Compute Platform | INFO | 48215 |
+| openstack | Virtualization | WARNING | 3071 |
+| openstack | Scheduling | INFO | 866 |
 
-**R4** (aggregate, first 2 of 2 rows)
-
-| severity | baseline_count | recent_count | volume_change | percentage_change |
-| --- | --- | --- | --- | --- |
-| INFO | 0 | 1969 | 1969 |  |
-| WARNING | 0 | 31 | 31 |  |
-
-**R5** (aggregate, first 2 of 2 rows)
+**R4** (aggregate, first 5 of 15 rows)
 
 | template | severity | count |
 | --- | --- | --- |
-| Unknown base file: <*> | WARNING | 30 |
-| While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | WARNING | 1 |
+| data TLB error interrupt | FATAL | 152734 |
+| data storage interrupt | FATAL | 63491 |
+| instruction address: <*> | FATAL | 47563 |
+| ciod: Error reading message prefix on CioStream socket to <*>.<*>.<*>.<*>:<*>, Link has been severed | FATAL | 26546 |
+| ciod: Error loading /bgl/apps/scaletest/performance/MINIBEN/mb_243_0810/allreduce.rts: invalid or missing program image… | FATAL | 20480 |
 
-**R6** (trend, first 1 of 1 rows)
+**R5** (aggregate, first 5 of 15 rows)
+
+| template | severity | count |
+| --- | --- | --- |
+| File "/usr/lib/python2.<*>/dist-packages/nova/virt/libvirt/driver.py", line <*>, in manage_image_cache | ERROR | 8 |
+| File "/usr/lib/python2.<*>/dist-packages/oslo_service/periodic_task.py", line <*>, in run_periodic_tasks | ERROR | 8 |
+| File "/usr/lib/python2.<*>/dist-packages/nova/virt/libvirt/imagecache.py", line <*>, in _age_and_verify_cached_images | ERROR | 8 |
+| self.driver.manage_image_cache(context, filtered_instances) | ERROR | 8 |
+| backing_file = images.qemu_img_info(path, format).backing_file | ERROR | 8 |
+
+**R6** (aggregate, first 5 of 12 rows)
+
+| template | severity | count |
+| --- | --- | --- |
+| idoproxydb hit ASSERT condition: ASSERT expression=<*> Source file=idotransportmgr.cpp Source line=<*> Function=int Ido… | ERROR | 84168 |
+| Node card status: no ALERTs are active. Clock Mode is Low. Clock Select is Midplane. Phy JTAG Reset is asserted. ASIC J… | ERROR | 16896 |
+| Ido packet timeout | ERROR | 4276 |
+| Found invalid node ecid in processor card slot J14, ecid <*> | ERROR | 342 |
+| Found invalid node ecid in processor card slot J11, ecid <*> | ERROR | 342 |
+
+**R7** (trend, first 5 of 8 rows)
 
 | bucket | count | prev_count | trend |
 | --- | --- | --- | --- |
-| 2017-05-16 00:00:00+00:00 | 30 |  | initial |
+| 2005-06-01 00:00:00+00:00 | 547889 |  | initial |
+| 2005-07-01 00:00:00+00:00 | 20443 | 547889 | down |
+| 2005-08-01 00:00:00+00:00 | 66303 | 20443 | up |
+| 2005-09-01 00:00:00+00:00 | 85056 | 66303 | up |
+| 2005-10-01 00:00:00+00:00 | 42497 | 85056 | down |
 
-**R7** (aggregate, first 1 of 1 rows)
+**R8** (aggregate, first 2 of 2 rows)
 
-| entity_id | severity | count |
-| --- | --- | --- |
-| 2931 | WARNING | 31 |
+| service | count |
+| --- | --- |
+| oslo_service.periodic_task | 192 |
+| keystonemiddleware.auth_token | 2 |
 
-**R8** (derived, first 2 of 2 rows)
+**R9** (trend, first 5 of 66 rows)
+
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2017-05-14 19:00:00+00:00 | 39 |  | initial |
+| 2017-05-14 20:00:00+00:00 | 120 | 39 | up |
+| 2017-05-14 21:00:00+00:00 | 116 | 120 | down |
+| 2017-05-14 22:00:00+00:00 | 0 | 116 | down |
+| 2017-05-14 23:00:00+00:00 | 0 | 0 | flat |
+
+**R10** (aggregate, first 3 of 3 rows)
+
+| service | count |
+| --- | --- |
+| MMCS | 88529 |
+| DISCOVERY | 23825 |
+| SERV_NET | 1 |
+
+**R11** (trend, first 5 of 8 rows)
+
+| bucket | count | prev_count | trend |
+| --- | --- | --- | --- |
+| 2005-06-01 00:00:00+00:00 | 0 |  | initial |
+| 2005-07-01 00:00:00+00:00 | 0 | 0 | flat |
+| 2005-08-01 00:00:00+00:00 | 19320 | 0 | up |
+| 2005-09-01 00:00:00+00:00 | 64848 | 19320 | up |
+| 2005-10-01 00:00:00+00:00 | 0 | 64848 | down |
+
+**R12** (derived, first 5 of 10 rows)
 
 | rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Unknown base file: <*> | 30 | 0 | 96.8 | 0.0 | n/a | n/a | 0.553 |
-| 2 | While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | 1 | 0 | 3.2 | 0.0 | n/a | n/a | 0.018 |
+| 1 | data TLB error interrupt | 152734 | 152734 | 27.5 | 100.0 | n/a | n/a | 0.455 |
+| 2 | idoproxydb hit ASSERT condition: ASSERT expression=<*> Source file=idotransportmgr.cpp Source line=<*> Function=int Ido… | 84168 | 84168 | 15.1 | 100.0 | 0.0 | n/a | 0.401 |
+| 3 | data storage interrupt | 63491 | 63491 | 11.4 | 100.0 | n/a | n/a | 0.384 |
+| 4 | instruction address: <*> | 47563 | 47563 | 8.6 | 100.0 | n/a | n/a | 0.371 |
+| 5 | ciod: Error reading message prefix on CioStream socket to <*>.<*>.<*>.<*>:<*>, Link has been severed | 26546 | 26546 | 4.8 | 100.0 | n/a | n/a | 0.355 |
 
 ### Evidence report
-**Summary:** In the openstack corpus window 2017-05-01 00:00 – 2017-07-30 00:00 UTC (7,776,000 s), exact counts show 2,000 log entries: 1,969 INFO (98.5%) and 31 WARNING (1.55%), with no ERROR or CRITICAL entries measured. Of the WARNINGs, 30 (96.8%) match the template 'Unknown base file: <*>' from nova.virt.libvirt.imagecache, and 1 (3.2%) is an instance power-state sync mismatch from nova.compute.manager. All 31 WARNING entries come from one process (PID 2931); the 'Unknown base file' trend has a single day bucket, 2017-05-16, count 30, so no trend direction is measurable. Comparison windows 2016-05-01→2016-07-30 and 2017-02-01→2017-04-30 vs 2017-08-01→2017-10-30 returned no rows. Ranking basis: exact entry counts plus severity — image-cache warnings are ~30× the only other non-INFO template and are the only recurring above-INFO pattern in the window, while ERROR/CRITICAL never appear. Actions follow for Virtualization (reconcile the image cache against the instance directory for the repeated base-file path and alert on repeats) and Compute Platform (compare DB instance records with hypervisor state for the host that logged the sync mismatch). Counts are log entries, not incidents; no downtime, cost, customer impact or instance failure is shown in the data.
-- **E1** count_by_category_tool — unavailable; results none
-- **E2** count_by_category_tool — available; results R1
-- **E3** count_by_category_tool — available; results R2
-- **E4** search_logs_tool — available; results R3
-- **E5** compare_periods_tool — available; results R4
-- **E6** count_by_category_tool — available; results R5
-- **E7** get_trend_tool — unavailable; results none
-- **E8** get_trend_tool — available; results R6
-- **E9** count_by_category_tool — available; results R7
-- **E10** compare_periods_tool — unavailable; results none
-- Hypothesis (inconclusive): The 'Unknown base file' warnings occur because an instance or its info-cache record still references a backing file that was removed or never materialised under /var/lib/nova/instances/_base.; next check: On the host that logged the warnings, list /var/lib/nova/instances/_base and check which instance records reference a489c868f0c37da93b76227c91bb03908ac0e742 to confirm whether the entry is orphaned or genuinely missing.
-- Hypothesis (inconclusive): The warning burst is isolated to one corpus run/day and would not recur in normal operation.; next check: Count the 'Unknown base file: <*>' template over the unprobed ranges (2016-01→2016-04, 2016-08→2017-01, 2017-11 onward) in 90-day slices to see whether the pattern appears outside 2017-05-16.
+**Summary:** Ranking is based on exact database counts of log entries at problem severity over each corpus' full span, adjusted for trend direction and severity breadth. Priority 1: the Blue Gene/L kernel FATAL machine-check class (855,501 FATAL entries, 18.0% of all 4,747,963 BGL entries, 99.98% of BGL FATAL), present in every month and rising across the last three complete months (42,497 Oct -> 44,706 Nov -> 47,967 Dec); top templates are data TLB error interrupt (152,734) and data storage interrupt (63,491). Priority 2: the Control-System MMCS idoproxydb ASSERT block (88,529 ERROR entries, 78.8% of BGL ERROR; 84,168 on one template), which falls to zero from Oct 2005 onward and is therefore a verification item rather than new work. Priority 3: Hardware Ops card/power faults (68,059 problem-severity entries, holding 100% of BGL SEVERE at 19,213 and 97.1% of FAILURE), whose trend was not measured. The separate OpenStack corpus (3 days, 207,820 entries, 1.6% problem severity) ranks below these: 192 ERROR entries concentrated in oslo_service.periodic_task around _run_image_cache_manager_pass / qemu_img_info InvalidDiskInfo, and 3,071 of 3,118 WARNINGs in Virtualization. Counts are log entries, not incidents; the logs say nothing about cause, business impact, downtime or fix effort. Hypotheses are labelled as such because the logs do not confirm causation.
+- **E1** list_datasets_tool — available; results R1
+- **E2** count_by_team_tool — available; results R2
+- **E3** count_by_team_tool — available; results R3
+- **E4** count_by_category_tool — available; results R4
+- **E5** count_by_category_tool — available; results R5
+- **E6** count_by_category_tool — available; results R6
+- **E7** get_trend_tool — available; results R7
+- **E8** top_in_category_by_service_tool — available; results R8
+- **E9** get_trend_tool — available; results R9
+- **E10** top_in_category_by_service_tool — available; results R10
+- **E11** get_trend_tool — available; results R11
+- **E12** count_by_category_tool — unavailable; results none
+- **E13** count_by_category_tool — unavailable; results none
+- Hypothesis (supported): The BGL kernel FATAL volume is a recurring ongoing condition rather than a one-off burst.; next check: Pull the Dec-2005 TLB/data-storage interrupt entries per node to determine whether the month-over-month rise comes from a small set of repeat nodes.
+- Hypothesis (supported): The MMCS idoproxydb ASSERT burst is a closed historical event rather than an active problem.; next check: Confirm that the Sep-2005 change is what stopped the ASSERT and add a recurrence alert so a return would not be lost in overall volume.
+- Hypothesis (inconclusive): OpenStack's 192 ERROR entries are a single recurring defect in the libvirt image-cache periodic task rather than many distinct faults.; next check: Retrieve the full untruncated OpenStack ERROR template list to count how many distinct traceback signatures underlie the 192 entries.
 
 ### Answer for the manager
 ## Top priorities
+1. **BGL kernel FATAL block — BG/L Kernel.** BGL has 855,501 FATAL entries (18.0% of 4,747,963 entries); 855,292 (99.98%) are BG/L Kernel. The top templates are data TLB error interrupt (152,734) and data storage interrupt (63,491). FATAL entries rose across the last three complete months: 42,497 Oct → 44,706 Nov → 47,967 Dec.
+2. **MMCS idoproxydb ASSERT — BG/L Control System.** 84,168 entries on the dominant template; MMCS has 88,529 ERROR entries, 78.8% of BGL ERROR. The template is second in the computed ranking by raw count, but it falls to zero from Oct 2005 onward, so it is a verification item rather than new remediation.
+3. **Hardware Ops problem-severity block — Hardware Ops.** 68,059 entries across ERROR (23,825), WARNING (23,356), SEVERE (19,213) and FAILURE (1,665), plus 206 FATAL. It holds all 19,213 BGL SEVERE entries and 1,665 of 1,714 FAILURE entries (97.1%). No trend was measured for this block.
 
-Two observed problems in the openstack window 2017-05-01 00:00 – 2017-07-30 00:00 UTC carry WARNING severity: the image-cache `Unknown base file` warning and a single instance power-state synchronisation mismatch. Ranked first is the image-cache warning (30 log entries, 96.8% of all WARNING entries, one component: nova.virt.libvirt.imagecache). Ranked second is the power-state sync mismatch (1 log entry, 3.2% of WARNING entries, one component: nova.compute.manager). No ERROR or CRITICAL entries were measured in the window; the remaining 1,969 entries (98.5%) are INFO.
+The computed template ranking below is from R12; it is truncated to the top 10 rows, so additional matching templates exist.
 
-_R8: priority_score_
+_R12: priority_score_
 
 | rank | template | non_info_rows | error_rows | volume_share_pct | error_share_pct | trend_up | breadth | score |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Unknown base file: <*> | 30 | 0 | 96.8 | 0.0 | n/a | n/a | 0.553 |
-| 2 | While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor. | 1 | 0 | 3.2 | 0.0 | n/a | n/a | 0.018 |
+| 1 | data TLB error interrupt | 152734 | 152734 | 27.5 | 100.0 | n/a | n/a | 0.455 |
+| 2 | idoproxydb hit ASSERT condition: ASSERT expression=<*> Source file=idotransportmgr.cpp Source line=<*> Function=int Ido… | 84168 | 84168 | 15.1 | 100.0 | 0.0 | n/a | 0.401 |
+| 3 | data storage interrupt | 63491 | 63491 | 11.4 | 100.0 | n/a | n/a | 0.384 |
+| 4 | instruction address: <*> | 47563 | 47563 | 8.6 | 100.0 | n/a | n/a | 0.371 |
+| 5 | ciod: Error reading message prefix on CioStream socket to <*>.<*>.<*>.<*>:<*>, Link has been severed | 26546 | 26546 | 4.8 | 100.0 | n/a | n/a | 0.355 |
 
-## Why this order
+**Why this order.** R12's count-based template score puts data TLB first, idoproxydb second and data storage third; at problem level the two BGL kernel FATAL templates form priority 1, idoproxydb remains priority 2 only as a verification item, and Hardware Ops is priority 3 because its severity breadth is large but its trend was not measured.
 
-The order follows the computed priority ranking shown above, which was computed from the per-template WARNING counts (30 versus 1) and scored the image-cache template far higher (0.553 versus 0.018). Its trend and breadth terms were unmeasured and dropped from the score, so the ranking rests on volume share of non-INFO entries, not on growth. Severity does not separate the two items: both are WARNING and neither has accompanying ERROR or CRITICAL entries. Component breadth does not separate them either: each is confined to one service.
+**Risks supported by the data.** OpenStack is below the top three: 207,820 entries over three days, including 194 ERROR, 3,118 WARNING and 2 CRITICAL; 192 ERROR sit in oslo_service.periodic_task and 3,071 WARNINGs in Virtualization. Whether those 192 ERROR entries are one recurring defect or many distinct faults is unresolved because the ERROR template list is truncated. Hardware Ops SEVERE template text and OpenStack WARNING template text were not collected because those calls hit the tool-call limit; the BGL template lists are also truncated. OTel was not counted because its slice index is unavailable.
 
-## Risks supported by the data
-
-The image-cache warning is a repeated pattern rather than a one-off line: 30 entries of the same template, all from a single process (entity_id 2931), and the retrieved examples repeat one backing-file path under /var/lib/nova/instances/_base within a span of about two minutes on 2017-05-16. It is also the only recurring above-INFO template in the window. The power-state mismatch is a single entry and therefore the weaker signal of the two. No severity escalation is visible in the data: the window contains no ERROR or CRITICAL entries at all.
-
-## What is not known
-
-The trend direction for the image-cache warning cannot be established: its day-bucketed trend has exactly one bucket (2017-05-16, 30 entries) with no prior value, and the comparison windows checked returned no rows on the baseline side, so the single-day appearance is not evidence of either recurrence or one-off behaviour. The cause of the warning is not confirmed by any measured entry, and no log entry records an instance outcome, downtime, cost or customer impact. The coverage is partial: 2,000 of roughly 207,820 corpus rows were counted, and the ranges 2016-01→2016-04, 2016-08→2017-01 and 2017-11 onward were not queried. The five search rows are a truncated example set, not a frequency.
+**What is not known.** Counts are log entries, not incidents; the logs do not establish cause, business impact, downtime, SLAs or fix effort.
 
 **Measured** (shown by the cited query results)
-- **F1** In 2017-05-01 00:00 – 2017-07-30 00:00 UTC the openstack window contains 2,000 log entries: 1,969 INFO (98.5%) and 31 WARNING (1.55%), with no ERROR or CRITICAL entries counted. — R1 (count)
-- **F2** Of the 31 WARNING entries, 30 (96.8%) match the template 'Unknown base file: <*>' and 1 (3.2%) matches the instance power-state synchronisation mismatch template. — R5 (count)
-- **F3** All 31 WARNING entries in the window come from a single entity_id (2931). — R7 (count)
-- **F4** The day-bucketed trend for 'Unknown base file: <*>' has one bucket only, 2017-05-16, with 30 entries and no previous count, so no trend direction is measurable. — R6 (trend)
-- **F5** The computed priority ranking scores 'Unknown base file: <*>' first (30 non-INFO rows, 96.8% volume share, score 0.553) and the power-state sync mismatch second (1 non-INFO row, 3.2% volume share, score 0.018), with error share 0.0 for both and trend and breadth unmeasured. — R8 (computed)
-- **F6** Per-service counts show nova.virt.libvirt.imagecache with 30 WARNING entries alongside 306 INFO entries, and nova.compute.manager with 1 WARNING entry alongside 261 INFO entries. — R2 (count)
-- **F7** The comparison of 2016-05-01→2016-07-30 against 2017-05-01→2017-07-30 returned 0 baseline entries for both INFO and WARNING and 1,969 INFO and 31 WARNING entries in the recent window, with no percentage change computable. — R4 (count)
+- **F1** BGL contains 4,747,963 entries, of which 855,501 are FATAL (18.0%); 855,292 (99.98%) of those FATAL entries belong to BG/L Kernel. — R1 (value list), R2 (count)
+- **F2** BGL monthly FATAL counts are 547,889 in Jun, 20,443 in Jul, 66,303 in Aug, 85,056 in Sep, 42,497 in Oct, 44,706 in Nov, 47,967 in Dec and 640 in Jan; the last three complete months rise from Oct to Dec. — R7 (trend)
+- **F3** Top BGL FATAL templates are data TLB error interrupt at 152,734 entries and data storage interrupt at 63,491; R12 ranks them 1 and 3 with 27.5% and 11.4% volume share and 100% error share. — R4 (count), R12 (computed)
+- **F5** MMCS has 88,529 ERROR entries, 78.8% of the 112,355 BGL ERROR entries; the idoproxydb ASSERT template alone has 84,168 entries, 95.1% of MMCS ERROR. — R1 (value list), R2 (count), R6 (count), R10 (count)
+- **F6** The idoproxydb ASSERT template trend is 19,320 entries in Aug 2005, 64,848 in Sep 2005, and 0 in Oct, Nov, Dec and Jan. — R11 (trend)
+- **F8** Hardware Ops has 23,825 ERROR, 23,356 WARNING, 19,213 SEVERE, 1,665 FAILURE and 206 FATAL entries; its ERROR/WARNING/SEVERE/FAILURE rows total 68,059, it holds all 19,213 BGL SEVERE entries and 1,665 of 1,714 FAILURE entries (97.1%). — R2 (count)
+- **F9** The R12 computed template ranking scores data TLB error interrupt 0.455 at rank 1, idoproxydb ASSERT 0.401 at rank 2 and data storage interrupt 0.384 at rank 3. — R12 (computed)
+- **F10** OpenStack has 207,820 entries, including 194 ERROR, 3,118 WARNING and 2 CRITICAL; 192 ERROR are in oslo_service.periodic_task and 3,071 WARNINGs in Virtualization. — R1 (value list), R3 (count), R8 (count)
 
 **Hypotheses** (not confirmed by the logs)
-- **F8** The warnings may occur because an instance or its info-cache record still references a backing file (a489c868f0c37da93b76227c91bb03908ac0e742) that was removed or never materialised under /var/lib/nova/instances/_base; this remains inconclusive because no measured entry records a deletion, cleanup or subsequent instance outcome. — R3 (examples), R5 (count), R6 (trend)
-- **F9** The warning burst may be isolated to one corpus run or day rather than recurring in normal operation; this remains inconclusive because the day-bucketed trend has a single bucket and the adjacent comparison windows returned no rows, while unprobed date ranges were never counted. — R4 (count), R6 (trend)
+- **F4** The BGL kernel FATAL volume is a recurring ongoing condition rather than a one-off burst; this is supported by non-zero monthly FATAL counts in every month and a rise across the last three complete months. — R7 (trend)
+- **F7** The MMCS idoproxydb ASSERT burst is a closed historical event rather than an active problem; this is supported by the zero monthly counts from Oct 2005 onward. — R11 (trend)
+- **F11** OpenStack's 192 ERROR entries are a single recurring defect in the libvirt image-cache periodic task rather than many distinct faults; this is unresolved because the template list is truncated. — R5 (count), R8 (count), R9 (trend)
 
 **Limitations** (what the data does not establish)
-- **F10** The data does not show the cause of either warning, any instance failure, downtime, cost, customer impact, SLA effect or recurrence over time, and the 5-row search result is a truncated example set rather than a frequency. — R3 (examples)
-- **F11** Coverage is partial: 2,000 of roughly 207,820 corpus rows were counted in the queried window, and the ranges 2016-01→2016-04, 2016-08→2017-01 and 2017-11 onward were not probed. — R1 (count)
+- **F12** Template inventories are partial: R4, R5 and R6 are truncated at 15, 15 and 12 rows, and R12 at 10 rows, so more matching templates exist. — R4 (count), R5 (count), R6 (count), R12 (computed)
+- **F13** No data was collected for OpenStack WARNING templates or BGL SEVERE templates because those calls failed at the tool-call limit, and no Hardware Ops trend was measured.
+- **F14** The OTel slice corpus was unavailable and otel_s3 rows were not counted, so the answer contains no OpenTelemetry evidence. — R1 (value list)
+- **F15** Counts are log entries, not incidents; the logs do not establish cause, business impact, downtime, SLAs or fix effort.
 
 **Recommended next steps**
-1. **On the host that emitted the image-cache warnings, list /var/lib/nova/instances/_base and check which instance records reference a489c868f0c37da93b76227c91bb03908ac0e742 to determine whether the entry is orphaned or genuinely missing, then reconcile the cache; add an alert on repeats of this template.** — This is the top-ranked problem with 30 WARNING entries and 96.8% of WARNING volume, and its cause is unconfirmed, so the reconciliation is the check that resolves it. (owner: Virtualization; based on F2, F5, F8, F10)
-2. **For the host that logged the single power-state synchronisation mismatch, compare the database instance records against the hypervisor's actual instance list and correct any divergence.** — It is the only other above-INFO template in the window at 1 log entry and 3.2% of WARNING volume, so it ranks second but still indicates a database-to-hypervisor discrepancy to verify. (owner: Compute Platform; based on F2, F5, F6)
-3. **Count the 'Unknown base file: <*>' template over the unprobed ranges (2016-01→2016-04, 2016-08→2017-01, 2017-11 onward) in 90-day slices to establish whether the pattern recurs outside 2017-05-16.** — The trend rests on a single day bucket, so recurrence versus a one-off burst cannot be decided from the current data. (based on F4, F9, F11)
+1. **Pull Dec-2005 data TLB and data storage interrupt entries per node and identify whether the FATAL rise is concentrated in a small set of repeat nodes.** — This is the largest BGL FATAL block and the only priority with a measured rising trend. (owner: BG/L Kernel; based on F1, F2, F3, F4)
+2. **Confirm what changed in Sep-2005 that stopped the idoproxydb ASSERT and add a recurrence alert; do not start new remediation while the count remains zero.** — The ASSERT is the second-ranked template by raw count but has zero entries from Oct onward, so it is a verification item. (owner: BG/L Control System; based on F5, F6, F7, F9)
+3. **Retrieve the BGL SEVERE template text that was not collected, measure the Hardware Ops problem-severity trend by month, and inspect the node-card/ECID templates.** — Hardware Ops holds all BGL SEVERE and most FAILURE entries, but its trend and SEVERE template text are unmeasured. (owner: Hardware Ops; based on F8, F13)
 
-Query cost: 7 queries in 0.22s, slowest R3 at 0.10s (47% of the total).
+Query cost: 11 queries in 0.28s, slowest R5 at 0.04s (14% of the total), ~4,955,783 rows scanned, ~17,388,712 rows/s.
 
 ### Recommended action
-1. **On the host that emitted the image-cache warnings, list /var/lib/nova/instances/_base and check which instance records reference a489c868f0c37da93b76227c91bb03908ac0e742 to determine whether the entry is orphaned or genuinely missing, then reconcile the cache; add an alert on repeats of this template.** — This is the top-ranked problem with 30 WARNING entries and 96.8% of WARNING volume, and its cause is unconfirmed, so the reconciliation is the check that resolves it. (owner: Virtualization; based on F2, F5, F8, F10)
-2. **For the host that logged the single power-state synchronisation mismatch, compare the database instance records against the hypervisor's actual instance list and correct any divergence.** — It is the only other above-INFO template in the window at 1 log entry and 3.2% of WARNING volume, so it ranks second but still indicates a database-to-hypervisor discrepancy to verify. (owner: Compute Platform; based on F2, F5, F6)
-3. **Count the 'Unknown base file: <*>' template over the unprobed ranges (2016-01→2016-04, 2016-08→2017-01, 2017-11 onward) in 90-day slices to establish whether the pattern recurs outside 2017-05-16.** — The trend rests on a single day bucket, so recurrence versus a one-off burst cannot be decided from the current data. (based on F4, F9, F11)
+1. **Pull Dec-2005 data TLB and data storage interrupt entries per node and identify whether the FATAL rise is concentrated in a small set of repeat nodes.** — This is the largest BGL FATAL block and the only priority with a measured rising trend. (owner: BG/L Kernel; based on F1, F2, F3, F4)
+2. **Confirm what changed in Sep-2005 that stopped the idoproxydb ASSERT and add a recurrence alert; do not start new remediation while the count remains zero.** — The ASSERT is the second-ranked template by raw count but has zero entries from Oct onward, so it is a verification item. (owner: BG/L Control System; based on F5, F6, F7, F9)
+3. **Retrieve the BGL SEVERE template text that was not collected, measure the Hardware Ops problem-severity trend by month, and inspect the node-card/ECID templates.** — Hardware Ops holds all BGL SEVERE and most FAILURE entries, but its trend and SEVERE template text are unmeasured. (owner: Hardware Ops; based on F8, F13)
 
 ## What the data does and does not establish
 
 **Established (measured, cited to query results):**
-- (Engineer) **F1** Line 57 at 2017-05-16 00:00:20.345 UTC is a WARNING from nova.virt.libvirt.imagecache (entity_id 2931) with the message `Unknown base file: /var/lib/nova/instances/_base/a489c868f0c37da93b76227c91bb03908ac0e742`. — R1 (examples) (row-level evidence, not a frequency)
-- (Engineer) **F2** The template `Unknown base file: <*>` was counted exactly 30 times at WARNING severity in the openstack dataset over 2017-05-16 00:00:00 to 2017-08-14 00:00:00. — R4 (count)
-- (Engineer) **F3** Immediately before the warning, line 56 at 00:00:20.106 UTC records nova.osapi_compute.wsgi.server (entity_id 25746) returning 200 for `GET /v2/54fadb412c4e40cdbaed9335e4c35a9e/servers/detail` in 0.107s. — R2 (record) (row-level evidence, not a frequency)
-- (Engineer) **F4** Immediately after the warning, the same imagecache process and entity_id 2931 logs `Removable base files: <path>` at 00:00:20.346 UTC (line 58) and `Removing base or swap file: <path>` at 00:00:20.349 UTC (line 59) for the same base-file path. — R3 (record), R5 (record) (row-level evidence, not a frequency)
-- (Engineer) **F5** Line 60 at 00:00:21.067 UTC is an INFO entry from a different service, nova.api.openstack.wsgi (entity_id 25746), with the message `HTTP exception thrown: No instances found for any event`. — R6 (record) (row-level evidence, not a frequency)
-- (Team lead) **F1** In 2017-05-01 to 2017-07-30 UTC the OpenStack dataset held 31 WARNING log entries: 30 for template 'Unknown base file: <*>' and 1 for 'While synchronizing instance power states, found <*> instances in the database and <*> instances on the hypervisor.' — R4 (count)
-- (Team lead) **F2** Severity totals in the measured window were 1,969 INFO and 31 WARNING log entries, with no ERROR or CRITICAL rows returned. — R3 (count)
-- (Team lead) **F3** nova.virt.libvirt.imagecache accounts for 30 WARNING log entries and nova.compute.manager for 1. — R5 (count)
-- (Team lead) **F4** The 'Unknown base file: <*>' trend is a single day bucket on 2017-05-16 with 30 entries; no other day in the 90-day window has entries for this template, and prev_count is absent so no direction of change is computed. — R6 (trend)
-- (Team lead) **F5** The priority ranking places 'Unknown base file: <*>' first with score 0.553 and volume share 96.8%, and the power-state synchronization template second with score 0.018 and volume share 3.2%; trend and breadth terms were dropped as unmeasured. — R7 (computed)
-- (Manager) **F1** In 2017-05-01 00:00 – 2017-07-30 00:00 UTC the openstack window contains 2,000 log entries: 1,969 INFO (98.5%) and 31 WARNING (1.55%), with no ERROR or CRITICAL entries counted. — R1 (count)
-- (Manager) **F2** Of the 31 WARNING entries, 30 (96.8%) match the template 'Unknown base file: <*>' and 1 (3.2%) matches the instance power-state synchronisation mismatch template. — R5 (count)
-- (Manager) **F3** All 31 WARNING entries in the window come from a single entity_id (2931). — R7 (count)
-- (Manager) **F4** The day-bucketed trend for 'Unknown base file: <*>' has one bucket only, 2017-05-16, with 30 entries and no previous count, so no trend direction is measurable. — R6 (trend)
-- (Manager) **F5** The computed priority ranking scores 'Unknown base file: <*>' first (30 non-INFO rows, 96.8% volume share, score 0.553) and the power-state sync mismatch second (1 non-INFO row, 3.2% volume share, score 0.018), with error share 0.0 for both and trend and breadth unmeasured. — R8 (computed)
-- (Manager) **F6** Per-service counts show nova.virt.libvirt.imagecache with 30 WARNING entries alongside 306 INFO entries, and nova.compute.manager with 1 WARNING entry alongside 261 INFO entries. — R2 (count)
-- (Manager) **F7** The comparison of 2016-05-01→2016-07-30 against 2017-05-01→2017-07-30 returned 0 baseline entries for both INFO and WARNING and 1,969 INFO and 31 WARNING entries in the recent window, with no percentage change computable. — R4 (count)
+- (Team lead) **F1** The measured scope is the OpenStack corpus from 2017-05-14 19:39:01 to 2017-05-17 12:02:36 UTC, with 207,820 exact log entries: 204,506 INFO, 3,118 WARNING, 194 ERROR and 2 CRITICAL. — R1 (value list) (row-level evidence, not a frequency)
+- (Team lead) **F2** The template `Unknown base file: /var/lib/nova/instances/_base/<*>` accounts for 3,059 WARNING entries, the largest single template in the window, emitted by `nova.virt.libvirt.imagecache`. — R3 (count), R6 (count)
+- (Team lead) **F3** The image-cache InvalidDiskInfo error path appears as 192 ERROR entries from `oslo_service.periodic_task`; individual traceback line templates appear 8 times each and the trend shows 8 buckets of 24 entries, consistent with 8 traceback failures of 24 lines. — R2 (count), R6 (count), R8 (trend)
+- (Team lead) **F4** Power-state synchronisation mismatch accounts for 45 WARNING entries from `nova.compute.manager`. — R3 (count), R6 (count)
+- (Team lead) **F5** vCPU-affinity 'couldn't obtain the vcpu count' warnings account for 12 WARNING entries from `nova.virt.libvirt.driver`. — R3 (count), R6 (count)
+- (Team lead) **F6** `keystonemiddleware.auth_token` produced 6 entries in total (2 WARNING, 2 ERROR, 2 CRITICAL), and the 2 CRITICAL entries ('Unable to validate token: Failed to fetch token data from identity server') are the only CRITICAL entries in the window; the trend shows 3 entries at 05-16 06:00 and 3 at 05-17 06:00. — R4 (count), R6 (count), R11 (trend)
+- (Team lead) **F7** By owning team the non-INFO load is Virtualization 3,071 WARNING, Compute Platform 192 ERROR plus 45 WARNING, and API Gateway 2 CRITICAL plus 2 ERROR plus 2 WARNING; Scheduling has INFO entries only. — R5 (count)
+- (Team lead) **F8** The computed priority ranking places `Unknown base file: /var/lib/nova/instances/_base/<*>` first with score 0.632, followed by the image-cache traceback line templates at 0.334. — R12 (computed)
+- (Manager) **F1** BGL contains 4,747,963 entries, of which 855,501 are FATAL (18.0%); 855,292 (99.98%) of those FATAL entries belong to BG/L Kernel. — R1 (value list), R2 (count)
+- (Manager) **F2** BGL monthly FATAL counts are 547,889 in Jun, 20,443 in Jul, 66,303 in Aug, 85,056 in Sep, 42,497 in Oct, 44,706 in Nov, 47,967 in Dec and 640 in Jan; the last three complete months rise from Oct to Dec. — R7 (trend)
+- (Manager) **F3** Top BGL FATAL templates are data TLB error interrupt at 152,734 entries and data storage interrupt at 63,491; R12 ranks them 1 and 3 with 27.5% and 11.4% volume share and 100% error share. — R4 (count), R12 (computed)
+- (Manager) **F5** MMCS has 88,529 ERROR entries, 78.8% of the 112,355 BGL ERROR entries; the idoproxydb ASSERT template alone has 84,168 entries, 95.1% of MMCS ERROR. — R1 (value list), R2 (count), R6 (count), R10 (count)
+- (Manager) **F6** The idoproxydb ASSERT template trend is 19,320 entries in Aug 2005, 64,848 in Sep 2005, and 0 in Oct, Nov, Dec and Jan. — R11 (trend)
+- (Manager) **F8** Hardware Ops has 23,825 ERROR, 23,356 WARNING, 19,213 SEVERE, 1,665 FAILURE and 206 FATAL entries; its ERROR/WARNING/SEVERE/FAILURE rows total 68,059, it holds all 19,213 BGL SEVERE entries and 1,665 of 1,714 FAILURE entries (97.1%). — R2 (count)
+- (Manager) **F9** The R12 computed template ranking scores data TLB error interrupt 0.455 at rank 1, idoproxydb ASSERT 0.401 at rank 2 and data storage interrupt 0.384 at rank 3. — R12 (computed)
+- (Manager) **F10** OpenStack has 207,820 entries, including 194 ERROR, 3,118 WARNING and 2 CRITICAL; 192 ERROR are in oslo_service.periodic_task and 3,071 WARNINGs in Virtualization. — R1 (value list), R3 (count), R8 (count)
 
 **Not established (hypotheses and limitations):**
-- (Engineer) **F6** The WARNING is the image-cache audit flagging an orphan base file, then classifying it as removable and attempting deletion, rather than a standalone exception; this is supported by the same-PID removable and removal lines but the missing metadata itself is not shown. — R1 (examples), R3 (record), R5 (record)
-- (Engineer) **F7** The base file appears to survive the removal attempt, since the same path is re-flagged at WARNING repeatedly between 00:00:20.345 and later timestamps in the retrieved examples; the logs do not show why removal did not stop the recurrence. — R1 (examples)
-- (Engineer) **F8** The `No instances found for any event` exception at line 60 is not shown to be a downstream effect of the unknown base file; it comes from a different service and process, and no row links the two events. — R6 (record), R5 (record)
-- (Engineer) **F9** Why the base file was unrecognized, whether its removal succeeded, and how the 30 counted WARNING entries are distributed over the window cannot be determined: the search was truncated at 20 rows, the ERROR-severity service aggregate returned no rows, and the service catalog and hourly trend queries were refused. — R1 (examples), R4 (count)
-- (Team lead) **F6** The repeated warnings may reflect image-cache or base-file state on a single compute host: all five retrieved example lines reference the same base-file path and entity_id 2931 on 2017-05-16, but the logs do not confirm the cause or the number of distinct hosts or instances involved. — R2 (examples)
-- (Team lead) **F7** Corpus-wide frequency is not established: the measured window returned 2,000 log entries against a catalogue figure of about 207,820 rows, and the dataset's full time range was not supplied, so recurrence outside 2017-05-01 to 2017-07-30 is unknown. — R3 (count)
-- (Team lead) **F8** The BGL search returned 5 truncated rows that do not contain the queried phrase and provided no usable count, so no BGL frequency can be reported and no BGL component or team is implicated by counts. — R1 (examples)
-- (Team lead) **F9** The measured data contains no ERROR or CRITICAL entries, so these warnings cannot be tied to error-level failures and the operational impact of the unknown base file condition remains unknown. — R3 (count)
-- (Manager) **F8** The warnings may occur because an instance or its info-cache record still references a backing file (a489c868f0c37da93b76227c91bb03908ac0e742) that was removed or never materialised under /var/lib/nova/instances/_base; this remains inconclusive because no measured entry records a deletion, cleanup or subsequent instance outcome. — R3 (examples), R5 (count), R6 (trend)
-- (Manager) **F9** The warning burst may be isolated to one corpus run or day rather than recurring in normal operation; this remains inconclusive because the day-bucketed trend has a single bucket and the adjacent comparison windows returned no rows, while unprobed date ranges were never counted. — R4 (count), R6 (trend)
-- (Manager) **F10** The data does not show the cause of either warning, any instance failure, downtime, cost, customer impact, SLA effect or recurrence over time, and the 5-row search result is a truncated example set rather than a frequency. — R3 (examples)
-- (Manager) **F11** Coverage is partial: 2,000 of roughly 207,820 corpus rows were counted in the queried window, and the ranges 2016-01→2016-04, 2016-08→2017-01 and 2017-11 onward were not probed. — R1 (count)
+- (Team lead) **F9** Stale image-cache records for deleted or rebuilt instance disks may drive both the 'Unknown base file' warnings and the InvalidDiskInfo failures; this is unconfirmed because no image lifecycle, garbage-collection or instance-delete events are present and the 8 failing disk UUIDs cannot be linked to the warned base file. — R2 (count), R3 (count), R7 (trend), R8 (trend)
+- (Team lead) **F10** The auth-token failures may be a single identity-server (Keystone) availability problem recurring at 06:00 on 05-16 and 05-17; this is unconfirmed because no identity-server logs are in the corpus and the response body is truncated, so the HTTP status is unknown. — R4 (count), R6 (count), R11 (trend)
+- (Team lead) **F11** Zero-count trend buckets cannot be read as recovery: the table appears to concatenate three separate nova runs, so gaps may be run boundaries rather than the condition clearing. — R7 (trend), R8 (trend), R11 (trend)
+- (Team lead) **F12** Only the OpenStack corpus was aggregated; BGL was catalogued but not queried and the OTel index was unavailable, so these counts say nothing about those corpora. — R1 (value list)
+- (Manager) **F4** The BGL kernel FATAL volume is a recurring ongoing condition rather than a one-off burst; this is supported by non-zero monthly FATAL counts in every month and a rise across the last three complete months. — R7 (trend)
+- (Manager) **F7** The MMCS idoproxydb ASSERT burst is a closed historical event rather than an active problem; this is supported by the zero monthly counts from Oct 2005 onward. — R11 (trend)
+- (Manager) **F11** OpenStack's 192 ERROR entries are a single recurring defect in the libvirt image-cache periodic task rather than many distinct faults; this is unresolved because the template list is truncated. — R5 (count), R8 (count), R9 (trend)
+- (Manager) **F12** Template inventories are partial: R4, R5 and R6 are truncated at 15, 15 and 12 rows, and R12 at 10 rows, so more matching templates exist. — R4 (count), R5 (count), R6 (count), R12 (computed)
+- (Manager) **F13** No data was collected for OpenStack WARNING templates or BGL SEVERE templates because those calls failed at the tool-call limit, and no Hardware Ops trend was measured.
+- (Manager) **F14** The OTel slice corpus was unavailable and otel_s3 rows were not counted, so the answer contains no OpenTelemetry evidence. — R1 (value list)
+- (Manager) **F15** Counts are log entries, not incidents; the logs do not establish cause, business impact, downtime, SLAs or fix effort.
 
 General limits that apply to every role: log entries are counted, not incidents; retrieved examples show what a message looks like but never how often it happens; the logs contain no cost, downtime or customer-impact data, so none is claimed; team ownership comes from a fictional mapping.

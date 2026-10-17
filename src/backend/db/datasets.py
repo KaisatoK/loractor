@@ -17,6 +17,8 @@ Canonical fields
 ``template``    the parsed event template, when the corpus has one
 ``event_id``    the template's short identifier, when the corpus has one
 ``record_id``   stable per-row primary key, when the corpus has one
+``request_id``  the request a line belongs to (OpenStack ``req-<uuid>``),
+                when the corpus records one
 ==============  ==========================================================
 
 A field a corpus lacks is simply absent from :attr:`Dataset.fields`, and the
@@ -53,6 +55,7 @@ ENTITY_ID = "entity_id"
 TEMPLATE = "template"
 EVENT_ID = "event_id"
 RECORD_ID = "record_id"
+REQUEST_ID = "request_id"
 
 CANONICAL_FIELDS: tuple[str, ...] = (
     TS,
@@ -63,6 +66,7 @@ CANONICAL_FIELDS: tuple[str, ...] = (
     TEMPLATE,
     EVENT_ID,
     RECORD_ID,
+    REQUEST_ID,
 )
 
 
@@ -385,6 +389,21 @@ class UnsupportedFieldError(KeyError):
 # load, exactly as for BGL.
 OPENSTACK_TABLE = "openstack"
 
+# The request id of an OpenStack line, derived from ``ADDR`` at query time.
+#
+# ``ADDR`` is the bracketed header token: ``req-<uuid> <user> <project> - - -``
+# for a line inside a request, a bare ``-`` for one outside any request, and
+# NULL for a line with no bracketed token (traceback lines). Only the first
+# word is the request id, so it is cut there; any other value is NULL, which
+# matches nothing in an equality filter. Code-owned SQL, never built from model
+# output. Derived rather than stored, so it needs no reload of the table. No
+# ``LIKE 'req-%'``: a bare ``%`` in composed SQL is read by psycopg2 as a
+# placeholder whenever the query has parameters.
+OPENSTACK_REQUEST_ID_EXPRESSION = (
+    "CASE WHEN left(\"ADDR\", 4) = 'req-' "
+    "THEN regexp_replace(\"ADDR\", ' .*$', '') END"
+)
+
 OPENSTACK = Dataset(
     id="openstack",
     corpus="OpenStack",
@@ -410,6 +429,7 @@ OPENSTACK = Dataset(
                 column="EventTemplate", text_indexed=True, token_indexed=True
             ),
             RECORD_ID: Field(column="LineId"),
+            REQUEST_ID: Field(expression=OPENSTACK_REQUEST_ID_EXPRESSION),
         }
     ),
     capabilities=frozenset(

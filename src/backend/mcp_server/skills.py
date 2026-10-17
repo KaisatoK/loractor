@@ -21,9 +21,12 @@ _SKILLS_ROOT = (
 def skill_files() -> dict[str, Path]:
     if not _SKILLS_ROOT.is_dir():
         raise RuntimeError(f"Skills directory not found: {_SKILLS_ROOT}")
-    return {
+    paths = {
         p.parent.name: p for p in _SKILLS_ROOT.glob("*/SKILL.md") if p.is_file()
     }
+    # Deterministic order, the hypothesis workflow first (glob order is not).
+    ordered = sorted(paths, key=lambda name: (name != "log-investigation", name))
+    return {name: paths[name] for name in ordered}
 
 
 def skill_body(path: Path) -> str:

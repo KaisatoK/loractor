@@ -26,9 +26,10 @@ Done, committed locally (not pushed):
 | M1 one spec per tool | `5592636` | `pipeline/tools/specs.py`; local tools, pipeline MCP wrappers and server tools generated from it; `TOOL_KINDS` and `TOOL_CATALOG` derived (catalog byte-identical, so the classifiers' input is unchanged); parameter descriptions and registry-backed dataset enums in `schemas.py`; six hand-written tool modules deleted |
 | M2 contract and guidance | `dc5ce53` | rendered instructions, `ToolEnvelope` output schema, size limits in `build_envelope` (`…[cut]`, `clipped_cells`, `clipped_rows`), actionable errors with `mask_error_details`, annotations, version |
 | M4 transports and auth | `041ec19` | `--transport http\|stdio`, `fastmcp.json`, `TokenVerifier` with `compare_digest`, Host/Origin guard, `/health` |
+| M5 T2/T3 from the tool owner | merge of `origin/main` (`52369c0`, `ac4b2f8`) | `get_nearby_events_tool` and `count_by_team_tool` converted from hand-written tools into `ToolSpec` entries (`run`, operation and filters in `specs.py`; their duplicate descriptions in `schemas.py` and the `count_tools`/`context_tools`/`planned_tools` modules dropped); upstream's trend burst summary (`add_burst_summary`) now runs inside the trend spec's `run`; their tests patch `specs.<name>` once for every transport |
 | M3 prompts and resources | `b11c9f9` | `evidence_brief` (pipeline prompt byte-identical across 36 role/effort/scope variants), role prompts, `worked_investigation`, completions, `SkillsDirectoryProvider` and `logs://` resources |
 
-Offline suite: `5 failed, 975 passed, 76 skipped` under both transports (the 5 are
+Offline suite: `5 failed, 1025 passed, 92 skipped` under both transports (the 5 are
 the known failures in AGENTS.md); MCP tests also pass with
 `FASTMCP_MCP_CAMELCASE_COMPAT=false`. Checked against a real server: 401 without
 the token, 421 for a foreign Host, the pipeline's `MCPBridge` connecting with the
@@ -93,16 +94,16 @@ with a model does this by hand)
       not a search). Ask the engineer "what's going on?" with no target: it should
       ask for one.
 - [ ] Check every number in the answers cites an executed `query`, hypotheses are
-      labelled, and no team or ranking is invented while T3/T13 are missing.
+      labelled, and no team is invented (T3 is live) and no ranking is invented while T13 is missing.
 - [ ] A wrong first tool is fixed in that tool's `description` in
       `pipeline/tools/specs.py`, never by naming tools in a prompt.
 
 **Waiting for the tool owner** (M5)
 
-- [ ] T2 `get_nearby_events_tool` and T3 `count_by_team_tool`: flip their spec
-      entries to available once the DB functions land, then the M5 checks and the
-      AGENTS.md new-tool checklist (playbook workarounds removed, `test_registry.py`
-      count, `routes.sh`, `confidence.sh`).
+- [x] T2 `get_nearby_events_tool` and T3 `count_by_team_tool`: landed on
+      origin/main and merged into the spec table (`run` supplied,
+      `available=True`, catalog prefix dropped, playbooks name them). Still
+      to re-run: `routes.sh` and `confidence.sh` (the catalog changed).
 - [ ] T13 `rank_priorities_tool` (requested in `docs/tool_requests.md`):
       server-only spec entry; assert it is absent from the pipeline's tools.
 
@@ -229,9 +230,8 @@ Judged: descriptions, limits, selection.
   `MCP_DB_TOOLS` are derived from it. Delete the hand-written copies in
   `tools.py`, `list_tools.py`, `count_tools.py`, `trend_tools.py`,
   `catalog_tools.py`, `sweep_tools.py`, `mcp_tools.py`, `server.py` and
-  `builders.TOOL_CATALOG`. The planned T2/T3 entries move into the table marked
-  unavailable (their catalog line keeps the "NOT AVAILABLE YET" prefix until the
-  tool owner flips them). Agree the `ToolSpec` shape with the tool owner first
+  `builders.TOOL_CATALOG`. The planned T2/T3 entries moved into the table marked
+  unavailable until the tool owner landed them (done, see M5). Agree the `ToolSpec` shape with the tool owner first
   (see "Ownership").
 - Descriptions: purpose, when to use it (and which tool instead), output
   columns, limits, empty-result meaning, frequency or example -- no inputs.

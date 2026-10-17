@@ -287,3 +287,130 @@ def test_the_total_is_exact_below_the_limit(loaded):
 
     rows = search_with_total("failed", "openstack", None, 50)
     assert rows.total_matches == _independent_count("failed") == len(rows)
+
+
+# --- Nearby events (get_nearby_events_tool) ------------------------------------
+# Anchors are found by query, never hard-coded, so the checks hold for any load.
+def _one(sql_text: str, params: list | None = None):
+    from backend.db.connection import db_cursor
+
+    with db_cursor() as cur:
+        cur.execute(sql_text, params or [])
+        row = cur.fetchone()
+    return row and next(iter(row.values()))
+
+
+def test_nearby_events_are_contiguous_and_numbered_outward(loaded):
+    anchor = OPENSTACK_ROWS // 2
+    rows = db.get_nearby_events(anchor, "openstack", before=5, after=5)
+    assert not rows.refused and rows.stats.notes == []
+    assert [r["record_id"] for r in rows] == list(range(anchor - 5, anchor + 6))
+    assert [r["offset"] for r in rows] == list(range(-5, 6))
+    # The anchor row is the line itself, with every canonical column.
+    middle = rows[5]
+    assert middle == {**middle, **db.get_log_by_record_id(anchor, "openstack")[0]}
+    assert {"request_id", "template", "entity_id"} <= set(middle)
+
+
+def test_nearby_events_stop_at_the_ends_of_the_table(loaded):
+    first = db.get_nearby_events(1, "openstack", before=5, after=2)
+    assert [r["offset"] for r in first] == [0, 1, 2]
+    last = db.get_nearby_events(OPENSTACK_ROWS, "openstack", before=2, after=5)
+    assert [r["offset"] for r in last] == [-2, -1, 0]
+
+
+def test_same_entity_follows_the_anchors_process(loaded):
+    anchor = OPENSTACK_ROWS // 2
+    rows = db.get_nearby_events(anchor, "openstack", before=5, after=5,
+                                same_entity=True)
+    pid = _one('SELECT "Pid" FROM openstack WHERE "LineId" = %s', [anchor])
+    assert len(rows) == 11
+    assert {r["entity_id"] for r in rows} == {pid}
+    ids = [r["record_id"] for r in rows]
+    assert ids == sorted(ids) and ids[5] == anchor
+
+
+def test_same_request_follows_one_request(loaded):
+    """An anchor inside the busiest request: every neighbour shares its id, and
+    the derived request_id is exactly the first word of ADDR. A request's lines
+    are interleaved with other requests', so the anchor is its own line, not
+    an offset from the request's first line."""
+    request = _one("""
+        SELECT r FROM (
+            SELECT CASE WHEN left("ADDR", 4) = 'req-'
+                        THEN regexp_replace("ADDR", ' .*$', '') END AS r
+            FROM openstack) x
+        WHERE r IS NOT NULL GROUP BY r ORDER BY count(*) DESC LIMIT 1
+    """)
+    anchor = _one(
+        """SELECT "LineId" FROM openstack
+           WHERE split_part("ADDR", ' ', 1) = %s ORDER BY "LineId" OFFSET 100 LIMIT 1""",
+        [request],
+    )
+    rows = db.get_nearby_events(anchor, "openstack", before=5, after=5,
+                                same_request=True)
+    assert not rows.refused
+    assert len(rows) == 11 and rows[5]["record_id"] == anchor
+    assert {r["request_id"] for r in rows} == {request}
+    assert any("request context summary:" in note for note in rows.stats.notes)
+    assert request.startswith("req-") and " " not in request
+    # The filter does skip the other requests' lines in between.
+    span = rows[-1]["record_id"] - rows[0]["record_id"] + 1
+    unfiltered = db.get_nearby_events(anchor, "openstack", before=5, after=5)
+    assert span >= len(rows) and len(unfiltered) == 11
+
+
+def test_same_request_on_a_line_outside_any_request_returns_the_anchor(loaded):
+    anchor = _one('SELECT min("LineId") FROM openstack WHERE "ADDR" = %s', ["-"])
+    rows = db.get_nearby_events(anchor, "openstack", same_request=True)
+    assert [r["record_id"] for r in rows] == [anchor]
+    assert rows[0]["request_id"] is None
+    assert "has no request_id" in rows.stats.notes[0]
+
+
+def test_an_unknown_anchor_is_empty_with_a_note(loaded):
+    rows = db.get_nearby_events(OPENSTACK_ROWS + 1, "openstack")
+    assert not rows.refused and list(rows) == []
+    assert f"No line has record_id {OPENSTACK_ROWS + 1}" in rows.stats.notes[0]
+
+
+def test_the_nearby_events_tool_returns_its_query(loaded):
+    from backend.pipeline.tools import get_nearby_events_tool
+
+    class _Runtime:
+        events: list = []
+        stream_writer = events.append
+
+    envelope = get_nearby_events_tool.func(
+        line_id=OPENSTACK_ROWS // 2, runtime=_Runtime(), dataset="openstack",
+        before=2, after=2, same_entity=True,
+    )
+    assert envelope["status"] == "success" and envelope["kind"] == "context"
+    assert envelope["returned"] == 5 and envelope["truncated"] is False
+    assert "WITH anchor AS" in envelope["query"]
+    assert envelope["filters"]["same_entity"] is True
+
+
+# --- Team ownership counts (T3) ----------------------------------------------
+def test_team_counts_preserve_every_openstack_row(loaded):
+    rows = db.count_by_team(datasets=("openstack",))
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    by_severity = {}
+    for row in rows:
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + row["count"]
+    whole = db.count_by_dataset(("openstack",))
+    expected = {row["severity"]: row["count"] for row in whole}
+    assert by_severity == expected
+    assert not any(row["team"] == "unowned" for row in rows)
+
+
+def test_windowed_team_counts_are_bounded(loaded):
+    rows = db.count_by_team(
+        datasets=("openstack",),
+        start_time="2017-05-16 00:00:00",
+        end_time="2017-05-17 00:00:00",
+    )
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    assert sum(row["count"] for row in rows) <= OPENSTACK_ROWS

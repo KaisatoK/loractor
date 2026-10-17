@@ -91,6 +91,22 @@ def test_a_day_bucketed_full_range_trend_is_refused(loaded):
     assert "week" in rows.refusal.suggestion
 
 
+def test_minute_trend_reports_non_zero_burst_runs(loaded):
+    from backend.db import add_burst_summary
+
+    rows = db.get_trend(
+        "2005-06-05 07:00:00+00", "2005-06-05 08:00:00+00",
+        "service", "KERNEL", dataset="bgl", bucket="minute",
+        severity="FATAL",
+    )
+    assert not rows.refused
+    add_burst_summary(rows)
+    note = next(note for note in rows.stats.notes if "non-zero bucket runs:" in note)
+    assert "2005-06-05 07:08:00Z–2005-06-05 07:10:00Z (76 log entries)" in note
+    assert "2005-06-05 07:35:00Z–2005-06-05 07:37:00Z (76 log entries)" in note
+    assert "2005-06-05 07:47:00Z–2005-06-05 07:49:00Z (54 log entries)" in note
+
+
 def test_lexical_search_finds_an_exact_phrase(loaded):
     rows = db.search_logs("cache parity error", dataset="bgl", limit=5)
     assert len(rows) > 0
@@ -235,3 +251,73 @@ def test_a_rare_severity_is_found_and_counted_inside_a_window(loaded):
             ["error", "FATAL", lo, hi],
         )
         assert rows.total_matches == int(cur.fetchone()["n"])
+
+
+# --- Nearby events (get_nearby_events_tool) ------------------------------------
+def test_nearby_events_are_contiguous_and_numbered_outward(loaded):
+    anchor = BGL_ROWS // 2
+    rows = db.get_nearby_events(anchor, "bgl", before=5, after=5)
+    assert not rows.refused
+    assert [r["record_id"] for r in rows] == list(range(anchor - 5, anchor + 6))
+    assert [r["offset"] for r in rows] == list(range(-5, 6))
+    assert "request_id" not in rows[0]  # BGL records no request id
+
+
+def test_same_entity_follows_the_anchors_node(loaded):
+    from backend.db.connection import db_cursor
+
+    anchor = BGL_ROWS // 2
+    with db_cursor() as cur:
+        cur.execute('SELECT "Node" FROM bgl WHERE "LineId" = %s', [anchor])
+        node = cur.fetchone()["Node"]
+    rows = db.get_nearby_events(anchor, "bgl", before=5, after=5, same_entity=True)
+    assert {r["entity_id"] for r in rows} == {node}
+    ids = [r["record_id"] for r in rows]
+    assert ids == sorted(ids) and anchor in ids
+    assert rows.stats.elapsed_ms < 5_000
+
+
+def test_a_node_seen_once_returns_the_anchor_alone_with_a_note(loaded):
+    from backend.db.connection import db_cursor
+
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT min("LineId") AS line FROM bgl WHERE "Node" IN (
+                SELECT "Node" FROM bgl GROUP BY "Node" HAVING count(*) = 1)
+        """)
+        anchor = cur.fetchone()["line"]
+    if anchor is None:
+        pytest.skip("every BGL node logs more than one line")
+    rows = db.get_nearby_events(anchor, "bgl", same_entity=True)
+    assert [r["record_id"] for r in rows] == [anchor]
+    assert "No other line in 'bgl' shares the anchor's entity_id." in rows.stats.notes
+
+
+def test_same_request_is_refused_on_bgl(loaded):
+    rows = db.get_nearby_events(1, "bgl", same_request=True)
+    assert rows.refused and rows.refusal.code == "unsupported_field"
+
+
+# --- Team ownership counts (T3) ----------------------------------------------
+def test_team_counts_preserve_every_bgl_row(loaded):
+    rows = db.count_by_team(datasets=("bgl",))
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    by_severity = {}
+    for row in rows:
+        by_severity[row["severity"]] = by_severity.get(row["severity"], 0) + row["count"]
+    whole = db.count_by_dataset(("bgl",))
+    expected = {row["severity"]: row["count"] for row in whole}
+    assert by_severity == expected
+    assert not any(row["team"] == "unowned" for row in rows)
+
+
+def test_windowed_team_counts_are_bounded(loaded):
+    rows = db.count_by_team(
+        datasets=("bgl",),
+        start_time="2005-07-01 00:00:00",
+        end_time="2005-08-01 00:00:00",
+    )
+    if rows.refused:
+        pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
+    assert sum(row["count"] for row in rows) <= BGL_ROWS

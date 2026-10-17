@@ -86,6 +86,19 @@ def test_bgl_maps_the_canonical_fields_it_actually_has():
         assert bgl.sql_for(name) is not None
 
 
+def test_only_openstack_declares_a_request_id():
+    """BGL and the OTel tiers record no request id, so the field is unmapped
+    there and same_request filtering is refused rather than matching nothing."""
+    from backend.db.datasets import UnsupportedFieldError
+
+    for dataset_id in ("bgl", "otel_s3", "otel_slice"):
+        dataset = resolve(dataset_id)
+        assert not dataset.has_field("request_id"), dataset_id
+        with pytest.raises(UnsupportedFieldError):
+            dataset.sql_for("request_id")
+    assert resolve("openstack").has_field("request_id")
+
+
 def test_bgl_does_not_claim_an_event_id_it_does_not_have():
     """loghub publishes parsed EventIds only for its 2,000-line samples.
 

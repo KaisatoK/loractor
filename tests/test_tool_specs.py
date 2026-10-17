@@ -45,8 +45,9 @@ def test_every_available_tool_exists_on_every_transport():
 
 
 def test_planned_tools_are_declared_but_offered_nowhere():
+    # None are planned now (T2/T3 landed); the rule still holds for the next one.
     planned = {s.name for s in specs.SPECS if not s.available}
-    assert planned == {"get_nearby_events_tool", "count_by_team_tool"}
+    assert all(s.run is not None for s in AVAILABLE)
     assert not planned & (set(LOCAL_TOOLS) | set(MCP_TOOLS) | set(_server_tools()))
     # ... but the classifiers' catalog and the result kinds know them.
     assert planned <= set(TOOL_CATALOG) and planned <= set(TOOL_KINDS)
