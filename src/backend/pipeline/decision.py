@@ -1,7 +1,10 @@
 """Deterministic policies composed from TypeSafe (Jev) judgments."""
 
+from collections.abc import Sequence
+
 from langchain_typesafe import ClassifierResponse, TypeSafeClassifier
 
+from backend.pipeline.claims import ClaimTarget
 from backend.pipeline.effort import get_effort_spec
 
 # The "is a target named?" boundary for the scope gate. Below it no queryable
@@ -32,6 +35,13 @@ LOG_REQUEST_THRESHOLD = 0.3
 # relevant defect and a useful action have meaningful probability. Starting values.
 EVIDENCE_REVISION_THRESHOLD = 0.6
 ANSWER_OK_THRESHOLD = 0.45
+
+# A claim check (supports / contradicts / says_nothing, one Choice per measured
+# finding) acts only when the answer's confidence is at least this. Below it the
+# finding is left as written and the check is logged: a wrong relabel would hide a
+# true measurement, a wrong revision would cost an answer. Starting value from the
+# TypeSafe citation-check cookbook; validate with claims.sh.
+CLAIM_CONFIDENCE_THRESHOLD = 0.8
 
 # A dataset-wide overview ("what recurs?", "what should we prioritize?") has a
 # natural starting point for the team lead and manager: counts over the whole
@@ -195,3 +205,90 @@ def decide_confidence(
         "signals": signals,
         "worth_follow_up": worth_follow_up,
     }
+
+
+def decide_claims(
+    response: ClassifierResponse, targets: Sequence[ClaimTarget]
+) -> list[dict]:
+    """Turn the claim-check answers into one policy record per checked claim.
+
+    ``action`` is the code-owned decision, ``relation`` and ``probabilities`` the
+    raw judgment kept for tracing:
+
+    * ``keep``        the results support the claim;
+    * ``relabel``     they say nothing about it, so it is not a measured fact;
+    * ``contradicted`` they show something else, so it must be corrected;
+    * ``leave``       the judgment is below ``CLAIM_CONFIDENCE_THRESHOLD`` (or the
+      question went unanswered): the finding stays as written and is logged.
+    """
+    checks: list[dict] = []
+    for target in targets:
+        answer = response.choices.get(target.key)
+        record = {
+            "index": target.index,
+            "finding_id": target.finding_id,
+            "statement": target.statement,
+            "cited": [r.get("id") for r in target.records],
+            "relation": answer.choice if answer else None,
+            "confidence": answer.confidence if answer else None,
+            "probabilities": dict(answer.probabilities) if answer else {},
+        }
+        if answer is None or answer.confidence < CLAIM_CONFIDENCE_THRESHOLD:
+            record["action"] = "leave"
+        elif answer.choice == "contradicts":
+            record["action"] = "contradicted"
+        elif answer.choice == "says_nothing":
+            record["action"] = "relabel"
+        else:
+            record["action"] = "keep"
+        checks.append(record)
+    return checks
+
+
+def claim_verdicts(checks: Sequence[dict]) -> dict[int, dict]:
+    """The checks that change how the ledger shows a finding, by finding index."""
+    return {
+        check["index"]: check
+        for check in checks
+        if check.get("action") in {"relabel", "contradicted"}
+    }
+
+
+def decide_claim_revision(
+    route: dict, checks: Sequence[dict], effort: str | None, revision_count: int
+) -> dict:
+    """Send the answer back for a rewrite when a measured claim is contradicted.
+
+    Layered over the confidence route and spending the same budget: an evidence
+    revision (``find_evidence``) already rebuilds the answer, a spent budget ends
+    the run, and neither is overridden. Otherwise any contradicted claim makes the
+    route ``answer`` with reason ``contradicted_claim`` and the claims named, so
+    the rewrite is told exactly what to fix.
+    """
+    contradicted = [c for c in checks if c.get("action") == "contradicted"]
+    if (
+        not contradicted
+        or route["next_state"] == "find_evidence"
+        or revision_count >= get_effort_spec(effort).max_iterations
+    ):
+        return route
+    return {
+        **route,
+        "next_state": "answer",
+        "revision_reason": "contradicted_claim",
+        "contradicted": contradicted,
+    }
+
+
+def claim_feedback(contradicted: Sequence[dict]) -> str:
+    """The revision feedback naming each contradicted finding, built in code."""
+    lines = [
+        f"- {c['finding_id']}: {c['statement']} (cites {', '.join(c['cited'])})"
+        for c in contradicted
+    ]
+    return (
+        "These measured findings are contradicted by the results they cite:\n"
+        + "\n".join(lines)
+        + "\nCorrect each one to match the cited rows, cite the result that does "
+        "show it, or move it to a hypothesis."
+    )

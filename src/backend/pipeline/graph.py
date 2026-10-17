@@ -25,6 +25,7 @@ from backend.pipeline.agents import (
 )
 from backend.pipeline.agents.evidence_report import generate_evidence_judgement
 from backend.pipeline.answers import serialize_answer
+from backend.pipeline.claims import claim_targets
 from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.evidence import build_evidence
@@ -35,8 +36,12 @@ from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
     FOLLOW_UP_THRESHOLD,
     MAX_CLARIFY_ROUNDS,
+    claim_feedback,
+    claim_verdicts,
     clarify_reasons,
     classifier,
+    decide_claim_revision,
+    decide_claims,
     decide_confidence,
     decide_scope,
     scope_assumption,
@@ -264,6 +269,30 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     }
 
 
+def _check_claims(structured, valid_ids: set, records: list) -> list[dict]:
+    """Judge each measured finding against the results it cites (one request).
+
+    Returns the policy records of ``decision.decide_claims``; empty when there is
+    nothing to check. Like the confidence classifier, a failure here must not
+    break the run: the findings then keep the labels the code check gave them.
+    """
+    targets = claim_targets(structured, valid_ids, records)
+    if not targets:
+        return []
+    try:
+        response = classifier.invoke(prompts.claims_request(targets))
+        checks = decide_claims(response, targets)
+    except Exception as error:  # noqa: BLE001 - see docstring
+        logger.warning("claim check failed, keeping the findings as labelled: %s", error)
+        return []
+    for check in checks:
+        logger.info(
+            "claim %s: %s (confidence %s) -> %s",
+            check["finding_id"], check["relation"], check["confidence"], check["action"],
+        )
+    return checks
+
+
 def answer_node(state: PipelineState) -> PipelineState:
     _emit_stage("answer")
     records = state.get("tool_results") or []
@@ -285,8 +314,16 @@ def answer_node(state: PipelineState) -> PipelineState:
     # Cost is measured from the tool results' own query_stats, not narrated by
     # the model, so the volume the answer reports cannot be wrong.
     cost = investigation_cost(records)
+    # A measured finding the cited results do not back is shown as a hypothesis
+    # (and a contradicted one sends the answer back, see confidence_node).
+    checks = _check_claims(structured, valid_ids, records)
     answer = serialize_answer(
-        structured, valid_ids, records, notes, cost_note=cost.get("note", "")
+        structured,
+        valid_ids,
+        records,
+        notes,
+        cost_note=cost.get("note", ""),
+        claim_verdicts=claim_verdicts(checks),
     )
     # Rebuilt from the structured answer on every revision, so the line is
     # present exactly once.
@@ -304,7 +341,12 @@ def answer_node(state: PipelineState) -> PipelineState:
         "answer drafted (%d chars, follow_up=%s)", len(answer), follow_up is not None
     )
     logger.debug("answer: %s", answer)
-    return {**state, "answer": answer, "follow_up": follow_up}
+    return {
+        **state,
+        "answer": answer,
+        "follow_up": follow_up,
+        "claim_checks": checks,
+    }
 
 
 def confidence_node(state: PipelineState) -> PipelineState:
@@ -320,6 +362,12 @@ def confidence_node(state: PipelineState) -> PipelineState:
             "signals": {},
             "worth_follow_up": 0.0,
         }
+
+    # A measured claim its own cited results contradict outranks a fluent answer:
+    # send it back, naming the claims (same budget as every other revision).
+    route = decide_claim_revision(
+        route, state.get("claim_checks") or [], state.get("effort"), revision_count
+    )
 
     next_state = route["next_state"]
     logger.info(
@@ -349,8 +397,10 @@ def confidence_node(state: PipelineState) -> PipelineState:
     updated = {
         **state,
         "confidence": confidence,
-        "revision_feedback": REVISION_FEEDBACK.get(
-            route["revision_reason"], NO_REVISION
+        "revision_feedback": (
+            claim_feedback(route["contradicted"])
+            if route["revision_reason"] == "contradicted_claim"
+            else REVISION_FEEDBACK.get(route["revision_reason"], NO_REVISION)
         ),
         "answer": answer,
     }

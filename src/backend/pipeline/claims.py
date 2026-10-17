@@ -1,4 +1,11 @@
-"""Code-side check that a measured claim's numbers come from the results it cites.
+"""Checks that a measured claim is backed by the results it cites.
+
+Two layers. The code check (``unsupported_numbers``, below) is exact and always on;
+the semantic check (``claim_targets``, further down) picks the claims that survive
+it for a TypeSafe judgment of supports / contradicts / says_nothing, whose policy
+lives in ``decision.py``.
+
+Code check: a measured claim's numbers must come from the results it cites.
 
 A finding labelled *measured* promises that the query results it cites show it.
 Whether the cited result exists is checked in ``answers.py``; this module checks
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -139,3 +147,119 @@ def unsupported_numbers(statement: str, records: Sequence[dict]) -> list[str]:
         if not haystack.has_number(token):
             note(token)
     return missing
+
+
+# --- which claims go to the semantic check -----------------------------------
+
+# Starting values. The classifier request holds one question per claim and shows
+# each claim only the rows it cites, so these bound its size.
+MAX_CHECKED_CLAIMS = 8
+MAX_CLAIM_ROWS = 20
+
+
+@dataclass(frozen=True)
+class ClaimTarget:
+    """One measured finding that survived the code check and goes to Jev."""
+
+    index: int
+    """Position in the answer's ``findings`` list (the ledger renders by it)."""
+
+    finding_id: str
+    statement: str
+    records: tuple[dict, ...]
+    """The cited results, in citation order."""
+
+    @property
+    def key(self) -> str:
+        """Question id and state key; never shown to the model."""
+        return f"claim_{self.index}"
+
+
+def _read(answer: Any, name: str) -> list:
+    if isinstance(answer, dict):
+        return answer.get(name) or []
+    return getattr(answer, name, None) or []
+
+
+def _field(item: Any, name: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
+def claim_targets(
+    answer: Any,
+    valid_ids: set[str],
+    records: Sequence[dict],
+    limit: int = MAX_CHECKED_CLAIMS,
+) -> list[ClaimTarget]:
+    """The findings worth a semantic check, in ledger order.
+
+    Only a ``measured`` finding is checked, and only when it cites at least one
+    existing result and every number in it is shown by what it cites: a claim
+    that already failed the code check is a hypothesis, and asking a model to
+    re-judge it would only spend a question. Without records there is nothing to
+    check against. Findings beyond ``limit`` are left unchecked.
+    """
+    by_id = {r.get("id"): r for r in records if isinstance(r, dict)}
+    if not by_id:
+        return []
+    targets: list[ClaimTarget] = []
+    for index, finding in enumerate(_read(answer, "findings")):
+        if (_field(finding, "kind") or "hypothesis") != "measured":
+            continue
+        statement = (_field(finding, "statement") or "").strip()
+        cited = [
+            rid for rid in _field(finding, "result_ids") or [] if rid in valid_ids
+        ]
+        if not statement or not cited:
+            continue
+        cited_records = tuple(by_id[rid] for rid in cited if rid in by_id)
+        if not cited_records or unsupported_numbers(statement, cited_records):
+            continue
+        targets.append(
+            ClaimTarget(index, _field(finding, "id") or f"#{index + 1}", statement, cited_records)
+        )
+        if len(targets) >= limit:
+            break
+    return targets
+
+
+def relevant_rows(
+    statement: str, rows: Sequence[dict], limit: int = MAX_CLAIM_ROWS
+) -> list[dict]:
+    """At most ``limit`` rows, preferring those the statement talks about.
+
+    A claim cites a result that can hold a hundred rows, but is about a few of
+    them. A row scores one point per cell the statement repeats (a name, a number);
+    the best-scoring rows are kept in their original order. With no scoring row
+    the first ``limit`` are kept. Cutting by position alone would hide the one
+    row that settles a claim and make it look unsupported.
+    """
+    rows = [row for row in rows if isinstance(row, dict)]
+    if len(rows) <= limit:
+        return rows
+    text = (statement or "").lower()
+    numbers = {
+        number for token in _NUMBER_RE.findall(statement or "")
+        if (number := _decimal(token)) is not None
+    }
+
+    def score(row: dict) -> int:
+        points = 0
+        for leaf in _scalars(row):
+            if leaf is None or isinstance(leaf, bool):
+                continue
+            if isinstance(leaf, (int, float, Decimal)):
+                number = _decimal(str(leaf))
+                points += number is not None and abs(number) in numbers
+            else:
+                cell = str(leaf).strip().lower()
+                points += len(cell) >= 3 and cell in text
+        return points
+
+    scored = [(score(row), position) for position, row in enumerate(rows)]
+    best = sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]
+    if best[0][0] == 0:
+        return rows[:limit]
+    return [rows[position] for _, position in sorted(best, key=lambda item: item[1])]

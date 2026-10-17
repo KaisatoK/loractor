@@ -10,9 +10,10 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from langchain_typesafe import ClassifierRequest, Noul, NoulCriteria
+from langchain_typesafe import Choice, ClassifierRequest, Noul, NoulCriteria
 
 from backend.db.config import LOG_SCHEMA
+from backend.pipeline.claims import MAX_CLAIM_ROWS, ClaimTarget, relevant_rows
 from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.playbooks import ownership_context, role_answer_rules, role_playbook
 from backend.pipeline.state import PipelineState, Role
@@ -216,6 +217,32 @@ def _clip(value: object, limit: int = PREVIEW_CHARS) -> str:
     """
     text = str(value)
     return text if len(text) <= limit else text[:limit] + "…[cut]"
+
+
+def _claim_result(record: dict, statement: str) -> dict:
+    """A cited result as the claim check sees it: scope, totals and relevant rows."""
+    rows = record.get("rows") or []
+    shown = relevant_rows(statement, rows, MAX_CLAIM_ROWS)
+    filters = {
+        key: value for key, value in (record.get("filters") or {}).items() if value is not None
+    }
+    return {
+        "id": record.get("id"),
+        "tool": record.get("tool_name"),
+        "kind": record.get("kind") or "unknown",
+        "dataset": record.get("dataset") or "unknown",
+        "filters": filters,
+        "row_count": record.get("row_count", len(rows)),
+        "total_matches": record.get("total_matches"),
+        "rows_shown": len(shown),
+        "rows": [
+            {
+                k: v if v is None or isinstance(v, (bool, int, float)) else _clip(v)
+                for k, v in row.items()
+            }
+            for row in shown
+        ],
+    }
 
 
 # How much of each tool result the answer model sees. Measured results (counts,
@@ -620,6 +647,69 @@ class PipelinePrompts:
                 "worth_follow_up": self.worth_follow_up_question(),
             },
         }
+
+    def claims_request(self, targets: Sequence[ClaimTarget]) -> ClassifierRequest:
+        """One request judging every measured claim against the results it cites.
+
+        The claims are independent, so they share one call (the questions run in
+        parallel and cannot see each other). Each claim carries only its own cited
+        results, as ``findings.<key>.claim`` and ``findings.<key>.cited_results``.
+        """
+        return {
+            "state": {
+                "findings": {
+                    target.key: {
+                        "claim": target.statement,
+                        "cited_results": [
+                            _claim_result(record, target.statement)
+                            for record in target.records
+                        ],
+                    }
+                    for target in targets
+                }
+            },
+            "questions": {target.key: self.claim_relation_question(target.key) for target in targets},
+        }
+
+    def claim_relation_question(self, key: str) -> Choice:
+        claim = f"`findings.{key}.claim`"
+        results = f"`findings.{key}.cited_results`"
+        return Choice(
+            instructions={
+                "question": f"How do the cited query results relate to the claim {claim}?",
+                "compare": [claim, results],
+                "focus": (
+                    "Judge only whether the rows shown establish the facts the claim "
+                    "states as measured: the values, the entity or component they "
+                    "belong to, the window, and the direction of a change. A result "
+                    "shows `rows_shown` of `row_count` rows; judge the rows shown. "
+                    "Results of kind `search`, `lookup` or `context` are example log "
+                    "lines, not counts. Ignore causes and recommendations."
+                ),
+            },
+            criteria={
+                "supports": {
+                    "what": "The rows show the facts the claim states: the same values for the same entity, window and direction.",
+                    "not_for": "Rows that only mention the same entity or topic without showing the stated value or direction.",
+                },
+                "contradicts": {
+                    "what": "The rows show something different from the claim for the same subject: another value, another entity owning the value, or the opposite direction.",
+                    "not_for": "Rows about a different subject, window or severity than the claim names, or that do not report the measure the claim is about even for the same entity (those say nothing).",
+                    "examples": [
+                        "The claim gives 30 rows for component B but the rows give 30 for component A and 4 for B.",
+                        "The claim says a count rose but the per-bucket rows fall.",
+                    ],
+                },
+                "says_nothing": {
+                    "what": "The rows do not address what the claim asserts, either way.",
+                    "not_for": "Rows that show the claim is false (those contradict it).",
+                    "examples": [
+                        "The claim is about a component or window the rows do not cover.",
+                        "The claim states how often something happens but the rows are only example log lines.",
+                    ],
+                },
+            },
+        )
 
     def evidence_relevant_question(self) -> Noul:
         return Noul(

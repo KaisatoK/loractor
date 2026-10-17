@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from backend.pipeline.claims import unsupported_numbers
@@ -64,6 +64,7 @@ def serialize_answer(
     records: Sequence[dict] | None = None,
     notes: Sequence[str] = (),
     cost_note: str = "",
+    claim_verdicts: Mapping[int, dict] | None = None,
 ) -> str:
     """Render the narrative, the labelled ledger and the scope appendix.
 
@@ -78,10 +79,17 @@ def serialize_answer(
     :mod:`backend.pipeline.cost`), so what the answer claims about data volume is
     measured rather than asserted, and it persists with the message instead of
     living only in the UI.
+
+    ``claim_verdicts`` maps a finding's position in ``findings`` to its claim
+    check (``decision.claim_verdicts``): a measured finding whose cited results
+    say nothing about it, or contradict it, is shown as a hypothesis with that
+    reason instead of as a measurement.
     """
     pieces = _narrative(answer, valid_ids)
     by_id = {r.get("id"): r for r in records or [] if isinstance(r, dict)}
-    findings = _findings_section(_read(answer, "findings"), valid_ids, by_id)
+    findings = _findings_section(
+        _read(answer, "findings"), valid_ids, by_id, claim_verdicts or {}
+    )
     if findings:
         pieces.append(findings)
     steps = _recommendations_section(_read(answer, "recommendations"))
@@ -145,9 +153,20 @@ def _measures_frequency(record: dict) -> bool:
     return record.get("kind") in MEASURED_KINDS | {"derived"}
 
 
-def _findings_section(findings: list, valid_ids: set[str], by_id: dict) -> str:
+_CLAIM_NOTES = {
+    "relabel": " (the cited result does not address this claim)",
+    "contradicted": " (the cited result contradicts this claim)",
+}
+
+
+def _findings_section(
+    findings: list,
+    valid_ids: set[str],
+    by_id: dict,
+    claim_verdicts: Mapping[int, dict] | None = None,
+) -> str:
     groups: dict[str, list[str]] = {"measured": [], "hypothesis": [], "limitation": []}
-    for finding in findings:
+    for position, finding in enumerate(findings):
         kind = _field(finding, "kind") or "hypothesis"
         statement = _clean(_field(finding, "statement"))
         if not statement:
@@ -168,6 +187,11 @@ def _findings_section(findings: list, valid_ids: set[str], by_id: dict) -> str:
                 statement += (
                     " (not shown by the cited result: " + ", ".join(missing) + ")"
                 )
+        if kind == "measured" and position in (claim_verdicts or {}):
+            # The semantic check found the cited results do not back the claim.
+            verdict = claim_verdicts[position]
+            kind = "hypothesis"
+            statement += _CLAIM_NOTES.get(verdict.get("action"), "")
         line = f"- **{fid}** {statement}" if fid else f"- {statement}"
         if cited:
             line += " — " + ", ".join(_citation(rid, by_id) for rid in cited)
