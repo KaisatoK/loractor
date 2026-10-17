@@ -12,7 +12,10 @@ Which observed problems deserve attention first, and what should happen next?
 1. **Scope.** If the user named none, use the whole dataset window and say so.
 2. **Measured frequency and severity.** `count_by_category_tool` with type
    `service` (or a team-count tool when available, planned: `count_by_team_tool`)
-   for ERROR and for WARNING over the scope. These counts drive the ranking.
+   over the scope, for every severity level above informational that actually
+   occurs in the data (count by level first if you do not know which levels
+   exist; never assume a level is present or absent). These counts drive the
+   ranking.
 3. **Trend direction.** `compare_periods_tool` (first half vs second half of the
    scope) or `get_trend_tool` for the top two or three candidates, to see which
    problems are growing.

@@ -8,7 +8,7 @@ not establish. It is regenerated from real runs, so it always matches the code.
 
 Run it from the repo root against a live SereneDB and real provider keys::
 
-    bash ./worked_investigation.sh --topic "libvirt image cache"
+    bash ./worked_investigation.sh --topic "<issue or pattern>"
 
 ``build_markdown`` is pure (no network, no database) and is covered offline by
 ``tests/test_worked_investigation.py``; only :func:`run_role` calls the pipeline.

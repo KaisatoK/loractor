@@ -12,7 +12,9 @@ Which problems recur, how often, and which components or teams are involved?
 1. **State the period.** If the user named none, use the whole dataset window
    from the schema description and say so.
 2. **Recurring problems by count.** `count_by_category_tool` with type
-   `event_id` (and/or `service`) for WARNING and ERROR over the period. These
+   `event_id` (and/or `service`) over the period, for every severity level above
+   informational that actually occurs in the data (count by level first if you do
+   not know which levels exist; never assume a level is present or absent). These
    database counts are the measured frequency.
 3. **Teams involved.** When a team-count tool is available (planned:
    `count_by_team_tool`, a join of `log.service` to the `team_ownership` table),
