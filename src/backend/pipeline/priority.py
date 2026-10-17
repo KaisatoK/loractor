@@ -35,10 +35,17 @@ FORMULA = (
 )
 DERIVED_TOOL_NAME = "priority_score"
 
-# Group columns that identify a "problem", in preference order.
-DIMENSIONS = ("event_id", "service", "component", "team", "pid")
+# Group columns that identify a "problem", in preference order. The dataset
+# registry (``backend.db.datasets``) returns canonical names (``service``,
+# ``entity_id``, ``severity``); ``component``/``pid``/``category`` are the
+# pre-registry OpenStack names, kept so stored history still ranks.
+DIMENSIONS = ("event_id", "service", "component", "team", "entity_id", "pid")
+SEVERITY_COLUMNS = ("severity", "category")
 COMPONENT_COLUMNS = ("service", "component")
-INFO_LEVELS = frozenset({"INFO", "DEBUG", "TRACE"})
+# Compared upper-cased. Every informational value a registered corpus declares
+# in ``severity_values`` must be listed (OTel uses both ``info`` and
+# ``information``); ``test_priority_levels_cover_every_registered_dataset`` checks it.
+INFO_LEVELS = frozenset({"INFO", "INFORMATION", "DEBUG", "TRACE"})
 SEVERE_LEVELS = frozenset({"ERROR", "FATAL", "SEVERE", "FAILURE", "CRITICAL"})
 MAX_ROWS = 10
 
@@ -60,7 +67,13 @@ def _pick_dimension(records: Sequence[dict]) -> str | None:
 
 
 def _category(row: dict, record: dict) -> str | None:
-    value = row.get("category") or (record.get("filters") or {}).get("category")
+    """The row's severity: its own severity column, else the call's filter.
+
+    Upper-cased because corpora differ in case (OTel ``error`` vs BGL ``ERROR``).
+    """
+    value = next((row[c] for c in SEVERITY_COLUMNS if row.get(c)), None)
+    if value is None:
+        value = (record.get("filters") or {}).get("category")
     return str(value).upper() if value else None
 
 

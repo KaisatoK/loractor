@@ -244,3 +244,38 @@ def test_priority_trend_keeps_the_newest_bucket_on_odd_length():
     by_name = {r["service"]: r for r in ranking["rows"]}
     assert by_name["a"]["trend_up"] == 0.0
     assert by_name["b"]["trend_up"] == 1.0
+
+
+def test_priority_reads_the_registry_severity_column():
+    # The dataset registry returns canonical ``severity`` (not ``category``) and
+    # ``entity_id`` (not ``pid``); INFO rows must still be ignored.
+    counts = _rec("R1", "aggregate", [
+        {"service": "a", "severity": "INFO", "count": 90},
+        {"service": "a", "severity": "ERROR", "count": 10},
+        {"service": "b", "severity": "WARNING", "count": 30},
+    ])
+    ranking = compute_priorities([counts])
+    by_name = {r["service"]: r for r in ranking["rows"]}
+    assert by_name["a"]["non_info_rows"] == 10 and by_name["a"]["error_rows"] == 10
+    assert by_name["b"]["non_info_rows"] == 30 and by_name["b"]["error_rows"] == 0
+    assert "error_share" in ranking["terms_used"]
+
+
+def test_priority_ranks_by_entity_id_when_that_is_the_grouping():
+    counts = _rec("R1", "aggregate", [
+        {"entity_id": "2931", "severity": "WARNING", "count": 5},
+    ])
+    assert compute_priorities([counts])["dimension"] == "entity_id"
+
+
+def test_priority_levels_cover_every_registered_dataset():
+    # Every severity a registered corpus declares is either informational or a
+    # problem level the score knows how to weigh; an unknown informational value
+    # would otherwise be ranked as a problem.
+    from backend.db.datasets import all_datasets
+    from backend.pipeline.priority import INFO_LEVELS, SEVERE_LEVELS
+
+    known = INFO_LEVELS | SEVERE_LEVELS | {"WARNING", "WARN"}
+    for dataset in all_datasets():
+        unknown = {v.upper() for v in dataset.severity_values} - known
+        assert not unknown, (dataset.id, unknown)

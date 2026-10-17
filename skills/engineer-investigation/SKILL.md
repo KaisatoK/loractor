@@ -12,12 +12,14 @@ What failed, in which component, and what happened just before and after?
 1. **Find the error lines** with full-text search (`search_logs_tool`): use the
    error wording, component or event the user named; restrict by severity
    (`category`) and, when a time-filtered search tool is available, by the time
-   window. Keep the `line_id`, timestamp, service and event_id of the best hits.
+   window. Keep the `record_id` (the line id), timestamp, service and event_id of
+   the best hits.
 2. **Nearby events.** When a nearby-events tool is available (planned:
    `get_nearby_events_tool`, events around a `line_id`), call it on the most
-   relevant hit. Until then, approximate from the hit's `line_id` (search returns
-   it; lines follow the original file order): call `get_log_by_line_id_tool` for
-   `line_id - 1` and `line_id + 1` (more neighbours if the budget allows), and use
+   relevant hit. Until then, approximate from the hit's `record_id` (search
+   returns it; lines follow the original file order): call
+   `get_log_by_line_id_tool` with `line_id` = `record_id - 1` and `record_id + 1`
+   (more neighbours if the budget allows), and use
    `get_trend_tool` for the hit's event_id over the window. Say that the timeline
    is approximate (adjacent lines, not a time-bounded slice).
 3. **Isolated or recurring?** One `count_by_category_tool` (type `event_id` or
