@@ -149,6 +149,48 @@ Findings that shaped the design
     Also: warm measurements lie. The 86.8 s warm read of a row group's text
     underestimated the real cold build by 7.6x. Plan on cold figures.
 
+18. **Nanosecond timestamps cannot be handed to the Python driver, and the
+    type is contagious.** The remote column is ``TIMESTAMPTZ_NS``, so a value
+    like ``2025-09-23 00:00:01.116886762+00`` makes psycopg2 read 116,886,762 as
+    a microsecond field and raise *microsecond must be in 0..999999*.
+
+    It hid for a long time because comparisons, ``date_trunc`` and aggregates
+    are all unaffected -- it only bites when a query SELECTs a raw remote
+    timestamp into result rows, which nothing did until chunk sampling. Worse,
+    ``CREATE TABLE AS SELECT`` inherits the source type, so a *local* promoted
+    chunk was nanosecond too and failed the same way nine minutes into a
+    promotion. Fixed in two places: ``Dataset.select_sql_for()`` truncates on
+    the way out for corpora flagged ``ts_nanoseconds``, and promotion truncates
+    on the way in so its table matches the slice's explicit microsecond schema.
+
+19. **Triage thresholds calibrated against assumptions left the sweep inert.**
+    Two separate miscalibrations, both found only by running against the real
+    corpus:
+
+    * the profile-only score was compared with ``DISCARD_THRESHOLD``, but the
+      two are not commensurable -- a profile score can reach at most 0.5 and
+      typically reaches ~0.12, while the threshold is calibrated for the full
+      score including the 0.5 that term hits contribute. Every chunk was
+      discarded and nothing was ever sampled. The profile pass now discards on
+      *absence of signal* (no problem-severity rows, or none of the named
+      services), which is all it can honestly conclude without reading text.
+    * promotion required a score above ``PROMOTE_THRESHOLD`` (0.55), which a
+      well-matched question never reaches: it scores ~0.25, because the sample
+      spans a chunk whose traffic is mostly ``info`` and whose error rate is a
+      near-uniform ~14%. Term hits are the only discriminating signal on this
+      corpus and they are diluted by design -- a specific failure *is* a
+      minority of traffic. Selection is now rank-relative with a floor, since
+      ``max_promotions`` already bounds the spend.
+
+    The general lesson: a threshold on a corpus-dependent scale is a latent
+    bug, and the symptom is silence rather than an error.
+
+20. **A failed promotion used to leak its table.** Teardown ran only on the
+    success path, so a promotion that threw while summarising left 43 MB behind
+    -- measured. Four such failures would consume the whole promotion allowance
+    and then refuse the next promotion for lack of room. Teardown is now
+    unconditional.
+
 11. **``statement_timeout`` through libpq ``options`` is silently ignored.** A
     connection opened with ``-c statement_timeout=30000`` reports ``0``, while
     ``SET LOCAL statement_timeout`` inside the transaction reports the value set.

@@ -405,3 +405,55 @@ def test_the_index_is_built_after_materializing(chunk, stub):
         i for i, s in enumerate(cursor.statements) if s.startswith("CREATE INDEX")
     )
     assert create_at < index_at
+
+
+# --- Failure must not leak disk ---------------------------------------------
+def test_a_failed_summary_still_returns_the_disk(chunk, stub, monkeypatch):
+    """Measured: a promotion that failed while summarising left 43 MB behind.
+
+    A sweep allowed four promotions would consume its whole allowance on four
+    failures and then refuse the next one for lack of room, with nothing to
+    show for it.
+    """
+    cursor = stub()
+    monkeypatch.setattr(
+        promotion,
+        "_summarise",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("bad timestamp")),
+    )
+
+    with pytest.raises(ValueError):
+        promotion.promote_chunk(chunk)
+
+    assert any(s.startswith("DROP TABLE") for s in cursor.statements)
+    assert "VACUUM" in cursor.statements
+
+
+def test_keep_does_not_tear_down_after_a_failure(chunk, stub, monkeypatch):
+    """`keep` means the caller wants the table; that holds on failure too,
+    since a half-built table is exactly what they would want to inspect."""
+    cursor = stub()
+    monkeypatch.setattr(
+        promotion,
+        "_summarise",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("bad timestamp")),
+    )
+
+    with pytest.raises(ValueError):
+        promotion.promote_chunk(chunk, keep=True)
+
+    assert "VACUUM" not in cursor.statements
+
+
+def test_the_extract_truncates_the_nanosecond_timestamp(chunk, stub):
+    """CREATE TABLE AS inherits the source type.
+
+    The remote corpus is TIMESTAMPTZ_NS, so without truncation the *local*
+    table is too, and every later SELECT of it fails in the driver with
+    "microsecond must be in 0..999999". Measured: it cost a nine-minute
+    promotion that completed its extract and then threw while summarising.
+    """
+    cursor = stub()
+    promotion.promote_chunk(chunk)
+    create = next(s for s in cursor.statements if s.startswith("CREATE TABLE"))
+    assert "date_trunc('microsecond', \"Timestamp\")" in create

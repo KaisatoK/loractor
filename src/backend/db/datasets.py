@@ -177,6 +177,17 @@ class Dataset:
     ts_cast: str = "timestamp"
     """The cast applied to timestamp bounds (``timestamp`` or ``timestamptz``)."""
 
+    ts_nanoseconds: bool = False
+    """Whether the timestamp column carries nanosecond precision.
+
+    The OTel corpus does, and it cannot be handed to the Python driver as-is:
+    a value like ``2025-09-23 00:00:01.116886762+00`` makes psycopg2 read
+    116,886,762 as a microsecond field and raise *microsecond must be in
+    0..999999*. Comparisons and aggregates are unaffected, which is why this
+    went unnoticed until a query first SELECTed a raw remote timestamp -- so
+    the truncation belongs on the way out, not on the column.
+    """
+
     index_name: str | None = None
     token_index_name: str | None = None
     selectors: Mapping[str, str] = field(default_factory=dict)
@@ -215,6 +226,21 @@ class Dataset:
     def sql_for(self, name: str) -> sql.Composable:
         """A canonical field as SQL, for use in SELECT/WHERE/GROUP BY."""
         return self.field(name).as_sql()
+
+    def select_sql_for(self, name: str) -> sql.Composable:
+        """A canonical field as SQL, safe to return to the client.
+
+        Identical to :meth:`sql_for` except for a nanosecond timestamp, which is
+        truncated to microseconds so the driver can parse it. Use this when a
+        value is being SELECTed into result rows; use ``sql_for`` for
+        comparisons and grouping, where full precision is both harmless and
+        wanted.
+        """
+        if name == "ts" and self.ts_nanoseconds:
+            return sql.SQL("date_trunc('microsecond', {col})").format(
+                col=self.sql_for(name)
+            )
+        return self.sql_for(name)
 
     def column_for(self, name: str) -> str:
         """The output alias a canonical field lands under in result rows."""
@@ -443,6 +469,8 @@ OTEL_S3 = (
         capabilities=frozenset({Capability.TEMPLATES, Capability.CHUNK_SWEEP}),
         severity_values=OTEL_SEVERITY_VALUES,
         ts_cast="timestamptz",
+        ts_nanoseconds=True,  # remote Parquet is TIMESTAMPTZ_NS
+        
         index_name=None,
         token_index_name=None,
         selectors=MappingProxyType({}),

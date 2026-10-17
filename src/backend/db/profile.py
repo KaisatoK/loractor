@@ -236,9 +236,11 @@ def sample_chunk(
         for name in ("ts", "severity", "service", "message", "template")
         if ds.has_field(name)
     ]
+    # select_sql_for, not sql_for: this is the first query to hand a remote
+    # timestamp back to the driver, and the corpus is nanosecond precision.
     columns = sql.SQL(", ").join(
         sql.SQL("{col} AS {alias}").format(
-            col=ds.sql_for(name), alias=sql.Identifier(name)
+            col=ds.select_sql_for(name), alias=sql.Identifier(name)
         )
         for name in wanted
     )

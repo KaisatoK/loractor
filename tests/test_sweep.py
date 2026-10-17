@@ -345,18 +345,39 @@ def test_ranking_is_stable_for_tied_scores():
     assert [s.chunk_id for s in triage.rank(tied)] == ["c", "a", "b"]
 
 
-def test_promotion_selection_respects_the_budget_and_skips_ambiguous():
+def test_promotion_selection_is_rank_relative_and_budget_capped():
+    """The best chunks with any evidence, not those above a fixed score.
+
+    An absolute threshold was measured to be unreachable: against the real
+    corpus a well-matched question scores ~0.25, because the sample spans a
+    chunk whose traffic is mostly `info` and whose error rate is a near-uniform
+    ~14%. Promotion never fired, so the sweep could rank chunks but never read
+    one. `max_promotions` already bounds the spend; this decides which.
+    """
     scores = [
-        triage.TriageScore("a", 0.9, verdict="promote"),
-        triage.TriageScore("b", 0.8, verdict="promote"),
-        triage.TriageScore("c", 0.7, verdict="ambiguous"),
+        triage.TriageScore("a", 0.30, verdict="ambiguous"),
+        triage.TriageScore("b", 0.25, verdict="ambiguous"),
+        triage.TriageScore("c", 0.22, verdict="ambiguous"),
     ]
     chosen = triage.select_for_promotion(scores, max_promotions=2)
     assert [s.chunk_id for s in chosen] == ["a", "b"]
 
-    # An unresolved ambiguous chunk is never promoted on a guess.
-    only_ambiguous = triage.select_for_promotion([scores[2]], max_promotions=5)
-    assert only_ambiguous == []
+
+def test_a_discarded_chunk_is_never_promoted():
+    """The profile pass can rule a chunk out, and that still binds."""
+    scores = [
+        triage.TriageScore("empty", 0.0, verdict="discard"),
+        triage.TriageScore("real", 0.2, verdict="ambiguous"),
+    ]
+    chosen = triage.select_for_promotion(scores, max_promotions=5)
+    assert [s.chunk_id for s in chosen] == ["real"]
+
+
+def test_a_chunk_with_no_signal_at_all_is_never_promoted():
+    """Rank-relative selection still needs a floor, or a sweep over a corpus
+    containing nothing relevant would read a chunk anyway."""
+    scores = [triage.TriageScore("nothing", 0.0, verdict="ambiguous")]
+    assert triage.select_for_promotion(scores, max_promotions=5) == []
 
 
 # --- Coverage honesty -------------------------------------------------------

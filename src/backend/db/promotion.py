@@ -224,13 +224,23 @@ def promote_chunk(
             _materialize(cur, ds, chunk, table, severities)
             build_seconds = time.monotonic() - started
 
-            digest = _summarise(
-                cur,
-                table,
-                chunk,
-                triage_score=triage_score,
-                build_seconds=build_seconds,
-            )
+            # Summarising is wrapped so a failure still gives the disk back.
+            # A promoted chunk is ~14 MiB; a sweep that failed on four of them
+            # would quietly consume its whole allowance and then refuse the
+            # next promotion for lack of room.
+            try:
+                digest = _summarise(
+                    cur,
+                    table,
+                    chunk,
+                    triage_score=triage_score,
+                    build_seconds=build_seconds,
+                )
+            except Exception:
+                if not keep:
+                    _drop_promoted(cur, table)
+                    cur.execute("VACUUM")
+                raise
 
             if not keep:
                 _drop_promoted(cur, table)
@@ -285,7 +295,13 @@ def _materialize(
             CREATE TABLE {t} AS
             SELECT
                 row_number() OVER () AS line_id,
-                "Timestamp", "TraceId", "SeverityText", "ServiceName", "Body",
+                -- Truncated on the way in. CREATE TABLE AS inherits the source
+                -- type, so without this the local table is TIMESTAMPTZ_NS too
+                -- and every later SELECT of it fails in the driver with
+                -- "microsecond must be in 0..999999". The slice avoids this by
+                -- declaring its schema explicitly; CTAS cannot.
+                date_trunc('microsecond', "Timestamp") AS "Timestamp",
+                "TraceId", "SeverityText", "ServiceName", "Body",
                 {template} AS "EventTemplate"
             FROM {source}
             WHERE "Timestamp" >= {lo}::timestamptz

@@ -135,16 +135,43 @@ def score_profile(
         WEIGHT_ERROR_DENSITY * normalized_density
         + WEIGHT_SERVICE_OVERLAP * overlap
     )
+    # Discard on *absence of signal*, not on an absolute threshold.
+    #
+    # Measured against the real corpus, comparing this score to
+    # DISCARD_THRESHOLD discarded every chunk and left the sweep inert. The two
+    # numbers are not commensurable: a profile-only score can reach at most
+    # WEIGHT_ERROR_DENSITY + WEIGHT_SERVICE_OVERLAP (0.5), and typically far
+    # less, while DISCARD_THRESHOLD is calibrated for the full score including
+    # the 0.5 that term hits contribute. The OTel corpus carries a near-uniform
+    # ~14% error rate, so every chunk scored 0.12 and every chunk was dropped
+    # before a single line was read.
+    #
+    # What this pass can honestly conclude is narrower: it has read no message
+    # text, so it cannot tell whether a chunk is *relevant*, only whether it
+    # could possibly be. A chunk with no problem-severity rows at all cannot
+    # explain a failure; a chunk with none of the named services cannot either.
+    # Everything else is undecided, and ranking chooses which to sample.
+    if density <= 0.0:
+        verdict, reason = "discard", "profile only: no problem-severity rows"
+    elif target_services and overlap <= 0.0:
+        verdict, reason = (
+            "discard",
+            f"profile only: none of {', '.join(target_services)} present",
+        )
+    else:
+        verdict, reason = (
+            "ambiguous",
+            f"profile only: {density:.1%} problem severity"
+            + (f", {overlap:.1%} target services" if target_services else ""),
+        )
+
     return TriageScore(
         chunk_id=profile.chunk_id,
         score=score,
         error_density=density,
         service_overlap=overlap,
-        verdict="discard" if score < DISCARD_THRESHOLD else "ambiguous",
-        reason=(
-            f"profile only: {density:.1%} problem severity"
-            + (f", {overlap:.1%} target services" if target_services else "")
-        ),
+        verdict=verdict,
+        reason=reason,
     )
 
 
@@ -241,15 +268,40 @@ def rank(scores: list[TriageScore]) -> list[TriageScore]:
     return sorted(scores, key=lambda s: (-s.score, s.chunk_id))
 
 
+# Weakest signal a chunk may have and still be worth reading in full.
+#
+# A floor, not a threshold: it rules out chunks with no evidence at all rather
+# than trying to express "relevant enough" as a number.
+MIN_PROMOTION_SIGNAL = 0.05
+
+
 def select_for_promotion(
     scores: list[TriageScore], max_promotions: int
 ) -> list[TriageScore]:
-    """The chunks to promote, best first, capped by budget.
+    """The best chunks to read in full, capped by budget.
 
-    Only ``promote`` verdicts are eligible: an ambiguous chunk that the
-    classifier never resolved is left alone rather than promoted on a guess.
+    Selection is **rank-relative**, which is a correction of something measured.
+    The first version promoted only ``promote`` verdicts, i.e. scores above
+    PROMOTE_THRESHOLD (0.55). Against the real corpus nothing ever reached it:
+    a well-matched question on part_000 scores ~0.25, because the sample is
+    spread across a chunk whose traffic is mostly ``info`` and whose error rate
+    is a near-uniform ~14%. Term hits are the only discriminating signal, and
+    they are diluted by design -- a specific failure *is* a minority of traffic.
+
+    So an absolute threshold is the wrong instrument. ``max_promotions`` already
+    bounds the spend; what this has to decide is *which* chunks, and "the
+    highest-ranked ones with any evidence at all" is both answerable and honest.
+    A chunk the profile pass discarded, or one with no signal whatsoever, is
+    still never promoted.
+
+    The verdict vocabulary is unchanged, because it still describes confidence
+    usefully in the digest and in the trace -- it is just no longer the gate.
     """
-    eligible = [s for s in rank(scores) if s.verdict == "promote"]
+    eligible = [
+        score
+        for score in rank(scores)
+        if score.verdict != "discard" and score.score >= MIN_PROMOTION_SIGNAL
+    ]
     return eligible[:max_promotions]
 
 

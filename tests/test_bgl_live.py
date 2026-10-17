@@ -17,6 +17,7 @@ import os
 import pytest
 
 import backend.db as db
+from backend.db.datasets import resolve
 from backend.db.loghub import status
 from backend.db.templates import matched_templates, templates_status
 
@@ -36,8 +37,15 @@ def loaded():
     return state
 
 
+# Every line of the published BGL log. Asserted exactly, because a loader that
+# silently drops rows is the failure mode that matters here -- an early parser
+# dropped 34,470 of them (all fields present, empty message, mostly FATAL) and
+# the loss was invisible in every aggregate.
+BGL_ROWS = 4_747_963
+
+
 def test_the_corpus_loaded_completely(loaded):
-    assert loaded["rows"] == 2000
+    assert loaded["rows"] == BGL_ROWS
 
 
 def test_the_corpus_spans_seven_months(loaded):
@@ -52,9 +60,12 @@ def test_severity_counts_are_exact_and_uppercase(loaded):
     assert rows.stats.approximate is False
 
     counts = {r["severity"]: r["count"] for r in rows}
-    assert sum(counts.values()) == 2000
+    assert sum(counts.values()) == BGL_ROWS
     assert all(sev.isupper() for sev in counts)
     assert "INFO" in counts
+    # FAILURE is absent from loghub's 2,000-line sample but real in the full
+    # corpus; a vocabulary taken from the sample refused these rows as unknown.
+    assert counts["FAILURE"] == 1_714
 
 
 def test_components_rank_by_volume(loaded):
@@ -101,15 +112,27 @@ def test_template_embeddings_cover_the_whole_corpus(loaded):
     if not state.get("exists"):
         pytest.skip("BGL template embeddings not built")
     assert state["complete"]
-    assert state["rows_covered"] == 2000
+    assert state["unembedded"] == 0 if "unembedded" in state else True
+
+    # 34,470 rows carry no message, so they have no template to embed. They
+    # stay queryable by every other means; only semantic search cannot reach
+    # them, and the shortfall is exactly that count rather than a silent gap.
+    assert state["rows_covered"] == BGL_ROWS - 34_470
 
 
 def test_templates_collapse_the_corpus(loaded):
-    """120 templates for 2,000 rows: embedding cost falls by ~17x."""
+    """20,352 templates for 4.7M rows: a 233x reduction.
+
+    That ratio is what makes semantic search possible at all here. Embedding
+    every row would be ~110 hours of calls; embedding every template took 36
+    minutes.
+    """
     state = templates_status("bgl")
     if not state.get("exists"):
         pytest.skip("BGL template embeddings not built")
-    assert state["templates"] < 200
+
+    assert state["templates"] < BGL_ROWS / 100
+    assert state["rows_covered"] / state["templates"] > 100
 
 
 def test_matched_templates_carry_their_row_counts(loaded):
@@ -130,9 +153,13 @@ def test_fetch_by_record_id_returns_one_row(loaded):
 def test_every_selector_returns_suggestions(loaded):
     """All five selectors, since a column missing from the token index fails
     only at query time."""
-    for query in ("@KERN", "^instruction", "#E7", "!R02", "$parity"):
+    # Four selectors, not five: the raw corpus carries no event ids, so '#' is
+    # deliberately not offered.
+    for query in ("@KERN", "^instruction", "!R02", "$parity"):
         suggestions = db.auto_complete(query, dataset="bgl")
         assert suggestions, query
+
+    assert "#" not in resolve("bgl").selectors
 
 
 def test_the_corpus_stays_well_inside_its_allowance(loaded):
