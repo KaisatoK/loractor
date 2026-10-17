@@ -21,10 +21,15 @@ kinds) follows once the tools exist (see AGENTS.md, "Integrating new tools and t
   Our branch builds this with `pipeline/tools/envelope.py::run_enveloped`; use it after the merge.
 - **Rows must be JSON-safe.** Convert timestamps to ISO strings and Decimals to numbers.
   Otherwise LangChain serializes the result as a Python repr and the result is dropped.
-- **One description shared by every transport.** Put it in `tools/schemas.py`, like
-  `SEARCH_LOGS_DESCRIPTION`, and use it for the local tool, the MCP wrapper and the
-  MCP server. State the inputs, the output columns, the limits, and what an empty
-  result means. This is what the "Best MCP Server" judging reads.
+- **One spec per tool.** A tool is one `ToolSpec` entry in
+  `pipeline/tools/specs.py` (plus your DB function and its argument model in
+  `tools/schemas.py`); the local tool, the MCP wrapper, the MCP server tool, the
+  result kind and the classifiers' catalog line are generated from it. The
+  `description` says what the tool is for, when to use it and which tool instead,
+  the output columns, the limits, and what an empty result means; it does not
+  repeat the inputs, which the parameter schema describes (every parameter needs a
+  `Field(description=...)`, every `limit` its bounds). This is what the "Best MCP
+  Server" judging reads. See `docs/mcp_server_plan.md`.
 - **Limits:** a default and a maximum on every list-returning tool (see each tool).
   Validate time windows (end after start), as `GetTrend` does.
 - **Tests:** offline tests of the query built (SQL and parameters), plus at least one
@@ -49,3 +54,9 @@ inconclusive` from explicit thresholds, so the tools must not return a verdict.
 | T10 | `test_counterexample_tool` | same as T9 | `b_total`; `b_without_a`; up to 5 example `line_id`s of B without A |
 | T11 | `test_control_group_tool` | `query` (phrase) or `event_id`, `case_tables`, `control_tables` (chosen by the agent from the table descriptions; never hard-coded), `level?` | per group: `matches`, `total_rows`, `rate_per_1k` |
 | T12 | `test_recurrence_tool` | `table_name`, `query` or `event_id`, window, `bucket` | `buckets_total`, `buckets_with_match`, `longest_gap_seconds`, `distinct_pids`, `distinct_components`, `distinct_requests` |
+
+## For the MCP server (see `docs/mcp_server_plan.md`)
+
+| # | Tool | Inputs | Output rows | Notes |
+| --- | --- | --- | --- | --- |
+| T13 | `rank_priorities_tool` (kind `derived`, offered on the MCP server only -- the pipeline adds its own ranking in `answer_node`) | `datasets`, `group_by` (`template`, `service` or `team`), `baseline_start/end`, `recent_start/end` | the ranked rows, the formula, the terms used and the executed queries, in the standard envelope | Runs the counts and the period comparison through the same DB functions as `count_by_category_tool` / `count_by_team_tool` / `compare_periods_tool` and scores them with `priority.compute_priorities` and `playbooks.team_for`: no second scoring or SQL path. Never accepts numbers from the caller, so an external agent cannot rank by anything but measured counts. |

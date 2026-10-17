@@ -28,7 +28,7 @@ How to work
 1. Call list_datasets_tool first. It measures each dataset's rows, time span, severity levels and a ready window; take windows and severities from it instead of guessing.
 2. Follow the evidence plan for the user's role. Read it with read_skill (or the resource skill://<name>/SKILL.md): {_role_plans()}. list_skills says when each skill applies, including the hypothesis workflow for 'why' questions.
 3. Find a service, template or entity id with get_data_tool before filtering on it.
-4. A request needs a target ({"; ".join(QUERYABLE_TARGETS)}). If the user named none, ask for one before calling tools. A dataset-wide overview is a valid scope for {overview}, not for {engineer_like}.
+4. A request needs a target ({"; ".join(QUERYABLE_TARGETS)}). If the user named none, ask for one before calling tools -- except that a dataset-wide overview is a valid scope for {overview}, not for {engineer_like}.
 
 Reading results
 - Only {measured} results are frequencies. Search, context, lookup and catalog rows are examples or metadata.

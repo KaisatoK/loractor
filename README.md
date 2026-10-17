@@ -666,6 +666,10 @@ confidence tests below are skipped unless enabled.
 | `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
 | `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (eleven tools), MCP server validation (no auto-complete tool) |
+| `test_tool_specs.py` | every tool is generated from the spec table: same name, description, arguments, bounds and enums on the local tools, the pipeline's MCP wrappers and the server; catalog and kinds derived; no hand-written tool left |
+| `test_mcp_contract.py` | the server's contract: instructions, the shared result schema, size limits with the visible cut marker, actionable error messages |
+| `test_mcp_prompts_resources.py` | role prompts built from the pipeline's `evidence_brief`, completions, skill and `logs://` resources rendered from their sources |
+| `test_mcp_transport.py` | the bearer token (constant-time), Host/Origin guard, `/health`, stdio round trip; a real-server smoke test gated by `RUN_MCP_SMOKE=1` |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
@@ -676,7 +680,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 818 passed, 71 skipped`. Three failures
+> The offline suite reports `5 failed, 975 passed, 76 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
@@ -896,7 +900,8 @@ src/
 │       ├── cost.py       off-model query cost and timing notes
 │       ├── agents/       one module per LLM agent, incl. the `find_evidence`
 │       │                 deep agent and its off-agent report builder
-│       └── tools/        database tools, executor, result collection
+│       └── tools/        specs.py (every tool declared once), local/MCP tool
+│                         generators, executor, result envelope and collection
 └── ui/
     ├── streamlit_app.py  entry point, auth gate, and sidebar
     ├── chat_client.py    backend HTTP client (auth, chats, streaming) + base URL
@@ -915,100 +920,104 @@ skills/
 
 ## MCP tool service
 
-The optional standalone MCP service owns SereneDB access for the evidence tools
-and the investigation skills. Start it separately from the backend:
+A standalone [MCP](https://modelcontextprotocol.io) server exposes the evidence
+tools, the investigation skills, ready-made role prompts and the rules the answers
+are held to, so an external agent (Claude Code, Claude Desktop, Kiro, MCP
+Inspector) can investigate the same logs the chatbot does.
 
 ```bash
-bash ./mcp_server.sh                 # Streamable HTTP, default 127.0.0.1:8010/mcp
-TOOLS_TRANSPORT=mcp bash ./backend.sh
+bash ./mcp_server.sh                                  # Streamable HTTP, default 127.0.0.1:8010/mcp
+uv run python -m backend.mcp_server --transport stdio # a process the client launches
+TOOLS_TRANSPORT=mcp bash ./backend.sh                 # the chatbot's own pipeline uses the server
 ```
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
-dataset catalog, whole-dataset counts, the seven bounded query tools and the two sweep tools through MCP; if the service is
-unreachable, the backend logs the failure and falls back to the in-process DB
-implementation. `/auto-complete` is not an MCP tool: it is a chat-box feature and
-is always answered in-process, whatever the transport. MCP mode also exposes `list_skills` and `read_skill`, while
-local mode keeps the sandboxed `skills/` filesystem backend. The server exposes
-skills both as MCP resources (`skill://log-investigation`) and tools for clients
-such as MCP Inspector, Kiro, or Claude Desktop.
+dataset catalog, whole-dataset counts, the seven bounded query tools and the two
+sweep tools through the server; if the service is unreachable, the backend logs the
+failure and falls back to the in-process implementation. `/auto-complete` is not an
+MCP tool: it is a chat-box feature and is always answered in-process.
 
-MCP configuration: `MCP_HOST`, `MCP_PORT`, `MCP_PATH`, `MCP_URL`,
-`MCP_CALL_TIMEOUT_S`, and `MCP_SKILLS_ROOT`. Loopback is the default. Set
-`MCP_AUTH_TOKEN` before binding `MCP_HOST` to a non-loopback address; the server
-refuses an unauthenticated non-loopback configuration. FastMCP is pinned in
-`pyproject.toml`; regenerate `requirements.txt` with `uv export` after changing
-dependencies.
+### What the server offers
+
+- **Tools.** The eleven evidence tools, plus `list_skills` and `read_skill`. Each is
+  declared once in `src/backend/pipeline/tools/specs.py` and generated for the local
+  agent, the pipeline's MCP wrappers and the server, so the name, description,
+  arguments and bounds are the same everywhere. The server advertises each
+  argument's description, limits, patterns and dataset enum in the tool's JSON
+  schema, a title, read-only/idempotent/open-world annotations, and the shared
+  result envelope as its output schema. Bad arguments and failures come back as
+  messages that say what to fix.
+- **Results.** Every result is the envelope described under "Tool results": the
+  executed `query`, `filters`, `limit`, `returned`, `total_matches` and `truncated`.
+  Text cells over 2,000 characters end in `…[cut]` and a result over 200,000
+  characters loses trailing rows (`clipped_cells`, `clipped_rows`, `truncated`
+  say so); `get_log_by_line_id_tool` returns the whole row.
+- **Instructions.** On connect the server tells the client how to work: start with
+  `list_datasets_tool`, follow the role's skill, which results are frequencies, and
+  the answer rules. They are rendered from the code that owns each rule. Print them
+  with `uv run python -c "from backend.mcp_server.instructions import build_instructions; print(build_instructions())"`.
+- **Prompts.** `investigate_as_engineer`, `investigate_as_team_lead`,
+  `investigate_as_manager` (arguments `question`, `effort`) and
+  `worked_investigation` (`topic`, `effort`): the same briefing the chatbot's
+  evidence agent receives (role objective, evidence plan, team ownership, effort
+  budget) plus the answer rules and layout.
+- **Resources.** The skills (`skill://<name>/SKILL.md`, `skill://<name>/_manifest`),
+  `logs://datasets/{dataset_id}/schema`, `logs://ownership` (fictional),
+  `logs://roles/{role}`, and `logs://policy/{result-contract,priority-score,effort}`.
+- **Health.** `GET /health` (HTTP, no token): 200 when the log database answers,
+  503 otherwise, with no detail.
+
+### Configuration
+
+`MCP_HOST`, `MCP_PORT`, `MCP_PATH`, `MCP_URL`, `MCP_CALL_TIMEOUT_S` and
+`MCP_SKILLS_ROOT`. Loopback is the default. Set `MCP_AUTH_TOKEN` (a bearer token,
+compared in constant time) before binding `MCP_HOST` to a non-loopback address; the
+server refuses an unauthenticated non-loopback configuration. The HTTP transport
+validates the `Host` and `Origin` headers (DNS-rebinding protection): `localhost`,
+`127.0.0.1` and the bound address are accepted, and further hostnames are added
+with FastMCP's `FASTMCP_HTTP_ALLOWED_HOSTS='["mcp.example.com"]'`. The server loads
+without any of the chatbot's model keys. FastMCP is pinned in `pyproject.toml`;
+regenerate `requirements.txt` with `uv export` after changing dependencies.
 
 ### Connecting an external AI agent
 
-Any MCP-capable agent can add this service to its tool set. Start the MCP server
-first, then register the Streamable HTTP endpoint in the agent's MCP settings:
+HTTP (start the server first):
 
 ```text
 Endpoint: http://127.0.0.1:8010/mcp
 Transport: Streamable HTTP
+Authorization: Bearer <MCP_AUTH_TOKEN>      # only when MCP_AUTH_TOKEN is set
 ```
-
-For a non-loopback server, use the configured HTTPS URL or hostname and send the
-bearer token from `MCP_AUTH_TOKEN` as an HTTP header:
-
-```text
-Authorization: Bearer <MCP_AUTH_TOKEN>
-```
-
-The exact registration command differs between Claude Code, Codex, Kiro,
-Claude Desktop, MCP Inspector, and other clients. Use the client's
-**Streamable HTTP / remote MCP server** option; do not configure this endpoint as
-an stdio subprocess. For MCP clients that accept a JSON server definition, the
-equivalent configuration is:
 
 ```json
 {
   "name": "ai-chatbot-serenedb",
   "transport": "streamable-http",
   "url": "http://127.0.0.1:8010/mcp",
-  "headers": {
-    "Authorization": "Bearer <MCP_AUTH_TOKEN>"
+  "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
+}
+```
+
+stdio (the client launches the server; `fastmcp.json` describes it, so
+`fastmcp install claude-desktop fastmcp.json` or `fastmcp install claude-code
+fastmcp.json` can register it):
+
+```json
+{
+  "mcpServers": {
+    "serenedb-logs": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/ai-chatbot-test",
+               "python", "-m", "backend.mcp_server", "--transport", "stdio"]
+    }
   }
 }
 ```
 
-The `headers` entry is only needed when `MCP_AUTH_TOKEN` is configured. Keep the
-actual token out of committed configuration files. Loopback development is
-unauthenticated by default; binding the server to a non-loopback address
-requires `MCP_AUTH_TOKEN`.
-
-After connecting, the agent should list the available MCP tools and use them as
-its evidence-gathering arsenal rather than inventing SQL or relying on
-unsupported log facts:
-
-1. Use `list_skills` and then `read_skill("log-investigation")` when the request
-   asks why a failure occurs, asks for root-cause analysis, or requires testable
-   hypotheses.
-2. Call `list_datasets_tool` (no arguments) first to learn each dataset's rows,
-   first and last timestamp, severity levels and a whole-dataset window
-   (`window_start`/`window_end`); choose windows from it instead of guessing.
-   Pass a `dataset` id (`openstack` is the default; `bgl`, `otel_s3`,
-   `otel_slice`) to every log tool; there are no table names. Use
-   `search_logs_tool` for message-content searches on an indexed corpus,
-   optionally within a time window (`start_time` and `end_time` together); its
-   `total_matches` counts every matching line beside the examples returned. Use
-   `get_log_by_line_id_tool` when the user supplies a `Line ID: n (dataset)`
-   reference, passing both `line_id` and `dataset`.
-3. Use `get_data_tool` to discover a field's real values (services, entity ids,
-   templates) before requesting a trend for an exact target with `get_trend_tool`.
-4. Use `count_by_category_tool`, `top_in_category_by_service_tool`, and
-   `compare_periods_tool` for computed counts, rankings, and period comparisons,
-   and `count_by_dataset_tool` for severity counts over each whole local dataset;
-   `sweep_chunks_tool` and `investigate_chunk_tool` cover the remote corpus at
-   high effort (price a sweep first with `confirm_cost=false`).
-5. Ground the final answer in returned rows and aggregates. Preserve the tool
-   result identifiers and distinguish an empty result from a failed tool call.
-
-The external agent connects directly to the MCP service, so the backend does
-not need `TOOLS_TRANSPORT=mcp` for that agent to use the tools. Set
-`TOOLS_TRANSPORT=mcp` only when the chatbot's own LangGraph pipeline should use
-the same MCP service instead of its local fallback implementation.
+Keep the actual token out of committed files. After connecting, the agent receives
+the server's instructions; pick a role prompt (for example `investigate_as_manager`)
+to start the same workflow the chatbot runs. The external agent talks to the MCP
+service directly, so the backend does not need `TOOLS_TRANSPORT=mcp` for it.
 
 ## License
 

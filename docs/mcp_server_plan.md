@@ -16,22 +16,41 @@ Every step below is traced to one of those four, or to a minimal requirement
 Mark items done here as they land; record decisions and their reasons so the
 next agent does not re-litigate them.
 
-## Status at the time of writing (2026-10-17)
+## Status (2026-10-17)
 
-- FastMCP upgraded `2.14.4 -> 4.1.0` (`mcp` 2.3.0), pushed as `dac5b06`.
-  Offline suite at the 5 known failures under both transports; real HTTP server
-  checked with and without the bearer token; legacy- and modern-protocol
-  clients both list 13 tools / 4 resources.
-- **T1 landed** (`944fe3f`): `search_logs_tool` takes an optional
-  `start_time`/`end_time` and returns an exact `total_matches`, on all three
-  transports. T2 (`get_nearby_events_tool`) and T3 (`count_by_team_tool`) have
-  schemas and shared descriptions in `tools/schemas.py` and stubs in
-  `tools/planned_tools.py`; the tool owner implements them (see "Ownership").
-- The server exposes 13 tools (11 DB + `list_skills`/`read_skill`) and
-  `skill://<name>` resources. It has **no** instructions, prompts, tool
-  annotations, output schemas, progress reporting or completions.
+Done, committed locally (not pushed):
 
-Measured gaps (in-memory client against `server.mcp`):
+| Step | Commit | What landed |
+| --- | --- | --- |
+| FastMCP 2.14.4 -> 4.1.0 | `dac5b06` (pushed) | `mcp` 2.3.0; two test fixes for FastMCP 4 |
+| M1 one spec per tool | `5592636` | `pipeline/tools/specs.py`; local tools, pipeline MCP wrappers and server tools generated from it; `TOOL_KINDS` and `TOOL_CATALOG` derived (catalog byte-identical, so the classifiers' input is unchanged); parameter descriptions and registry-backed dataset enums in `schemas.py`; six hand-written tool modules deleted |
+| M2 contract and guidance | `dc5ce53` | rendered instructions, `ToolEnvelope` output schema, size limits in `build_envelope` (`…[cut]`, `clipped_cells`, `clipped_rows`), actionable errors with `mask_error_details`, annotations, version |
+| M4 transports and auth | `041ec19` | `--transport http\|stdio`, `fastmcp.json`, `TokenVerifier` with `compare_digest`, Host/Origin guard, `/health` |
+| M3 prompts and resources | `b11c9f9` | `evidence_brief` (pipeline prompt byte-identical across 36 role/effort/scope variants), role prompts, `worked_investigation`, completions, `SkillsDirectoryProvider` and `logs://` resources |
+
+Offline suite: `5 failed, 975 passed, 76 skipped` under both transports (the 5 are
+the known failures in AGENTS.md); MCP tests also pass with
+`FASTMCP_MCP_CAMELCASE_COMPAT=false`. Checked against a real server: 401 without
+the token, 421 for a foreign Host, the pipeline's `MCPBridge` connecting with the
+guard on for `MCP_HOST` `127.0.0.1` and `0.0.0.0`, and a stdio round trip through
+both `python -m backend.mcp_server --transport stdio` and `fastmcp run fastmcp.json`.
+
+Not done: M5 (the tool owner's tools), M6 and M7 (sweep progress, bridge and
+operations). Not run, because the environment has no SereneDB and no model:
+`RUN_*_LIVE`, `routes.sh`, `confidence.sh` and `worked_investigation.sh`. The
+classifiers' catalog text is unchanged, but the evidence agent now sees the new
+tool descriptions and a different tool order (sweep tools last), so re-run those
+before relying on the agent's tool choices. `website_url` was skipped: the
+project has no authoritative repository URL in `pyproject.toml`.
+
+Deviations from the plan as written: server tools are a `Tool` subclass
+(`SpecTool`) that takes the argument model's JSON schema directly, instead of
+functions with synthesized signatures; dataset enums are annotation metadata
+(`WithJsonSchema`), because langchain-core drops `json_schema_extra` when it
+rebuilds a tool's schema; `OVERVIEW_ROLES` moved to `roles.py` because `decision.py`
+cannot be imported without `TYPESAFE_API_KEY`.
+
+Gaps measured before the work (in-memory client against `server.mcp`):
 
 | Gap | Evidence | Judged under |
 | --- | --- | --- |
@@ -322,13 +341,14 @@ agree ToolSpec shape with the tool owner
 M5 whenever a tool from the tool owner lands (after M1)
 ```
 
-## Housekeeping (when the matching step lands)
+## Housekeeping
 
-- `README.md` and `AGENTS.md` still state the old offline counts
-  (`818 passed, 71 skipped`); after T1 the suite is `5 failed, 853 passed,
-  75 skipped`. Update with the first commit that changes the test count.
-- Add `rank_priorities_tool` to `docs/tool_requests.md` once this plan is
-  accepted.
+- Done: `README.md` and `AGENTS.md` carry the new offline counts and the
+  one-spec-per-tool checklist; `rank_priorities_tool` is requested in
+  `docs/tool_requests.md` (T13).
+- Still to do: write `setup-instruction.md` (D7) -- how a judge connects (HTTP and
+  stdio, the token, `FASTMCP_HTTP_ALLOWED_HOSTS`, the SereneDB settings); it links
+  to the server instructions rather than repeating them.
 
 ## Verification (each step, before marking it done)
 

@@ -15,7 +15,7 @@ One workflow — **question -> evidence -> recommendation** — for three roles:
 
 The role behavior was built **ahead of** some tools and data. These are the explicit assumptions and placeholders; when the real thing lands, replace them — do not leave both.
 
-**Tool-result contract** (`src/backend/pipeline/tools/envelope.py`). Every evidence tool, local or MCP, must return `{status, operation, kind, dataset, query, filters, limit, returned, total_matches, truncated, data}`; build it with `run_enveloped` (the MCP server does this through `_result` in `mcp_server/server.py`). `kind` is one of `search | context | aggregate | trend | lookup | catalog | test`. Only `aggregate`/`trend` (and the code-derived `derived` priority table) are measured frequencies; `search`/`context`/`lookup` are examples. `collect_tool_results` copies these fields onto every `R{n}` record; a legacy envelope that lacks them yields `None` (shown as "unknown"/"not reported" in the answer), except `kind`, which falls back to `TOOL_KINDS` by tool name. `truncated` is `total_matches > returned` when the total is known, else `returned >= limit`, else `None`.
+**Tool-result contract** (`src/backend/pipeline/tools/envelope.py`). Every evidence tool, local or MCP, must return `{status, operation, kind, dataset, query, filters, limit, returned, total_matches, truncated, data}`; build it with `run_enveloped` (the generated local tools and MCP server tools both do, from the spec table). `kind` is one of `search | context | aggregate | trend | lookup | catalog | test`. Only `aggregate`/`trend` (and the code-derived `derived` priority table) are measured frequencies; `search`/`context`/`lookup` are examples. `collect_tool_results` copies these fields onto every `R{n}` record; a legacy envelope that lacks them yields `None` (shown as "unknown"/"not reported" in the answer), except `kind`, which falls back to `TOOL_KINDS` by tool name. `truncated` is `total_matches > returned` when the total is known, else `returned >= limit`, else `None`.
 
 **Planned tools — placeholders to replace:**
 
@@ -25,7 +25,7 @@ The role behavior was built **ahead of** some tools and data. These are the expl
 | counts grouped by team (`count_by_team_tool`, kind `aggregate`, SQL join `Component = team_ownership.component`) | team lead / manager playbooks map services to teams from `team_ownership.csv` via the prompt (`playbooks.ownership_context`) and forbid the model from adding counts | implement tool; rows should carry `team`, `count` and ideally `category` (`priority.DIMENSIONS` already includes `team`, so ranking by team works unchanged); drop the "do not add counts up yourself" workaround from both playbooks |
 | hypothesis tests (temporal precedence, recurrence match, counterexample, control-group; kind `test`) | `log-investigation` skill asks for one counterexample query per hypothesis; `Hypothesis.contradicting_evidence_ids` / `next_check` carry the result | implement as deterministic tools returning raw numbers; set status in code from explicit thresholds, not from an LLM |
 
-**Every new tool also needs:** an entry in `TOOL_KINDS` (`envelope.py`), `pipeline/tools/__init__.py` `__all__` (a test asserts `TOOL_CATALOG` in `prompts/builders.py` has exactly the same keys), `registry.py` (`LOCAL_DB_TOOLS`) and `mcp_tools.py` (`MCP_DB_TOOLS`) wrappers, the `mcp_server/server.py` tool with a description that states inputs and outputs (judged under "Best MCP Server"), and a mention in the relevant `skills/*/SKILL.md`. Then re-run `bash ./routes.sh` and `bash ./confidence.sh` (the catalog is part of both classifiers' state).
+**Every new tool is one `ToolSpec` entry** in `src/backend/pipeline/tools/specs.py` (plus its DB function in `backend/db/` and its argument model in `tools/schemas.py`, where every parameter needs a description and every `limit` its bounds). The local tool, the pipeline's MCP wrapper, the MCP server tool, `TOOL_KINDS` and `TOOL_CATALOG` (the classifiers' catalog line is the spec's `catalog` text) are generated from it -- never write a tool out a second time (`tests/test_tool_specs.py` fails if you do). The `description` says what the tool is for, when to use it and which tool instead, what it returns, its limits and what an empty result means; it does not repeat the inputs (the parameter schema does). Mention the tool in the relevant `skills/*/SKILL.md`. For a planned tool, supply `run` and set `available=True` and drop the "NOT AVAILABLE YET" prefix of its catalog line. Then re-run `bash ./routes.sh` and `bash ./confidence.sh` (the catalog is part of both classifiers' state). Tests patch a DB function once, as `specs.<name>`, for every transport.
 
 **Ownership table.** `src/backend/data/team_ownership.csv` is a **fictional** `dataset,component,team` mapping (README documents it). `component` matches the corpus's `Component` column (the registry's `service` field) exactly. `backend/db/ownership.py` reads and validates it (`read_ownership_csv`) and `uv run python -m backend.db.ownership` (re)loads the `team_ownership` table (no log table is touched). When the organisers' real table arrives, replace the CSV (keep the three columns), reload it, and update the README team table. Unmapped components count as `unowned` (`UNOWNED_TEAM`).
 
@@ -105,7 +105,7 @@ never re-baseline an expectation just to make the run green.
 
 ## Known failures
 
-Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q` currently reports `5 failed, 818 passed, 71 skipped` (the skips are the gated live cases).
+Not every entry below is pre-existing — see each bullet's provenance. Offline-only run (no DB, no model calls): `uv run pytest -q` currently reports `5 failed, 975 passed, 76 skipped` (the skips are the gated live cases).
 
 - Two failures need a reachable SereneDB although they are not gated (they pass when it is up): `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` (for a remote dataset, row-group pruning queries the DB before the severity-case refusal fires) and `test_sampling_and_external.py::test_the_sample_query_tags_every_window` (seeds the pruning cache under a fake URL, but the code looks up the real S3 URLs).
 - The other three failures are all in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`. That test file and that module are byte-identical to HEAD and do not depend on the pipeline, so they are pre-existing, not regressions.
@@ -152,13 +152,27 @@ Not every entry below is pre-existing — see each bullet's provenance. Offline-
 ### MCP tool service
 
 `mcp_server.sh` runs the standalone FastMCP Streamable HTTP service on
-`127.0.0.1:8010/mcp`. The pipeline defaults to local tools; set
-`TOOLS_TRANSPORT=mcp` to use the server for the eleven DB tools and skills.
-`/auto-complete` is not on the server: it always runs in-process. The
-synchronous pipeline uses a dedicated asyncio loop thread for
-MCP calls and falls back to local DB tools when the service is unavailable.
-Skills are exposed by the server as `skill://` resources and `list_skills` /
-`read_skill` tools; local transport retains the sandboxed filesystem backend.
-`fastmcp` is pinned in `pyproject.toml`, and `requirements.txt` must be
-regenerated with `uv export`, not edited manually. Loopback is unauthenticated;
-set `MCP_AUTH_TOKEN` for non-loopback binding.
+`127.0.0.1:8010/mcp` (`python -m backend.mcp_server --transport stdio` for a client
+that launches it). The pipeline defaults to local tools; set `TOOLS_TRANSPORT=mcp`
+to use the server for the eleven DB tools and skills. `/auto-complete` is not on
+the server: it always runs in-process. The synchronous pipeline uses a dedicated
+asyncio loop thread for MCP calls and falls back to local DB tools when the service
+is unavailable.
+
+The server (`src/backend/mcp_server/`) is assembled from the same sources as the
+pipeline and holds no text of its own: tools from the spec table (`tools.py`),
+guidance rendered from `roles.py`/`envelope.py`/`builders.py` (`instructions.py`),
+role prompts from `builders.evidence_brief` + `answers.answer_layout`
+(`prompts.py`), resources from the dataset registry, role/effort tables, priority
+formula and ownership CSV (`resources.py`; skills via FastMCP's
+`SkillsDirectoryProvider`, URIs `skill://<name>/SKILL.md`). It must import without
+the chatbot's model keys (do not import `pipeline.models`, `decision`, `graph` or
+`api`; a test checks). `fastmcp` is pinned in `pyproject.toml`, and
+`requirements.txt` must be regenerated with `uv export`, not edited manually. Under
+FastMCP 4 decorators return the plain function; run MCP tests with
+`FASTMCP_MCP_CAMELCASE_COMPAT=false` to catch deprecated camelCase field reads.
+Auth is `MCP_AUTH_TOKEN` through a `TokenVerifier` (constant-time compare); the HTTP
+app turns on the Host/Origin guard; loopback needs no token, a non-loopback bind
+requires one. Size limits (`MAX_CELL_CHARS`, `MAX_RESULT_CHARS`) live in
+`envelope.build_envelope`, so both transports clip identically. The plan and its
+status are in `docs/mcp_server_plan.md`.
