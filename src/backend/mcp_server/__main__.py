@@ -1,30 +1,44 @@
-"""Run the SereneDB MCP server over Streamable HTTP."""
+"""Run the SereneDB MCP server.
 
-import uvicorn
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+    python -m backend.mcp_server                    Streamable HTTP (default)
+    python -m backend.mcp_server --transport stdio  a process the client launches
 
-from backend.mcp_server.config import MCP_AUTH_TOKEN, MCP_HOST, MCP_PATH, MCP_PORT
-from backend.mcp_server.server import mcp
+HTTP listens on ``MCP_HOST:MCP_PORT``; an agent on the same machine, or the
+chatbot's own pipeline (``TOOLS_TRANSPORT=mcp``), connects to it. stdio is for
+clients that start the server themselves (Claude Desktop, ``fastmcp install``):
+nothing but protocol messages may reach stdout, so logging goes to stderr.
+"""
 
+from __future__ import annotations
 
-class BearerTokenMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, token: str):
-        super().__init__(app)
-        self.token = token
+import argparse
 
-    async def dispatch(self, request: Request, call_next):
-        if request.headers.get("authorization") != f"Bearer {self.token}":
-            return PlainTextResponse("Unauthorized", status_code=401)
-        return await call_next(request)
+from backend.mcp_server.config import MCP_HOST, MCP_PORT
 
 
-def main() -> None:
-    app = mcp.http_app(path=MCP_PATH, transport="streamable-http")
-    if MCP_AUTH_TOKEN:
-        app.add_middleware(BearerTokenMiddleware, token=MCP_AUTH_TOKEN)
-    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m backend.mcp_server")
+    parser.add_argument(
+        "--transport",
+        choices=("http", "stdio"),
+        default="http",
+        help="http (default) listens on MCP_HOST:MCP_PORT; stdio talks over the "
+        "process's stdin/stdout",
+    )
+    args = parser.parse_args(argv)
+
+    # Imported here so --help and argument errors do not load the whole server.
+    from backend.mcp_server.server import mcp
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio", show_banner=False)
+        return
+
+    import uvicorn
+
+    from backend.mcp_server.http import create_http_app
+
+    uvicorn.run(create_http_app(), host=MCP_HOST, port=MCP_PORT)
 
 
 if __name__ == "__main__":

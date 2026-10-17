@@ -6,6 +6,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from fastmcp import FastMCP
 
+from backend.mcp_server.auth import build_auth
 from backend.mcp_server.instructions import build_instructions
 
 try:
@@ -16,6 +17,8 @@ except PackageNotFoundError:  # running from a checkout that was never installed
 mcp = FastMCP(
     "serenedb-logs",
     instructions=build_instructions(),
+    # Bearer token over HTTP when MCP_AUTH_TOKEN is set; ignored over stdio.
+    auth=build_auth(),
     version=SERVER_VERSION,
     # A duplicate registration is a bug (two tools with one name), not something
     # to warn about and carry on.
