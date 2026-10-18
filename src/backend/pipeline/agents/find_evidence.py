@@ -27,6 +27,7 @@ from backend.pipeline.middleware import (
     handle_tool_errors,
     log_tool_calls,
     make_error_middleware,
+    report_skill_reads,
 )
 from backend.pipeline.models import deepseek
 from backend.pipeline.prompts import FIND_EVIDENCE_SYSTEM_PROMPT
@@ -117,6 +118,7 @@ def get_find_evidence_agent(effort: str) -> CompiledStateGraph:
         "middleware": [
             log_tool_calls,
             handle_tool_errors,
+            report_skill_reads,
             TodoListMiddleware(),
             ToolCallLimitMiddleware(run_limit=spec.max_tool_calls),
             ToolRetryMiddleware(

@@ -31,6 +31,7 @@ from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.evidence import build_evidence
 from backend.pipeline.playbooks import team_for
 from backend.pipeline.priority import with_priority
+from backend.pipeline.skill_progress import injected_playbook_event
 from backend.pipeline.timeline import with_timeline
 from backend.pipeline.cost import investigation_cost
 from backend.pipeline.decision import (
@@ -82,12 +83,17 @@ PRIORITY_ROLES = frozenset({"team_lead", "manager"})
 TIMELINE_ROLES = frozenset({"engineer"})
 
 
-def _emit_stage(name: str) -> None:
-    """Announce a pipeline node's stage to the live progress panel."""
+def _emit(event: dict) -> None:
+    """Write one event to the live progress panel (a no-op outside a graph run)."""
     try:
-        get_stream_writer()({"type": "node_stage", "name": name})
+        get_stream_writer()(event)
     except RuntimeError:
         pass  # node invoked outside a runnable context (direct calls in tests)
+
+
+def _emit_stage(name: str) -> None:
+    """Announce a pipeline node's stage to the live progress panel."""
+    _emit({"type": "node_stage", "name": name})
 
 
 def normalize_node(state: PipelineState) -> PipelineState:
@@ -222,6 +228,9 @@ def _last_agent_summary(messages) -> str:
 
 
 def find_evidence_node(state: PipelineState) -> PipelineState:
+    # The role playbook is pasted into the prompt, so no tool call shows it was
+    # used; say so here, once per evidence pass.
+    _emit(injected_playbook_event(state["role"]["name"]))
     result = get_find_evidence_agent(state.get("effort")).invoke(
         {
             "messages": [

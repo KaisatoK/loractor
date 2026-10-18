@@ -579,18 +579,47 @@ def investigate_chunk(
     question: str = "",
     dataset: Dataset | str = "otel_s3",
     severities: tuple[str, ...] = PROBLEM_SEVERITIES,
+    progress=None,
 ) -> dict:
     """Promote and digest one named chunk.
 
     The companion to :func:`sweep`: the sweep says which chunks look relevant,
     this reads one of them properly. Separate because it is the expensive half,
     and a user should be able to spend that on a chunk they chose.
+
+    ``progress``, when given, is called with a :class:`SweepEvent` before the
+    read starts and after the digest, the same events (stage ``promote``) the
+    sweep reports for its own promotions.
     """
     ds = _require_sweepable(dataset)
     chunk = chunk_mod.find_chunk(ds, chunk_id)
+    if progress is not None:
+        progress(
+            SweepEvent(
+                "promote",
+                f"Reading {chunk_id}: indexing its problem rows, then summarising "
+                "and dropping them (about eleven minutes).",
+                {"chunk_id": chunk_id, "reads_message_text": True},
+            )
+        )
     digest = promote_chunk(
         chunk, dataset=ds, severities=severities, question=question
     )
+    if progress is not None:
+        progress(
+            SweepEvent(
+                "promote",
+                f"Read {digest.chunk_id}: {digest.rows_indexed:,} problem rows "
+                f"from {digest.rows_scanned:,} scanned; disk returned after digest.",
+                {
+                    "chunk_id": digest.chunk_id,
+                    "rows_indexed": digest.rows_indexed,
+                    "rows_scanned": digest.rows_scanned,
+                    "build_seconds": round(digest.build_seconds, 1),
+                    "reads_message_text": True,
+                },
+            )
+        )
     return {
         "chunk_id": chunk_id,
         "digest": digest.as_dict(),

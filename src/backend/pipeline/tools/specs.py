@@ -63,6 +63,7 @@ from backend.db import (
 from backend.db import external
 from backend.db.query import search_with_total
 from backend.db.stats import QueryResult, QueryStats, merge
+from backend.db.trace_query import get_trace_logs
 from backend.pipeline.sweep import (
     SweepBudget,
     estimate_sweep,
@@ -395,6 +396,13 @@ def _run_nearby(args, progress):
     )
 
 
+def _run_trace_logs(args, progress):
+    return get_trace_logs(
+        args["trace_id"], args["start_time"], args["end_time"], args["dataset"],
+        args["limit"],
+    )
+
+
 def _run_count_by_team(args, progress):
     datasets = args["datasets"]
     return count_by_team(
@@ -498,7 +506,10 @@ def _run_investigate(args, progress):
     return QueryResult(
         [
             investigate_chunk(
-                args["chunk_id"], question=args["question"], dataset=args["dataset"]
+                args["chunk_id"],
+                question=args["question"],
+                dataset=args["dataset"],
+                progress=_relay(progress) if progress is not None else None,
             )
         ],
         stats=None,
@@ -752,6 +763,7 @@ SPECS: tuple[ToolSpec, ...] = (
         filters=lambda a: {"chunk_id": a["chunk_id"], "question": a["question"]},
         limit_of=lambda a: None,
         complete=True,
+        reports_progress=True,
         read_only=False,
         sweep=True,
         timeout=None,
@@ -1103,6 +1115,50 @@ SPECS: tuple[ToolSpec, ...] = (
         # Several datasets, each ranked on its own: named in the filters.
         dataset_of=lambda a: None,
         limit_of=lambda a: a["limit"],
+        open_world=True,
+        pipeline=False,
+    ),
+    ToolSpec(
+        name="get_trace_logs_tool",
+        title="Follow one trace across services",
+        description=(
+            "Return every log line that carries one trace id, across all the "
+            "services that wrote it, oldest first, to follow a failing request "
+            "from the frontend to the service that broke and see what each "
+            "logged on the way. Use it on the entity_id (trace id) of a line "
+            "found with search_logs_tool or top_in_category_by_service_tool on "
+            "the OTel corpus, with a window centred on that line: a trace's "
+            "lines sit within seconds of one another. Only the remote OTel "
+            "corpus has trace ids; other datasets are refused. Window at most "
+            "300 seconds. Returns kind=context rows ordered by time: ts, "
+            "severity, service, span_id, message and t_plus_s (seconds since "
+            "the trace's first returned line); `query_stats.notes` lists the "
+            "services seen. Only lines that carry a trace id appear, so a "
+            "service that sets none is missing from the trace even if it "
+            "logged during the request. Empty data means no line in the "
+            "window has this id (a wrong id, a window that misses the trace, "
+            "or services that set no id), not that the request did nothing. "
+            "Rows are examples of one request, never a frequency: count with "
+            "count_by_category_tool."
+        ),
+        kind="context",
+        catalog=(
+            "TIER server. Returns the log lines of one OTel trace id across "
+            "services, oldest first; params: dataset (otel_s3), trace_id (32 "
+            "hex), start_time/end_time (window of at most 300 s around a line "
+            "of the trace), limit (1-200). Rows are examples (kind context) "
+            "with span_id and t_plus_s, never a frequency. Offered on the MCP "
+            "server only."
+        ),
+        args_model=schemas.GetTraceLogs,
+        run=_run_trace_logs,
+        operation=lambda a: f"follow trace {a['trace_id']} across services in {a['dataset']}",
+        filters=lambda a: {
+            "trace_id": a["trace_id"],
+            "start_time": a["start_time"],
+            "end_time": a["end_time"],
+        },
+        complete=False,
         open_world=True,
         pipeline=False,
     ),

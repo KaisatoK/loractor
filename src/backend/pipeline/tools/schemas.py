@@ -25,6 +25,8 @@ from pydantic.json_schema import WithJsonSchema
 from backend.db.datasets import (
     DEFAULT_DATASET_ID,
     Capability,
+    DatasetKind,
+    all_datasets,
     dataset_ids,
     datasets_with,
     local_datasets,
@@ -380,6 +382,61 @@ class CountByDataset(BaseModel):
                 "count_by_category_tool and a time window."
             )
         return list(dict.fromkeys(value))
+
+
+_TRACE_DATASETS = sorted(
+    d.id for d in all_datasets() if d.kind is DatasetKind.REMOTE_PARQUET and d.has_field("entity_id")
+)
+
+
+class GetTraceLogs(_Windowed):
+    """The log lines of one trace across services, from the remote OTel corpus.
+
+    The window is mandatory because it is the cost control on a billion rows; a
+    trace's lines sit within seconds of one another, so a window centred on a
+    line of the trace is enough.
+    """
+
+    dataset: Annotated[
+        str,
+        _vocabulary(_TRACE_DATASETS),
+        Field(
+            description=(
+                "Which corpus to read the trace from. One of: "
+                + ", ".join(_TRACE_DATASETS)
+                + "."
+            ),
+        ),
+    ] = "otel_s3"
+
+    trace_id: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{32}$",
+            description=(
+                "The trace id: 32 lowercase hex characters, the entity_id of a "
+                "search hit or log line on the OTel corpus."
+            ),
+        ),
+    ]
+    limit: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=200,
+            description="Most lines to return (oldest first). A trace is a handful of lines.",
+        ),
+    ] = 100
+
+    @field_validator("dataset")
+    @classmethod
+    def _trace_dataset(cls, value: str) -> str:
+        if value not in _TRACE_DATASETS:
+            raise ValueError(
+                f"'{value}' has no trace-structured log lines. Choose one of: "
+                f"{', '.join(_TRACE_DATASETS)}."
+            )
+        return value
 
 
 class GetNearbyEvents(_DatasetScoped):

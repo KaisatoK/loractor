@@ -120,6 +120,21 @@ def _get_pool() -> ThreadedConnectionPool:
     return _pool
 
 
+def warm_pool() -> None:
+    """Build the shared pool now instead of on the first query."""
+    _get_pool()
+
+
+def close_pool() -> None:
+    """Close every pooled connection (a later query rebuilds the pool)."""
+    global _pool
+    with _pool_lock:
+        pool, _pool = _pool, None
+    if pool is not None:
+        pool.closeall()
+        logger.info("Closed the SereneDB connection pool")
+
+
 def get_conn():
     """Open a standalone connection.
     Used by one-off tooling (schema setup, migrations), not the request path,

@@ -859,6 +859,7 @@ confidence tests below are skipped unless enabled.
 | `test_clarify_and_assumed_scope.py` | what the clarifier is shown, the code-built options line, the assumed-scope line, the no-evidence answer rules |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_stream_events.py` | the shared event reducer: backend-saved and live progress agree, refusals never saved as failures, malformed payloads |
+| `test_skill_progress.py` | the skill lines in the progress panel: the injected playbook, skills the agent reads (real agent run), failed reads not reported |
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
 | `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
@@ -879,6 +880,7 @@ confidence tests below are skipped unless enabled.
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_count_by_team.py` | team ownership joins, `unowned` preservation, window/category validation, data scope and measured envelope |
 | `test_rank_priorities.py` | the server-only `rank_priorities_tool`: arguments (non-overlapping windows, local-only team), per-dataset scoring with synthetic rows, and the envelope through the in-memory client |
+| `test_trace_logs.py` | the server-only `get_trace_logs_tool`: schema, the one-statement SQL (trace id as a parameter, window, microsecond-truncated timestamps), refusals, `t_plus_s` and the explanatory notes, the tool through the in-memory client |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_provision.py` | the setup steps against the database: the secret is persistent and unshadowed, the key never reaches a log, readiness runs a query, and a loaded corpus is not rebuilt |
@@ -1167,9 +1169,11 @@ MCP tool: it is a chat-box feature and is always answered in-process.
 
 ### What the server offers
 
-- **Tools.** The fifteen evidence tools, plus `list_skills` and `read_skill`. Fourteen
-  are the pipeline's own (`rank_priorities_tool` is server-only: an external agent
-  has no `answer_node`, so it needs the ranking, which the pipeline adds itself).
+- **Tools.** The sixteen evidence tools, plus `list_skills` and `read_skill`. Fourteen
+  are the pipeline's own. Two are server-only: `rank_priorities_tool` (an external agent
+  has no `answer_node`, so it needs the ranking, which the pipeline adds itself) and
+  `get_trace_logs_tool` (every log line of one OTel trace id across services, oldest
+  first, in a window of at most 300 s; only lines that carry a trace id appear).
   Each is declared once in `src/backend/pipeline/tools/specs.py` and generated for
   the local agent, the pipeline's MCP wrappers and the server, so the name,
   description, arguments and bounds are the same everywhere. The server advertises
@@ -1202,7 +1206,27 @@ MCP tool: it is a chat-box feature and is always answered in-process.
 ### Configuration
 
 `MCP_HOST`, `MCP_PORT`, `MCP_PATH`, `MCP_URL`, `MCP_CALL_TIMEOUT_S` and
-`MCP_SKILLS_ROOT`. Loopback is the default. Set `MCP_AUTH_TOKEN` (a bearer token,
+`MCP_SKILLS_ROOT`. Loopback is the default.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_CALL_TIMEOUT_S` | `60` | How long the chatbot's MCP bridge waits for an ordinary tool call |
+| `MCP_SWEEP_TIMEOUT_S` | `3600` | How long the bridge waits for a tool the server leaves unbounded: `sweep_chunks_tool` / `investigate_chunk_tool` (a sweep with four promotions takes about three quarters of an hour) and `otel_index_tool` / `search_logs_tool` (an uncovered OTel window builds an index in about 450 s). It only bounds the wait, see below |
+| `MCP_MAX_PROMOTIONS` | `4` | Most chunks one call may read message text for (about eleven minutes each). A call above it is refused with the limit and what to retry with; `0` allows only the free passes and refuses `investigate_chunk_tool` |
+| `MCP_ENABLE_SWEEP` | `true` | `false` removes the two sweep tools from the server (tag `sweep`) |
+| `MCP_RATE_LIMIT_RPS` | `50` | Requests per second one client may make (bursts up to twice that), counted per bearer token or as one anonymous client; `0` turns it off. A tool call is two requests |
+| `MCP_CACHE_TTL_S` | `300` | Seconds a `count_by_dataset_tool` result is reused (the only cached tool); `0` turns it off |
+
+**What the sweep timeout does and does not do.** The tools run blocking database
+code on a worker thread, and a thread cannot be interrupted: a tool `timeout`
+(FastMCP's, or the bridge's wait) does not stop it. The sweep's own wall-clock
+budget (`max_seconds`, 900 s) and SereneDB's statement timeout are what stop the
+work, and the sweep always drops its index and returns the disk before it
+returns, even when the caller has given up. A sweep reports each stage as an MCP
+progress notification, which also keeps a quiet connection from looking idle to
+a proxy; a proxy that still cuts a long stream is not handled (no event store).
+The server logs and times every request without its arguments, and opens and
+closes the database pool with itself. Set `MCP_AUTH_TOKEN` (a bearer token,
 compared in constant time) before binding `MCP_HOST` to a non-loopback address; the
 server refuses an unauthenticated non-loopback configuration. The HTTP transport
 validates the `Host` and `Origin` headers (DNS-rebinding protection): `localhost`,

@@ -17,6 +17,7 @@ import os
 import pytest
 
 import backend.db as db
+from backend.db.config import EMBEDDING_MODEL
 from backend.db.datasets import resolve
 from backend.db.loghub import status
 from backend.db.templates import matched_templates, templates_status
@@ -35,6 +36,37 @@ def loaded():
     if not state.get("exists") or not state.get("rows"):
         pytest.skip("BGL is not loaded")
     return state
+
+
+EMBEDDING_SECRET = "local_ai"
+
+
+@pytest.fixture(scope="module")
+def embedding_secret():
+    """Skip the cases that call ``ai_embed`` when SereneDB has no ``local_ai`` secret.
+
+    Search is lexical (BM25) by default, so the secret only exists for the opt-in
+    template embeddings. ``ai_embed`` looks the secret up before it sends anything,
+    so a NULL text makes this a metadata check that costs no request. Only the
+    "secret not found" error skips; any other failure propagates rather than being
+    read as a missing secret.
+    """
+    import psycopg2
+
+    from backend.db.probe import probe_cursor
+
+    try:
+        with probe_cursor() as cur:
+            cur.execute(
+                "SELECT ai_embed(NULL, %s, %s)", [EMBEDDING_MODEL, EMBEDDING_SECRET]
+            )
+    except psycopg2.Error as exc:
+        if f"secret '{EMBEDDING_SECRET}' not found" in str(exc):
+            pytest.skip(
+                f"SereneDB secret '{EMBEDDING_SECRET}' is not configured "
+                "(needed for ai_embed)"
+            )
+        raise
 
 
 # Every line of the published BGL log. Asserted exactly, because a loader that
@@ -113,7 +145,7 @@ def test_lexical_search_finds_an_exact_phrase(loaded):
     assert any("parity" in str(r["message"]).lower() for r in rows)
 
 
-def test_semantic_search_finds_what_shares_no_words(loaded):
+def test_semantic_search_finds_what_shares_no_words(loaded, embedding_secret):
     """'memory hardware fault' matches kernel/DDR failures by meaning."""
     if not templates_status("bgl").get("exists"):
         pytest.skip("BGL template embeddings not built")
@@ -151,7 +183,7 @@ def test_templates_collapse_the_corpus(loaded):
     assert state["rows_covered"] / state["templates"] > 100
 
 
-def test_matched_templates_carry_their_row_counts(loaded):
+def test_matched_templates_carry_their_row_counts(loaded, embedding_secret):
     if not templates_status("bgl").get("exists"):
         pytest.skip("BGL template embeddings not built")
 

@@ -49,6 +49,10 @@ def progress_line(op: dict[str, Any]) -> str | None:
         # over up to 1,624 chunks in one call); the message says which pass it is
         # on and what it decided, so it is shown instead of the operation name.
         return f"  → {op.get('message') or action}"
+    if status == "skill":
+        # Which skill the investigation uses: the injected role playbook, or a
+        # skill the agent read itself. The message carries the label.
+        return f"📖 {op.get('message') or action}"
     if status == "skipped":
         # A refusal, not a failure: the query was never run because it was
         # unbounded or unsupported as asked, and it came back with a suggestion.

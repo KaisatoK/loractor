@@ -15,6 +15,8 @@ from langchain.messages import AIMessage, ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 from langgraph.types import Command
 
+from backend.pipeline.skill_progress import read_skill_event, skill_read_by
+
 logger = logging.getLogger(__name__)
 
 MAX_MODEL_RETRIES = int(os.getenv("MODEL_MAX_RETRIES", "3"))
@@ -96,6 +98,27 @@ def log_tool_calls(
     tool_call = request.tool_call
     logger.info("tool call: %s args=%s", tool_call["name"], tool_call.get("args"))
     return handler(request)
+
+
+@wrap_tool_call
+def report_skill_reads(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage | Command],
+) -> ToolMessage | Command:
+    """Tell the progress panel when the agent reads a skill.
+
+    Reported after the read, and only when it did not fail, so the panel never
+    claims a skill that was not opened. Sits inside ``handle_tool_errors``: a
+    raised error passes through here unreported.
+    """
+    result = handler(request)
+    skill = skill_read_by(request.tool_call)
+    if skill is not None and getattr(result, "status", None) != "error":
+        try:
+            request.runtime.stream_writer(read_skill_event(skill))
+        except Exception:  # noqa: BLE001 - progress must never fail the tool call
+            logger.debug("could not report skill read: %s", skill, exc_info=True)
+    return result
 
 
 @wrap_tool_call

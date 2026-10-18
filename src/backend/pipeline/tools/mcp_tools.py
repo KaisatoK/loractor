@@ -11,6 +11,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic_core import to_jsonable_python
 
+from backend.mcp_server.config import MCP_SWEEP_TIMEOUT_S
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
 from backend.pipeline.tools.specs import ToolSpec, agent_specs
@@ -26,13 +27,22 @@ def _call(runtime: ToolRuntime, spec: ToolSpec, args: dict) -> dict:
     """
     arguments = to_jsonable_python(args)
 
-    def invoke():
-        return get_mcp_bridge().call_tool(spec.name, arguments)
+    # A spec with no timeout is unbounded on the server (the sweep), so the bridge
+    # must not cut it off at the short default. Other tools pass no timeout.
+    options = {"timeout": MCP_SWEEP_TIMEOUT_S} if spec.timeout is None else {}
 
+    def invoke(reporter=None):
+        extra = {"progress": reporter} if reporter is not None else {}
+        return get_mcp_bridge().call_tool(spec.name, arguments, **options, **extra)
+
+    # A tool that reports from inside its call (the sweep) gets the same reporter
+    # as on the local transport, fed by the server's progress notifications, so
+    # the UI shows its stages under TOOLS_TRANSPORT=mcp too.
     return execute_database_tool(
         runtime=runtime,
         operation=spec.operation(args),
         function=invoke,
+        with_reporter=spec.reports_progress,
         kind=spec.kind,
         dataset=spec.dataset_of(args),
         limit=spec.limit_of(args),

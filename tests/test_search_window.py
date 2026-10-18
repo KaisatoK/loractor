@@ -261,7 +261,7 @@ def test_the_tool_passes_the_window_and_reports_total_matches(monkeypatch, trans
         from backend.mcp_server.tools import call_spec
 
         class _Bridge:
-            def call_tool(self, name, arguments):
+            def call_tool(self, name, arguments, **options):
                 assert name == "search_logs_tool"
                 return call_spec(specs.BY_NAME[name], arguments)
 

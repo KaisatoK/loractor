@@ -26,7 +26,7 @@ envelope as ``query_stats``, and a refused query yields the refusal payload
 (``status: "refused"``, ``reason``, ``suggestion``) instead of an envelope, so
 the agent narrows and retries rather than seeing an error.
 
-Future tools (nearby events, team counts, trends, hypothesis tests) must return
+Every new tool must return
 this shape; ``collect_tool_results`` tolerates legacy envelopes by filling
 missing fields with ``None`` (inferring only ``kind`` from known tool names), and
 the answer reports those fields as unknown rather than guessing.
@@ -51,7 +51,7 @@ from backend.pipeline.tools.specs import SPECS
 # ``lookup``    one record by key
 # ``catalog``   discovery: a field's known values, or each dataset's rows/span/levels
 # ``derived``   computed in code from measured counts (the priority ranking)
-# ``test``      a deterministic hypothesis test (planned; see AGENTS.md)
+# ``test``      reserved; no tool returns it (the hypothesis-test tools were dropped)
 RESULT_KINDS = (
     "search", "context", "aggregate", "trend", "lookup", "catalog", "derived", "test"
 )

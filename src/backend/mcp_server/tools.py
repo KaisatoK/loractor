@@ -8,17 +8,24 @@ descriptions reach the client) and whose result is the shared envelope.
 
 from __future__ import annotations
 
+import itertools
+import logging
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 import anyio
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
+from fastmcp.server.dependencies import get_context
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
 from pydantic import Field, ValidationError
 
+from backend.mcp_server import config
 from backend.mcp_server.app import mcp
 from backend.mcp_server.errors import to_tool_error
+from backend.mcp_server.limits import enforce_limits
 from backend.mcp_server.skills import list_skill_infos, read_skill_text
 from backend.pipeline.tools.envelope import ToolEnvelope, run_enveloped
 from backend.pipeline.tools.specs import ToolSpec, server_specs
@@ -82,17 +89,25 @@ def output_schema() -> dict[str, Any]:
     return schema
 
 
-def call_spec(spec: ToolSpec, arguments: dict[str, Any]) -> dict[str, Any]:
+def call_spec(
+    spec: ToolSpec,
+    arguments: dict[str, Any],
+    progress: Callable[..., None] | None = None,
+) -> dict[str, Any]:
     """Validate and run one call, returning the result envelope (or a refusal).
 
     Bad arguments and real failures become a ``ToolError`` that says what to fix;
-    a refused query is not a failure and comes back as a result.
+    a refused query is not a failure and comes back as a result. ``progress`` is
+    handed to a tool that reports from inside its call (the sweep).
     """
     args = validate_arguments(spec, arguments)
+
+    def run() -> Any:
+        enforce_limits(spec, args)
+        return spec.run(args, progress)
+
     try:
-        return run_enveloped(
-            function=lambda: spec.run(args, None), **spec.envelope_kwargs(args)
-        )
+        return run_enveloped(function=run, **spec.envelope_kwargs(args))
     except Exception as error:
         raise to_tool_error(spec.name, error) from error
 
@@ -110,6 +125,34 @@ def annotations_for(spec: ToolSpec) -> ToolAnnotations:
     )
 
 
+logger = logging.getLogger(__name__)
+
+SWEEP_TAG = "sweep"
+
+
+def progress_reporter(ctx: Context) -> Callable[..., None]:
+    """A reporter a worker thread can call to notify the client.
+
+    Each stage becomes an MCP progress notification: a rising counter and the
+    stage's message, which already carries its numbers. (The protocol's logging
+    capability is deprecated in this FastMCP, so ``ctx.info`` is not used.) A
+    failed notification (the client went away) is logged and dropped: the sweep
+    must finish and clean up after itself either way.
+    """
+    counter = itertools.count(1)
+
+    def report(message: str, *, stage: str | None = None, detail: dict | None = None):
+        text = f"[{stage}] {message}" if stage else message
+        try:
+            anyio.from_thread.run(
+                partial(ctx.report_progress, next(counter), None, text)
+            )
+        except Exception:  # noqa: BLE001 - never let a notification stop a sweep
+            logger.debug("progress notification failed", exc_info=True)
+
+    return report
+
+
 class SpecTool(Tool):
     """A server tool backed by a :class:`ToolSpec`."""
 
@@ -125,19 +168,26 @@ class SpecTool(Tool):
             output_schema=output_schema(),
             annotations=annotations_for(spec),
             timeout=spec.timeout,
+            tags={SWEEP_TAG} if spec.sweep else set(),
             spec=spec,
         )
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         # The query layer is blocking (psycopg2), so it runs on a worker thread.
+        progress = progress_reporter(get_context()) if self.spec.reports_progress else None
         envelope = await anyio.to_thread.run_sync(
-            partial(call_spec, self.spec, arguments)
+            partial(call_spec, self.spec, arguments, progress)
         )
         return ToolResult(structured_content=envelope)
 
 
 for _spec in server_specs():
     mcp.add_tool(SpecTool.from_spec(_spec))
+
+if not config.MCP_ENABLE_SWEEP:
+    # The sweep builds and drops an index on disk and runs for minutes: an operator
+    # can keep external agents off it entirely (MCP_ENABLE_SWEEP=false).
+    mcp.disable(tags={SWEEP_TAG})
 
 
 @mcp.tool(

@@ -315,7 +315,7 @@ def test_the_mcp_transport_carries_the_same_tool(monkeypatch):
     sent: dict = {}
 
     class Bridge:
-        def call_tool(self, name, arguments):
+        def call_tool(self, name, arguments, **options):
             sent.update(name=name, arguments=arguments)
             return call_spec(specs.BY_NAME[name], arguments)
 

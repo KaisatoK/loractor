@@ -1,8 +1,11 @@
 # Tool requests (hand-off)
 
 Tools the evidence agent needs to cover the brief (`Making Sense of Logs - The
-Right Insights for the Right People.pdf`). What remains below are the hypothesis
-tests T8-T12. Written against the current data layer: corpora are
+Right Insights for the Right People.pdf`). T1-T7 and T13 are built and in the
+spec table (T13 `rank_priorities_tool` as a server-only entry, `pipeline=False`);
+T8-T12 (request trace and the four hypothesis tests) were dropped on 2026-10-18
+and will not be built (see "Dropped" below). Nothing is pending. Written against
+the current data layer: corpora are
 registered in `backend/db/datasets.py` (`openstack`, `bgl`, `otel_s3`,
 `otel_slice`), every tool takes a `dataset` id (never a table name), and rows use
 the canonical fields (`ts`, `severity`, `service`, `entity_id`, `message`,
@@ -41,32 +44,26 @@ tools exist (see AGENTS.md, "Integrating new tools and tables").
 - **Tests:** offline tests of the query built (SQL and parameters), plus at least one
   live check against a seeded SereneDB.
 
-## For hypothesis tests (phase 2)
+## Dropped (2026-10-18)
 
-Each returns raw numbers only. Our code decides `supported / contradicted /
-inconclusive` from explicit thresholds, so the tools must not return a verdict.
+T8-T12 are not requested any more. Do not build them, and do not add placeholder
+specs for them.
 
-Common rules for T8-T12:
+| # | Tool | What covers the need instead |
+| --- | --- | --- |
+| T8 | `get_request_trace_tool` | `get_nearby_events_tool(same_request=true)` (OpenStack only; at most 50 lines either side of the anchor, plus the exact request-context summary) |
+| T9 | `test_temporal_precedence_tool` | nearby events around the hit; any precedence claim stays a labelled hypothesis |
+| T10 | `test_counterexample_tool` | the `log-investigation` skill's counterexample query, run with the existing search and count tools |
+| T11 | `test_control_group_tool` | `compare_periods_tool` over two measured windows |
+| T12 | `test_recurrence_tool` | `get_trend_tool` and the isolated-or-recurring count in the engineer playbook |
 
-- **Datasets:** the local corpora only (`openstack`, `bgl`; `datasets.local_datasets()`).
-  Refuse the remote tiers with a suggestion, as `count_by_team_tool` does.
-- **Window:** `start_time`/`end_time` (`'YYYY-MM-DD HH:MM:SS'`, UTC, end
-  exclusive), required for T9-T12 so every number has a stated scope; validate
-  end after start.
-- **Matching an event:** each side is a `match` object, exactly one of
-  `{"query_text": ...}` (the same BM25 matching as `search_logs_tool`) or
-  `{"template": ...}` (an exact `template` value, as found with `get_data_tool`),
-  optionally with `category` (severity, checked against the dataset's
-  `severity_values` like the other tools). One shared argument model in
-  `tools/schemas.py`.
-- **Kind** `test` (T9-T12) or `context` (T8). Numbers come from SQL over every
-  matching row, never from returned rows; example ids are capped and say so.
-- **No verdict** in the output; `pipeline/hypothesis_tests.py` decides.
+Consequences: no tool returns kind `test` (the kind stays in the envelope's
+vocabulary but is unused), there is no `pipeline/hypothesis_tests.py`, and
+hypothesis `status` stays the evidence agent's judgement over the existing
+evidence items rather than a verdict computed from test numbers.
 
-| # | Tool | Inputs | Output |
-| --- | --- | --- | --- |
-| T8 | `get_request_trace_tool` (kind `context`) | `dataset` (only datasets that declare `request_id`; today `openstack`, others refused with `unsupported_field`), `request_id` (`req-<uuid>`), `limit` (default 100, max 500) | every row with that `request_id`, ordered by `record_id`: the canonical fields plus `seconds_from_first`; `total_matches`, first/last `ts`, distinct `service` count. Differs from `get_nearby_events_tool(same_request=true)`, which returns at most 50 lines either side of one anchor. |
-| T9 | `test_temporal_precedence_tool` | `dataset`, `a` (match), `b` (match), `within_seconds` (1-3600), window | `b_total`; `b_preceded_by_a` (B rows with at least one A row in the preceding `within_seconds`, same dataset); `baseline_windows` and `baseline_with_a` (the same check at random anchor times in the window, fixed seed so a rerun gives the same numbers); `example_record_ids` (up to 5 B rows preceded by A) |
-| T10 | `test_counterexample_tool` | same as T9 | `b_total`; `b_without_a`; up to 5 `record_id`s of B rows with no A in the preceding `within_seconds` |
-| T11 | `test_control_group_tool` | `dataset`, `match`, `case_start`/`case_end` and `control_start`/`control_end` (two windows chosen by the agent from measured data -- trend, period comparison -- never hard-coded; they may not overlap) | per group (`case`, `control`): `matches`, `total_rows`, `rate_per_1k`. Groups are time windows because a corpus is one table (the three OpenStack runs share one; nothing records which run a row came from). |
-| T12 | `test_recurrence_tool` | `dataset`, `match`, window, `bucket` (as `get_trend_tool`; omitted = chosen from the window) | `buckets_total`, `buckets_with_match`, `longest_gap_seconds`, `distinct_entities` (`entity_id`: process on OpenStack, node on BGL), `distinct_services`, `distinct_requests` (`null` where the dataset has no `request_id`) |
+## For the MCP server (see `docs/mcp_server_plan.md`)
+
+| # | Tool | Inputs | Output rows | Notes |
+| --- | --- | --- | --- | --- |
+| T13 | `rank_priorities_tool` (kind `derived`, offered on the MCP server only -- the pipeline adds its own ranking in `answer_node`) | `datasets`, `group_by` (`template`, `service` or `team`), `baseline_start/end`, `recent_start/end` | the ranked rows, the formula, the terms used and the executed queries, in the standard envelope | Runs the counts and the period comparison through the same DB functions as `count_by_category_tool` / `count_by_team_tool` / `compare_periods_tool` and scores them with `priority.compute_priorities` and `playbooks.team_for`: no second scoring or SQL path. Never accepts numbers from the caller, so an external agent cannot rank by anything but measured counts. |

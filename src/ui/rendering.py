@@ -7,6 +7,8 @@ import re
 
 import pandas as pd
 
+from ui.timeline_graph import timeline_dot
+
 # Canonical marker is [[RESULT:R1]], but models sometimes emit variants such as
 # [RESULT:R1], 【RESULT:R1】, ［RESULT:R1］, or 【R1】 with CJK/fullwidth brackets.
 # Accept all of them so a table still renders and no raw marker leaks into the UI.
@@ -98,6 +100,11 @@ def render_answer(container, text: str, results: list | None) -> None:
             width="stretch",
             hide_index=True,
         )
+        # The engineer's timeline also gets its before -> anchor -> after chain,
+        # drawn from the same record; the table above stays the source of truth.
+        dot = timeline_dot(by_id[value])
+        if dot is not None:
+            container.graphviz_chart(dot)
 
     # Trace before cost: how the data was reached, then how much it cost.
     render_sweep_trace(container, results)

@@ -210,3 +210,18 @@ def test_failures_become_actionable_messages_without_leaking_details(
     text = result.content[0].text
     assert must_say in text and must_not_say not in text
     assert "get_data_tool" in text
+
+
+def test_the_server_advertises_the_repository_as_its_website():
+    import asyncio
+
+    from fastmcp import Client
+
+    from backend.mcp_server import server
+    from backend.mcp_server.app import WEBSITE_URL
+
+    async def go():
+        async with Client(server.mcp) as client:
+            return client.server_info.website_url
+
+    assert asyncio.run(go()) == WEBSITE_URL == "https://github.com/KaisatoK/ai-chatbot-test"
