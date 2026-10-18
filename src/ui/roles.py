@@ -10,16 +10,16 @@ ROLES = [
     {
         "id": "engineer",
         "title": "Engineer",
-        "description": "Debug code, review designs, and work through technical problems.",
+        "description": "Investigate a specific error and what to check next.",
     },
     {
         "id": "team_lead",
         "title": "Team Lead",
-        "description": "Plan sprints, unblock your team, and prepare 1:1s.",
+        "description": "See which problems recur and which teams are involved.",
     },
     {
         "id": "manager",
         "title": "Manager",
-        "description": "Summarize progress, draft updates, and weigh decisions.",
+        "description": "Rank problems by measured impact and decide what to act on.",
     },
 ]

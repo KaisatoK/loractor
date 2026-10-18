@@ -18,6 +18,16 @@
   font-family: var(--chat-font);
 }
 
+/* The new-chat screen is a single viewport: nothing here scrolls. This
+   stylesheet is only injected by new_chat(), so chat pages keep scrolling. */
+html,
+body,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+section.main {
+  overflow: hidden;
+}
+
 #MainMenu,
 footer,
 [data-testid="stDecoration"],
