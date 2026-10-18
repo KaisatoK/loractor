@@ -400,9 +400,12 @@ what was searched" rather than "not present".
 - [uv](https://docs.astral.sh/uv/)
 - A SereneDB instance on `localhost:7890` (default credentials
   `postgres`/`postgres`, database `postgres`)
-- An Ollama server reachable at `host.docker.internal:11434` serving
-  `nomic-embed-text:v1.5` -- only for the optional template embeddings;
-  `bash ./setup.sh` loads with `--no-embed` and needs no embedding model
+- An embedding service the **database** can reach -- only for the optional
+  template embeddings; `bash ./setup.sh` loads with `--no-embed` and needs no
+  embedding model. `ai_embed` runs inside SereneDB and resolves its endpoint
+  and credentials from the server-side secret the calls name (`local_ai`), so
+  the host's own reachability is irrelevant and `MODEL_BASE_URL` does not
+  change where embeddings come from. See **Changing the embedding model**.
 - The raw loghub logs in `src/backend/data/` (gitignored): the three OpenStack
   nova runs `openstack_normal1.log`, `openstack_normal2.log`,
   `openstack_abnormal.log`, and `BGL.log` (743 MB; `BGL_LOG_PATH` may point
@@ -641,8 +644,32 @@ bash ./setup.sh bgl_2k               # src/backend/data/BGL_2k.log_structured.cs
 bash ./setup.sh --embed openstack    # also build template embeddings
 ```
 
-`--embed` builds template-level embeddings, which needs the Ollama embedding
-model from Prerequisites.
+`--embed` builds template-level embeddings, which needs the embedding service
+from Prerequisites.
+
+### Changing the embedding model
+
+`EMBEDDING_MODEL` and `EMBEDDING_DIMENSION` must agree with each other and with
+what the database's endpoint really returns, and a change invalidates the
+vectors already stored. Three things break silently or obscurely otherwise, so
+`backend.db.templates.embedding_compatibility(dataset)` checks all three and
+`build_templates` refuses rather than spending the build:
+
+| Failure | How it shows | Fix |
+| --- | --- | --- |
+| The database cannot embed | `ai_embed: secret 'local_ai' not found` -- a recreated container loses its secrets | create the server-side secret, pointing it at a provider serving the model |
+| Width mismatch | the table stores `FLOAT[EMBEDDING_DIMENSION]` and the call casts to it, so a wider vector is **truncated**, not refused | set `EMBEDDING_DIMENSION` to what the probe reports, or ask the endpoint for a smaller `output_dimensionality` |
+| Vectors from another model | nothing: the table looks healthy and every distance is meaningless | rebuild (`build_templates(dataset, rebuild=True)`) |
+
+Native widths differ by model -- `nomic-embed-text:v1.5` is 768,
+`gemini-embedding-2` is **3072** unless the endpoint is asked for a smaller
+output -- so the dimension is configurable rather than fixed. The model a
+table's vectors came from is recorded at build time (`template_embedding_meta`)
+because SereneDB cannot report it; `templates_status()` shows it as `model` with
+`model_matches_config`. A recorded mismatch makes search fall back to lexical
+BM25 instead of ranking on noise, and a table built before the model was
+recorded reports `model: null` -- unattributable rather than proven wrong, so it
+keeps working until it is rebuilt.
 
 ### Team ownership (fictional)
 
@@ -743,6 +770,7 @@ confidence tests below are skipped unless enabled.
 | `test_rank_priorities.py` | the server-only `rank_priorities_tool`: arguments (non-overlapping windows, local-only team), per-dataset scoring with synthetic rows, and the envelope through the in-memory client |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
+| `test_embedding_compatibility.py` | the embedding model check: missing secret, width mismatch, vectors from another model, the build refusal and the lexical fallback |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
 | `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
 | `test_sampling_and_external.py` / `test_promotion.py` | cluster-sample uncertainty, in-place index plans, promote/digest/teardown |

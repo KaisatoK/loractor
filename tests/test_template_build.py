@@ -71,6 +71,13 @@ class StubCursor:
         self.rowcount = 0
         self._result = []
 
+        if templates.EMBEDDING_META_TABLE in text:
+            # The build also records which model produced the vectors. That is
+            # a separate one-row table, not the template table this stub
+            # models, and its INSERT must not be mistaken for a template
+            # insert (it was, and doubled the row count).
+            return
+
         if "information_schema.tables" in text:
             self._result = [{"n": 1}]
         elif "FROM _pending" in text and "count(*)" in text:
@@ -132,6 +139,20 @@ def stub(monkeypatch):
     def install(cursor):
         monkeypatch.setattr(
             templates, "_embed_cursor", lambda: StubContext(cursor)
+        )
+        # These tests drive the embedding loop, not the model-compatibility gate
+        # that now runs before it (``tests/test_embedding_compatibility.py``
+        # covers that). The stub cursor implements the build's statements, not
+        # the live ``ai_embed`` probe, so the gate is told the model is usable.
+        monkeypatch.setattr(
+            templates, "embedding_compatibility",
+            lambda ds: {
+                "dataset": getattr(ds, "id", ds),
+                "model": templates.EMBEDDING_MODEL,
+                "declared_dimension": templates.EMBEDDING_DIMENSION,
+                "actual_dimension": templates.EMBEDDING_DIMENSION,
+                "can_embed": True, "stored": None, "ok": True, "problems": [],
+            },
         )
         templates.clear_vector_cache()
         return cursor

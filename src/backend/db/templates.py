@@ -96,6 +96,151 @@ def _embed_cursor():
     return probe_cursor()
 
 
+# One row per dataset: which model produced the stored vectors, and how wide
+# they are. Without it a model change is invisible -- the vectors look fine and
+# the distances are meaningless.
+EMBEDDING_META_TABLE = "template_embedding_meta"
+
+# Text the probe embeds to measure a model's real output width. Short on
+# purpose: it costs one call.
+_PROBE_TEXT = "a log line"
+
+
+def _ensure_meta(cur) -> None:
+    cur.execute(
+        sql.SQL("""
+            CREATE TABLE IF NOT EXISTS {t} (
+                dataset VARCHAR,
+                model VARCHAR,
+                dimension BIGINT,
+                built_at VARCHAR
+            )
+        """).format(t=sql.Identifier(EMBEDDING_META_TABLE))
+    )
+
+
+def _record_embedding_model(cur, dataset_id: str) -> None:
+    """Record the model and width the stored vectors were built with."""
+    _ensure_meta(cur)
+    cur.execute(
+        sql.SQL("DELETE FROM {t} WHERE dataset = %s").format(
+            t=sql.Identifier(EMBEDDING_META_TABLE)
+        ),
+        (dataset_id,),
+    )
+    cur.execute(
+        sql.SQL("INSERT INTO {t} (dataset, model, dimension, built_at) "
+                "VALUES (%s, %s, %s, %s)").format(
+            t=sql.Identifier(EMBEDDING_META_TABLE)
+        ),
+        (
+            dataset_id,
+            EMBEDDING_MODEL,
+            EMBEDDING_DIMENSION,
+            time.strftime("%Y-%m-%d %H:%M:%S+00", time.gmtime()),
+        ),
+    )
+
+
+def stored_embedding_model(cur, dataset_id: str) -> dict | None:
+    """The model the stored vectors were built with, or ``None`` if unrecorded.
+
+    ``None`` is the honest answer for a table built before the model was
+    recorded: the vectors may have come from any model, so nothing can be
+    concluded from them being present.
+    """
+    try:
+        cur.execute(
+            sql.SQL("SELECT model, dimension, built_at FROM {t} "
+                    "WHERE dataset = %s LIMIT 1").format(
+                t=sql.Identifier(EMBEDDING_META_TABLE)
+            ),
+            (dataset_id,),
+        )
+        row = cur.fetchone()
+    except Exception:  # noqa: BLE001 -- no record is an answer, not an error
+        return None
+    return dict(row) if row else None
+
+
+def probe_embedding_dimension(cur) -> int:
+    """Embed one short string and return how many dimensions came back.
+
+    This is the only way to know what the configured model really produces:
+    ``ai_embed`` resolves its endpoint from the server-side secret, so the
+    model name in Python says nothing about what the database will return.
+    """
+    cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
+    cur.execute(
+        sql.SQL("SELECT ai_embed(%s, {model}, 'local_ai') AS emb").format(
+            model=sql.Literal(EMBEDDING_MODEL)
+        ),
+        (_PROBE_TEXT,),
+    )
+    return len(cur.fetchone()["emb"])
+
+
+def embedding_compatibility(dataset: Dataset | str) -> dict:
+    """Whether the configured embedding model can be used for this dataset.
+
+    Checks the three ways a model change breaks template embeddings, each of
+    which is otherwise silent or obscure:
+
+    * the database cannot embed at all -- usually the server-side secret is
+      missing, which it is after the container is recreated;
+    * the model returns a different width than the table stores, which the
+      cast would truncate rather than reject;
+    * the stored vectors came from a different model, which makes every
+      distance against a new query vector meaningless.
+    """
+    ds = resolve(dataset) if isinstance(dataset, str) else dataset
+    report: dict = {
+        "dataset": ds.id,
+        "model": EMBEDDING_MODEL,
+        "declared_dimension": EMBEDDING_DIMENSION,
+        "actual_dimension": None,
+        "can_embed": False,
+        "stored": None,
+        "ok": False,
+        "problems": [],
+    }
+    with _embed_cursor() as cur:
+        try:
+            report["actual_dimension"] = probe_embedding_dimension(cur)
+            report["can_embed"] = True
+        except Exception as error:  # noqa: BLE001 -- reported, not raised
+            detail = str(error).strip().splitlines()[0]
+            report["problems"].append(
+                f"the database cannot embed with '{EMBEDDING_MODEL}': {detail}"
+            )
+            if "secret" in detail.lower():
+                report["problems"].append(
+                    "create the server-side secret the ai_embed calls name "
+                    "('local_ai') so it points at a provider serving this "
+                    "model; a recreated container loses its secrets"
+                )
+        report["stored"] = stored_embedding_model(cur, ds.id)
+
+    actual = report["actual_dimension"]
+    if actual is not None and actual != EMBEDDING_DIMENSION:
+        report["problems"].append(
+            f"'{EMBEDDING_MODEL}' returns {actual} dimensions but the table "
+            f"stores {EMBEDDING_DIMENSION}; set EMBEDDING_DIMENSION={actual} "
+            "and rebuild, or ask the endpoint for a smaller output width"
+        )
+
+    stored = report["stored"]
+    if stored and stored.get("model") != EMBEDDING_MODEL:
+        report["problems"].append(
+            f"the stored vectors were built with '{stored['model']}' and the "
+            f"configured model is '{EMBEDDING_MODEL}'; distances between the "
+            "two are meaningless, so rebuild with rebuild=True"
+        )
+
+    report["ok"] = report["can_embed"] and not report["problems"]
+    return report
+
+
 def _unembedded(cur, table: str) -> int:
     """Templates still awaiting an embedding.
 
@@ -127,6 +272,29 @@ def build_templates(
     source = ds.scan_relation()
 
     report: dict = {"dataset": ds.id, "table": table}
+
+    # Checked before anything is built, because each failure mode is otherwise
+    # expensive or silent: a missing secret fails on the first batch, a width
+    # mismatch is truncated by the cast, and filling only the NULL embeddings
+    # with a different model leaves one table holding two models' vectors,
+    # whose distances mean nothing. A rebuild drops the table, so mixing cannot
+    # happen and only the live checks apply.
+    compatibility = embedding_compatibility(ds)
+    report["compatibility"] = compatibility
+    blocking = [
+        problem for problem in compatibility["problems"]
+        if not (rebuild and "stored vectors were built with" in problem)
+    ]
+    if blocking:
+        raise refuse(
+            f"The configured embedding model cannot build {ds.id} templates.",
+            " Also: ".join(blocking),
+            code="embedding_incompatible",
+            model=compatibility["model"],
+            declared_dimension=compatibility["declared_dimension"],
+            actual_dimension=compatibility["actual_dimension"],
+            stored=compatibility["stored"],
+        )
 
     with _embed_cursor() as cur:
         cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
@@ -297,6 +465,10 @@ def build_templates(
         )
         report["bytes"] = int(cur.fetchone()["b"])
 
+        # Which model these vectors came from, so a later model change is
+        # detectable instead of silently producing meaningless distances.
+        _record_embedding_model(cur, ds.id)
+
     set_vector_cache(ds.id, bool(report.get("distinct_templates")))
     logger.info("Template embeddings built: %s", report)
     return report
@@ -343,6 +515,7 @@ def templates_status(dataset: Dataset | str) -> dict:
             """).format(t=sql.Identifier(table))
         )
         row = cur.fetchone()
+        stored = stored_embedding_model(cur, ds.id)
 
     return {
         "exists": True,
@@ -352,6 +525,15 @@ def templates_status(dataset: Dataset | str) -> dict:
         "embedded": int(row["embedded"] or 0),
         "rows_covered": int(row["rows_covered"] or 0),
         "complete": int(row["embedded"] or 0) == int(row["templates"]),
+        # What produced the vectors, and whether that is still what is
+        # configured. ``None`` means the table predates model recording, so the
+        # vectors cannot be attributed to any model.
+        "model": (stored or {}).get("model"),
+        "dimension": (stored or {}).get("dimension"),
+        "model_matches_config": (
+            None if stored is None else stored.get("model") == EMBEDDING_MODEL
+        ),
+        "configured_model": EMBEDDING_MODEL,
     }
 
 
@@ -388,6 +570,23 @@ def has_template_vectors(dataset: Dataset | str) -> bool:
     try:
         status = templates_status(ds)
         available = bool(status.get("exists") and status.get("embedded"))
+        # Vectors from a different model than the one that will embed the query
+        # are worse than no vectors: every distance is meaningless, and the
+        # search would rank confidently on noise. Searching lexically instead
+        # is the honest degradation.
+        if available and status.get("model_matches_config") is False:
+            logger.warning(
+                "%s template vectors were built with '%s' but '%s' is "
+                "configured; searching lexically until they are rebuilt",
+                ds.id, status.get("model"), status.get("configured_model"),
+            )
+            available = False
+        elif available and status.get("model_matches_config") is None:
+            # Built before the model was recorded, so it cannot be attributed.
+            logger.info(
+                "%s template vectors predate model recording; rebuild to "
+                "confirm they match '%s'", ds.id, status.get("configured_model"),
+            )
     except Exception:  # noqa: BLE001 - absence must never break search
         logger.debug("Template status unavailable for %s", ds.id, exc_info=True)
         available = False

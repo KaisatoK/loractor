@@ -52,9 +52,24 @@ SERENEDB_SESSION_MEMORY_LIMIT = os.getenv("SERENEDB_SESSION_MEMORY_LIMIT", "512M
 # CPU to another tenant, never as a memory measure.
 SERENEDB_BUILD_THREADS = int(os.getenv("SERENEDB_BUILD_THREADS", "16"))
 
-MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "http://host.docker.internal:11434")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text:v1.5")
-EMBEDDING_DIMENSION = 768
+# Where the *host* would reach an embedding service. Nothing in the query path
+# uses it: ``ai_embed`` runs inside SereneDB and resolves its endpoint and
+# credentials from the server-side secret named in the call (``local_ai``), so
+# changing this does not change where embeddings are fetched from. Create or
+# replace that secret to point the database at a different provider.
+MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://ai.google.dev/api/rest")
+
+# The embedding model named in every ``ai_embed`` call, and the width its
+# vectors are stored at. The two must agree with what the endpoint actually
+# returns: the template table declares ``FLOAT[EMBEDDING_DIMENSION]`` and the
+# call casts to it, so a model whose native output is wider would be truncated
+# rather than rejected. Native widths differ by model -- nomic-embed-text:v1.5
+# is 768, gemini-embedding-2 is 3072 unless the endpoint is asked for a smaller
+# ``output_dimensionality`` -- so the dimension is configurable alongside the
+# model and verified against a live probe before a build
+# (``templates.embedding_compatibility``).
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "768"))
 
 # --- Team ownership ----------------------------------------------------------
 # A small FICTIONAL mapping (dataset, component, team) so team-lead and manager
