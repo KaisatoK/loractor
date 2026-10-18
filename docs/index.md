@@ -19,12 +19,18 @@ At its core, loractor is a role-aware log-investigation assistant. A Streamlit U
 
 ## Screenshot
 
-![The start page](assets/ui-start-page.png)
+### Welcome Page
 
-![The running chat](assets/ui-progress.png)
+![The welcome page](assets/ui-start-page.png)
+### Auto Complete
+
+![The auto complete](assets/ui-auto-complete.png)
+### Chat In Progress
+
+![The chat in progress](assets/ui-progress.png)
+### Chat Result
 
 ![The chat result](assets/ui-chat-result.png)
-
 
 ## The docs
 
