@@ -11,11 +11,11 @@ from backend.mcp_server.instructions import build_instructions
 from backend.mcp_server.operations import middleware, server_lifespan
 
 try:
-    SERVER_VERSION = version("ai-chatbot-test")
+    SERVER_VERSION = version("loractor")
 except PackageNotFoundError:  # running from a checkout that was never installed
     SERVER_VERSION = "0"
 
-WEBSITE_URL = "https://github.com/KaisatoK/ai-chatbot-test"
+WEBSITE_URL = "https://github.com/KaisatoK/loractor"
 
 mcp = FastMCP(
     "serenedb-logs",

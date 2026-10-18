@@ -1,4 +1,4 @@
-# ai-chatbot-test
+# loractor
 
 A role-aware **log-investigation chatbot**. Users sign in to a Streamlit UI,
 pick a role, and ask questions; a FastAPI + LangGraph backend investigates
@@ -1190,7 +1190,7 @@ Authorization: Bearer <MCP_AUTH_TOKEN>      # only when MCP_AUTH_TOKEN is set
 
 ```json
 {
-  "name": "ai-chatbot-serenedb",
+  "name": "loractor-serenedb",
   "transport": "streamable-http",
   "url": "http://127.0.0.1:8010/mcp",
   "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
@@ -1206,7 +1206,7 @@ fastmcp.json` can register it):
   "mcpServers": {
     "serenedb-logs": {
       "command": "uv",
-      "args": ["run", "--project", "/path/to/ai-chatbot-test",
+      "args": ["run", "--project", "/path/to/loractor",
                "python", "-m", "backend.mcp_server", "--transport", "stdio"]
     }
   }

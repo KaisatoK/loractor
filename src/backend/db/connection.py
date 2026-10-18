@@ -60,7 +60,7 @@ def _connect_kwargs() -> dict:
         "dbname": SERENEDB_DB,
         "user": SERENEDB_USER,
         "password": SERENEDB_PASSWORD,
-        "application_name": "ai-chatbot",
+        "application_name": "loractor",
         "options": f"-c statement_timeout={SERENEDB_STATEMENT_TIMEOUT_MS}",
     }
 

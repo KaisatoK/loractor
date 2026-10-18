@@ -87,7 +87,7 @@ def _probe_connection_kwargs() -> dict:
         "dbname": SERENEDB_DB,
         "user": SERENEDB_USER,
         "password": SERENEDB_PASSWORD,
-        "application_name": "ai-chatbot-provision",
+        "application_name": "loractor-provision",
         "connect_timeout": 3,
     }
 

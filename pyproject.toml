@@ -1,5 +1,5 @@
 [project]
-name = "ai-chatbot-test"
+name = "loractor"
 version = "0.1.0"
 description = "Role-aware log-investigation chatbot (Streamlit UI + FastAPI/LangGraph backend)."
 readme = "README.md"

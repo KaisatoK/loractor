@@ -58,7 +58,7 @@ def test_the_server_introduces_itself_with_guidance_in_both_protocol_eras():
         instructions, info = _run(read, mode=mode)
         assert instructions == build_instructions()
         assert info.name == "serenedb-logs"
-        assert info.version == version("ai-chatbot-test")
+        assert info.version == version("loractor")
 
 
 def test_the_instructions_are_rendered_from_the_modules_that_own_the_rules():
@@ -278,4 +278,4 @@ def test_the_server_advertises_the_repository_as_its_website():
         async with Client(server.mcp) as client:
             return client.server_info.website_url
 
-    assert asyncio.run(go()) == WEBSITE_URL == "https://github.com/KaisatoK/ai-chatbot-test"
+    assert asyncio.run(go()) == WEBSITE_URL == "https://github.com/KaisatoK/loractor"
