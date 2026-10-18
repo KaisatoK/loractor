@@ -166,7 +166,7 @@ if [ "${#missing_keys[@]}" -gt 0 ]; then
 fi
 
 google_key="$(env_value GOOGLE_API_KEY)"
-want_secret=1
+want_secret=$do_embed
 case "$google_key" in
     ""|"..."|"your-"*|"<"*) want_secret=0 ;;
 esac
