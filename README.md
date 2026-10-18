@@ -396,77 +396,14 @@ budget where the evidence most plausibly is, and then to say precisely where it
 looked and how deeply — so that a negative result is reported as "not found in
 what was searched" rather than "not present".
 
-## Prerequisites
+## Setup and running
 
-`bash ./bootstrap.sh` installs and checks all of this; the list is what it
-needs, and what it will offer to install.
-
-- A Linux host with `curl` and `python3` (the SereneDB installer is Linux-only;
-  elsewhere use `bash ./bootstrap.sh --db docker`)
-- Python 3.14+ and [uv](https://docs.astral.sh/uv/) -- bootstrap installs uv if
-  it is missing, and uv provides the Python
-- A SereneDB instance: bootstrap starts one as a native binary (`serened`, no
-  root) or in Docker, or uses the one `SERENEDB_*` already points at. It speaks
-  the PostgreSQL wire protocol on port 7890 and needs no credentials by
-  default
-- An embedding provider the **database** can reach -- only for the optional
-  template embeddings; `bash ./setup.sh` loads with `--no-embed` and needs no
-  embedding model. `ai_embed` runs inside SereneDB and resolves its endpoint
-  and credentials from the server-side secret the calls name
-  (`EMBEDDING_SECRET`, default `gemini`), so the host's own reachability is
-  irrelevant and `MODEL_BASE_URL` does not change where embeddings come from.
-  See **Changing the embedding model**.
-- The raw loghub logs in `src/backend/data/` (gitignored): the three OpenStack
-  nova runs `openstack_normal1.log`, `openstack_normal2.log`,
-  `openstack_abnormal.log`, and `BGL.log` (743 MB; `BGL_LOG_PATH` may point
-  elsewhere). These are **optional**: bootstrap falls back to the bundled
-  2,000-row loghub samples for whichever corpus is missing, and says so. See
-  Setup.
-- Nothing extra for the remote OTel corpus: it is read from public S3 in place.
-
-## Environment
-
-`.env.example` is the annotated template; `bash ./bootstrap.sh` copies it to
-`.env` and names any key still unset. Create it by hand with `cp .env.example
-.env`, and fill in the keys for the providers in use:
-
-```
-GROQ_API_KEY=...
-DEEPSEEK_API_KEY=...
-GOOGLE_API_KEY=...
-TYPESAFE_API_KEY=...
-
-# Optional ports (defaults: 8000 backend, 8501 UI)
-BACKEND_PORT=8000
-FRONTEND_PORT=8501
-```
-
-Keys and ports are loaded automatically on import via `python-dotenv`; all four
-provider keys are read at import, so they must be present for the backend to
-start. The UI reads `BACKEND_PORT` to reach the backend, so both scripts stay in
-sync.
-
-### Concurrency tuning (optional)
-
-The backend serves many users at once; the defaults below are sized for roughly
-a few dozen concurrent investigations.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MAX_THREADS` | `100` | anyio worker-pool ceiling; bounds in-flight streams |
-| `MAX_GLOBAL_INFLIGHT` | `32` | Server-wide investigations; excess requests get `503` |
-| `MAX_INFLIGHT_PER_USER` | `2` | Per-user investigations; excess get `429` |
-| `SERENEDB_POOL_MIN` / `SERENEDB_POOL_MAX` | `2` / `32` | Shared SereneDB connection pool |
-| `SERENEDB_STATEMENT_TIMEOUT_MS` | `30000` | Server-side per-query timeout |
-| `SERENEDB_HOST` / `SERENEDB_PORT` / `SERENEDB_DB` / `SERENEDB_USER` / `SERENEDB_PASSWORD` | `localhost` / `7890` / `postgres` / `postgres` / `postgres` | SereneDB target (with Docker the host port is the mapped one, see `docker ps`, and can change when the container is recreated) |
-| `TEMPLATE_VECTOR_CACHE_TTL_S` | `60` | Seconds "template vectors available" is cached; a CLI-built embedding table is noticed within this time (`0` re-checks every search) |
-| `CHECKPOINT_BACKEND` | `sqlite` | Graph state store: `sqlite`, `memory`, or `postgres` |
-| `CHECKPOINT_SQLITE_PATH` | `./.data/checkpoints.sqlite` | SQLite checkpoint file |
-| `CHECKPOINT_POSTGRES_URL` | – | Required when `CHECKPOINT_BACKEND=postgres` |
-| `MODEL_MAX_RETRIES` / `MODEL_RETRY_BASE_DELAY` / `MODEL_RETRY_MAX_DELAY` | `3` / `1.0` / `20.0` | Retry/backoff for rate-limit and connection errors |
-| `APP_DB_PATH` | `./.data/app.sqlite` | Users, sessions, chats, and messages |
-| `SESSION_TTL_HOURS` | `168` | Bearer-session lifetime |
-| `AUTH_REGISTRATION_OPEN` | `false` | Allow self-service sign-up via `/auth/register` |
+See **[setup.md](setup.md)** for the whole path from a fresh checkout to a
+running app: host prerequisites, the `.env` template and the provider keys,
+`bash ./bootstrap.sh` (dependencies, SereneDB, the embedding secret, the
+corpora), the environment reference, and the commands that start the app
+(`bash ./backend.sh`, `bash ./frontend.sh`) and the optional MCP server
+(`bash ./mcp_server.sh`).
 
 ## Concurrency
 
@@ -620,122 +557,7 @@ provisioned ahead of time with:
 uv run python -m backend.appdb.manage <username> <password>
 ```
 
-## Setup
-
-```bash
-bash ./bootstrap.sh          # everything: uv, deps, server, secret, corpora
-```
-
-That is the whole setup on a Linux host. It runs eight steps, each of which it
-skips when already done, so **re-running it is the way to recover an instance**
-after a reboot or a recreated container:
-
-| Step | What it does | Skipped when |
-| --- | --- | --- |
-| 1 | installs [uv](https://docs.astral.sh/uv/) | `uv` is on PATH |
-| 2 | `uv sync` | never (it is already incremental) |
-| 3 | creates `.env` from `.env.example` and reports unset keys | `.env` exists |
-| 4 | starts SereneDB and writes `SERENEDB_PORT` to `.env` | a server already answers |
-| 5 | waits for it to answer a *query*, not just accept a socket | – |
-| 6 | holds the memory ceiling, creates the embedding secret | – |
-| 7 | loads the ownership table and the corpora | that corpus is already loaded |
-| 8 | prints the resulting state, including what the model returns | – |
-
-```bash
-bash ./bootstrap.sh --db docker          # SereneDB in Docker (docker-compose.yml)
-bash ./bootstrap.sh --db existing        # use the server SERENEDB_* points at
-bash ./bootstrap.sh --samples            # loghub's 2,000-row samples, not the full corpora
-bash ./bootstrap.sh --datasets openstack # only this corpus
-bash ./bootstrap.sh --skip-data          # set the server up, load nothing
-bash ./bootstrap.sh --embed              # also build template embeddings (spends provider quota)
-bash ./bootstrap.sh --force-reload       # rebuild corpora that are already loaded
-bash ./bootstrap.sh --yes                # never prompt (for CI or a non-interactive shell)
-bash ./bootstrap.sh --no-probe           # skip the single embedding call in step 8
-```
-
-Two steps download and execute a vendor installer -- uv from `astral.sh` and
-SereneDB from `linux.serenedb.com`. Both print the exact command and ask first
-unless `--yes` is given; `--db existing` with uv already installed avoids them
-entirely.
-
-**Step 4 in each mode.** `--db native` installs `serened` (no root; it listens
-on `127.0.0.1:7890` and keeps its data, including persistent secrets, in
-`.data/serenedb`), writes its pid to `.data/serened.pid` and logs to
-`.data/serened.log`. `--db docker` uses `docker-compose.yml`, which **pins the
-host port** to `SERENEDB_PORT` and keeps a named volume, so the port stops
-drifting when the container is recreated and the loaded corpora survive; it
-falls back to `docker run` when `docker compose` is absent, and if the daemon
-refuses the connection it says how to fix it and points at `--db native`.
-
-**What step 6 does, and why it is not optional.** `ai_embed` runs inside
-SereneDB and resolves its endpoint and key from a server-side secret, so no
-host-side setting can replace it. The secret is created `PERSISTENT`, which is
-what makes it survive a restart -- verified by stopping a server and cold-starting
-it on the same data directory, after which `ai_embed` answered with no
-re-creation. The step also lowers the server's global `memory_limit` to the
-budgeted 512 MiB; a freshly started instance reports **5.7 GiB**, the
-configuration that OOM-killed index builds.
-
-The database-side steps are `backend.db.provision`, which is usable on its own:
-
-```bash
-uv run python -m backend.db.provision --wait --memory --secret --report
-uv run python -m backend.db.provision --report --probe-embedding   # one provider call
-uv run python -m backend.db.provision --json                       # the same state as JSON
-```
-
-### Loading corpora on their own
-
-`setup.sh` is step 7 by itself. It loads the ownership table first, then the named corpora through the
-loghub loader (`backend.db.loghub`). By default it passes `--no-embed`; passing
-`--embed` opts into template embeddings. These flags affect **templates only**:
-`--no-embed` does not create template vectors, while `--embed` embeds the
-corpus's distinct log templates. Neither option embeds the content/message of
-each individual log entry; per-log-content embeddings are never created by
-`setup.sh`.
-
-With no datasets named it loads these, in this order:
-
-1. `team_ownership` -- `src/backend/data/team_ownership.csv`, (re)loaded by
-   `setup.sh` before any corpus. This recreates only the ownership table and
-   does not touch log tables.
-2. `openstack` -- one table from the three nova logs, read one after another in
-   chronological order: `src/backend/data/openstack_abnormal.log` (2017-05-14),
-   `openstack_normal1.log`, `openstack_normal2.log` (2017-05-16 to 05-17), 207,820
-   lines. `LineId` runs on across the files, so it is unique in the table and its
-   order is time order; nothing records which run a row came from.
-3. `bgl` -- `src/backend/data/BGL.log` (or the file named by `BGL_LOG_PATH`),
-   4,747,963 lines. This takes a long time.
-
-Each run drops and rebuilds the table, and the disk budget is checked before
-anything is built. The script stops at the first failure, including a missing
-source file, with the loader's message naming what to add. Timestamps are stored
-as `TIMESTAMPTZ` in UTC and every database session is pinned to UTC, so a time
-window means the same thing on every machine.
-
-To load one corpus, or loghub's 2,000-line structured samples instead (these
-replace the same table), name the datasets -- it is the same loader, so
-everything goes through `setup.sh`:
-
-```bash
-bash ./setup.sh openstack            # one corpus
-bash ./setup.sh openstack_2k         # src/backend/data/OpenStack_2k.log_structured.csv
-bash ./setup.sh bgl_2k               # src/backend/data/BGL_2k.log_structured.csv
-bash ./setup.sh --embed openstack    # also build template embeddings
-bash ./setup.sh --external-index      # ensure the first 5 seconds is searchable
-```
-
-`--external-index` is exclusive: it skips ownership and local corpus loading,
-then invokes `backend.db.external.ensure_searchable` over the first 5 seconds
-of the OTel Parquet data, starting at the first footer timestamp. If the
-window is not already covered, `ensure_searchable` builds it in place; if it is
-covered, it does no build. The operation stores no log rows locally and can
-take several minutes when a build is needed.
-
-`--embed` builds template-level embeddings, which needs the embedding service
-from Prerequisites.
-
-### Changing the embedding model
+## Changing the embedding model
 
 `EMBEDDING_MODEL` and `EMBEDDING_DIMENSION` must agree with each other and with
 what the database's endpoint really returns, and a change invalidates the
@@ -799,7 +621,7 @@ A model change therefore means rebuilding: BGL is 20,352 embedding calls and
 OpenStack's current corpus yields 86 distinct templates (measured), far below the
 50,000 `SERENEDB_MAX_TEMPLATES` cap.
 
-### Semantic search: making sure it runs
+## Semantic search: making sure it runs
 
 `search_logs_tool` is always BM25. It *also* matches on template embeddings, but
 only when every condition below holds; otherwise it silently searches lexically.
@@ -846,8 +668,9 @@ uv run python -c "from backend.db.templates import build_templates; print(build_
 
 A build only fills NULL vectors, so re-running it resumes an interrupted one.
 Use `build_templates(dataset, rebuild=True)` after changing the model or width.
-Do **not** use `bash ./setup.sh --embed` for this on an already-loaded corpus: it
-drops and reloads the log table (BGL takes a long time).
+Do **not** reload the corpus (`bash ./bootstrap.sh --embed --force-reload`) for
+this on an already-loaded corpus: it drops and reloads the log table (BGL takes a
+long time) before embedding.
 
 **If search stays lexical**, the backend log says why (a `WARNING` naming the
 corpus). Typical causes: a partial build (re-run the build); the width or model in
@@ -870,7 +693,7 @@ multi-word queries: on BGL, "node malfunctioning" has 0 rows with both words and
 154,469 with either. In `template` mode the counts are lexical only; semantically
 matched lines are not included in them.
 
-### Team ownership (fictional)
+## Team ownership (fictional)
 
 `src/backend/data/team_ownership.csv` is an **invented** mapping from the exact
 log components in each corpus to the teams that "own" them. It is not real
@@ -906,21 +729,10 @@ Testing (`load-generator`). OTel is remote and therefore is not accepted by
 `count_by_team_tool`; use its bounded service aggregates instead.
 
 `backend.db.ownership` validates the file (header, no empty fields, no component
-mapped twice); `bash ./setup.sh` loads it into SereneDB as `team_ownership`
-without touching log tables (the same table is reloaded on every `setup.sh`
-run). Replace the CSV if the organisers' ownership table becomes available;
-keep the three columns and reload it.
-
-## Running
-
-```bash
-bash ./backend.sh     # uvicorn backend.api:app --port $BACKEND_PORT --reload
-bash ./frontend.sh    # streamlit run src/ui/streamlit_app.py --server.port $FRONTEND_PORT
-```
-
-Both commands run from the repository root. Set `BACKEND_PORT`/`FRONTEND_PORT`
-in `.env` (or the environment) to run on non-default ports; `8000`/`8501` are
-used when unset. The scripts are not executable — invoke them with `bash`.
+mapped twice); `bash ./bootstrap.sh` loads it into SereneDB as `team_ownership`
+without touching log tables (it is reloaded on every bootstrap run). Replace the
+CSV if the organisers' ownership table becomes available; keep the three columns
+and reload it.
 
 ## Testing
 
@@ -1005,9 +817,10 @@ RUN_BGL_LIVE=1       uv run pytest tests/test_bgl_live.py         # full 4.7M-ro
 RUN_OTEL_LIVE=1      uv run pytest tests/test_otel_live.py        # remote corpus + index
 ```
 
-`RUN_OPENSTACK_LIVE` and `RUN_BGL_LIVE` need the corpus loaded (`bash ./setup.sh`;
-BGL reads `BGL_LOG_PATH` when set); each skips with a message when its table is
-absent. The template-embedding checks in `test_bgl_live.py` skip until templates
+`RUN_OPENSTACK_LIVE` and `RUN_BGL_LIVE` need the corpus loaded (see
+[setup.md](setup.md); BGL reads `BGL_LOG_PATH` when set); each skips with a
+message when its table is absent. The template-embedding checks in
+`test_bgl_live.py` skip until templates
 are embedded. `RUN_OTEL_LIVE` needs only network access; the tests that require
 the in-place index skip themselves with a message when it has not been built,
 rather than failing.
@@ -1180,10 +993,12 @@ worked_investigation.sh  one topic as all three roles -> docs/worked_investigati
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 claims.sh     gated live claim-check tests (RUN_LIVE_CLAIMS=1) + HTML report
 profile_otel.sh  SereneDB EXPLAIN ANALYZE latency profile for OTel queries
-setup.sh      seed SereneDB via loghub (--no-embed by default; optional datasets, --embed)
 bootstrap.sh  the whole setup: uv, deps, .env, SereneDB, the embedding secret, corpora
+setup.sh      corpus loader run by bootstrap.sh step 7 (loghub; --no-embed by default)
+mcp_server.sh the standalone MCP tool service (external agents; not needed by the app)
 docker-compose.yml  SereneDB with a pinned host port and a named volume (--db docker)
 .env.example  annotated environment template, copied to .env by bootstrap.sh
+setup.md      setup and running guide (prerequisites, .env, bootstrap.sh, services)
 src/
 ├── stream_events/       one event reducer shared by backend/jobs.py (saved progress) and the UI (live)
 ├── backend/
@@ -1284,6 +1099,10 @@ bash ./mcp_server.sh                                  # Streamable HTTP, default
 uv run python -m backend.mcp_server --transport stdio # a process the client launches
 TOOLS_TRANSPORT=mcp bash ./backend.sh                 # the chatbot's own pipeline uses the server
 ```
+
+The server and the app are independent: the app does not need the MCP server to
+run, and the server does not need the app for an external agent to use it. Setup
+and the client configuration are in [setup.md](setup.md).
 
 The backend defaults to `TOOLS_TRANSPORT=local`. Set it to `mcp` to route the
 dataset catalog, whole-dataset counts, the eight bounded query tools, the OTel
