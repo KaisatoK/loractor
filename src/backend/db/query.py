@@ -32,10 +32,12 @@ Counting the matches
 --------------------
 
 :func:`search_with_total` runs the search, then :func:`count_search_matches`
-with the same match condition and filters and no ``LIMIT``, so a result can say
-"10 shown of 194" and ``truncated`` is exact. Without a window the count reads
-only the index (~2 ms). Semantic matches have no countable match set, so a
-search that fuses a semantic branch reports ``total_matches`` as unknown.
+with the same filters and no ``LIMIT``: once for rows containing every word
+(``total_matches``) and, for several words, once for rows containing any word
+(``total_matches_any``, the pool ranking draws from). ``truncated`` follows that
+pool. Without a window a count reads only the index (~2 ms). Semantic matches
+have no countable set, so a fused search counts its lexical branch only and
+says so.
 """
 
 from __future__ import annotations
@@ -86,7 +88,7 @@ _SEARCH_NOISE = frozenset({
 })
 
 # Search modes whose rows come partly from a semantic branch. Their matches have
-# no countable set, so ``total_matches`` stays unknown.
+# no countable set, so the counts describe the lexical branch only.
 SEMANTIC_MODES = frozenset({"hybrid", "template"})
 
 # Alias of the base table joined inside a ranked branch for the window.
@@ -158,7 +160,7 @@ def _terms_or_refuse(query_text: str) -> tuple[str, ...]:
     return terms
 
 
-def _matcher(terms: tuple[str, ...]) -> sql.Composable:
+def _matcher(terms: tuple[str, ...], min_match: int | None = None) -> sql.Composable:
     """One fuzzy sub-query per word, combined with ``ts_any``.
 
     The index stores *tokens*, so a multi-word argument is looked up as a
@@ -166,13 +168,19 @@ def _matcher(terms: tuple[str, ...]) -> sql.Composable:
     matched 58,199 rows while 'failed to place order' matched 0. ``ts_any``
     keeps recall (any word may match) and lets BM25 float the rows matching more
     words to the top.
+
+    ``min_match`` requires that many of the words in one row (``ts_any``'s second
+    argument); ``len(terms)`` therefore means *every* word. Only the counts use
+    it: ranking keeps the any-word pool.
     """
-    return sql.SQL("ts_any([{terms}])").format(
-        terms=sql.SQL(", ").join(
-            sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder())
-            for _ in terms
-        )
+    elements = sql.SQL(", ").join(
+        sql.SQL("ts_levenshtein({t}, 1)").format(t=sql.Placeholder()) for _ in terms
     )
+    if min_match is not None and min_match > 1:
+        return sql.SQL("ts_any([{terms}], {k})").format(
+            terms=elements, k=sql.Literal(min(min_match, len(terms)))
+        )
+    return sql.SQL("ts_any([{terms}])").format(terms=elements)
 
 
 def search_window(
@@ -280,6 +288,7 @@ def search_logs(
         stats.window_seconds = window.seconds
 
     mode = search_mode(ds)
+    stats.search_mode = mode
     logger.debug(
         'Searching %s for "%s" (severity=%s, window=%s, mode=%s)',
         ds.id,
@@ -454,21 +463,31 @@ def count_search_matches(
     severity: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    match: str = "all",
 ) -> tuple[sql.Composable, list, QueryStats]:
-    """Every row :func:`search_logs` could rank: the same match and filters, no LIMIT.
+    """Rows matching the search words under the same filters, no LIMIT.
+
+    ``match="all"`` (default) counts rows containing **every** word; ``"any"``
+    counts rows containing at least one, which is the pool :func:`search_logs`
+    ranks. They differ whenever there are several words: measured on BGL,
+    'node malfunctioning' matches 154,469 rows on any word and 0 on both.
 
     The lexical match only. Without a window this reads the index alone
     (measured ~2 ms on 4.7M BGL rows); a window joins the base table as the
     ranked branch does (~37 ms for BGL's whole span).
     """
+    if match not in ("all", "any"):
+        raise ValueError(f"match must be 'all' or 'any', not {match!r}")
     ds = resolve(dataset)
     pred.require(ds, Capability.BM25, "full-text search")
     terms = _terms_or_refuse(query_text)
     window = search_window(ds, start_time, end_time)
     stats = QueryStats(dataset=ds.id, approximate=False)
 
+    min_match = len(terms) if match == "all" else None
+
     if ds.search_is_self_contained:
-        clauses, params = _index_only_filters(ds, terms, severity, window)
+        clauses, params = _index_only_filters(ds, terms, severity, window, min_match)
         query = sql.SQL("SELECT count(*) AS n FROM {index} WHERE {where}").format(
             index=ds.search_relation(), where=sql.SQL(" AND ").join(clauses)
         )
@@ -484,7 +503,7 @@ def count_search_matches(
         i=sql.Identifier("i"),
         join=join,
         msg=_qualified("i", ds.sql_for("message")),
-        matcher=_matcher(terms),
+        matcher=_matcher(terms, min_match),
         filters=_and(clauses, prefix="AND"),
     )
     return query, [*terms, *filter_params], stats
@@ -498,26 +517,69 @@ def search_with_total(
     start_time: str | None = None,
     end_time: str | None = None,
 ) -> QueryResult:
-    """Search, then count every match, so ``truncated`` is exact.
+    """Search, then count the matches, so the result can say what it is a sample of.
 
-    Two statements, both captured for the tool result's ``query``. A refused
-    search is returned as is, uncounted. A search that fuses a semantic branch
-    reports ``total_matches`` as unknown: its rows are not a countable set.
+    Three figures, because the ranked rows come from the *any-word* pool while a
+    reader naturally reads a total as "rows matching my words":
+
+    * ``total_matches`` -- rows containing **every** search word (exact, lexical);
+    * ``total_matches_any`` -- rows containing **at least one** word, the pool
+      the ranking draws from;
+    * ``truncated`` -- whether that pool holds more rows than were returned. It
+      follows the pool, not ``total_matches``: 'node malfunctioning' has 0
+      all-word matches yet returns 10 of 154,469 any-word rows.
+
+    A mode that fuses a semantic branch adds rows no word count can describe, so
+    its ``truncated`` is also true when the limit was reached, and the counts
+    are noted as lexical only. Two statements (three for several words), all
+    captured for the tool result's ``query``. A refused search is returned as
+    is, uncounted.
     """
     result = search_logs(query_text, dataset, severity, limit, start_time, end_time)
     if result.refused:
         return result
-    if search_mode(resolve(dataset)) in SEMANTIC_MODES:
-        result.stats.notes.append(
-            "total_matches not counted: semantic matches are not a countable set"
-        )
-        return result
+    ds = resolve(dataset)
+    # The mode the search itself ran in, not a fresh lookup: the vector cache
+    # expires, so asking again could name a different shape than the one used.
+    mode = result.stats.search_mode or search_mode(ds)
+    result.search_mode = mode
+    semantic = mode in SEMANTIC_MODES
+    returned = len(result)
 
-    counted = count_search_matches(query_text, dataset, severity, start_time, end_time)
-    if counted.refused or not counted:
+    terms = search_terms(query_text)
+    counted_all = count_search_matches(
+        query_text, dataset, severity, start_time, end_time
+    )
+    if counted_all.refused or not counted_all:
         return result
-    result.total_matches = int(counted[0]["n"])
-    result.stats.elapsed_ms += counted.stats.elapsed_ms
+    result.total_matches = int(counted_all[0]["n"])
+    result.stats.elapsed_ms += counted_all.stats.elapsed_ms
+
+    if len(terms) > 1:
+        counted_any = count_search_matches(
+            query_text, dataset, severity, start_time, end_time, "any"
+        )
+        if counted_any.refused or not counted_any:
+            return result
+        result.total_matches_any = int(counted_any[0]["n"])
+        result.stats.elapsed_ms += counted_any.stats.elapsed_ms
+    else:
+        result.total_matches_any = result.total_matches
+
+    result.truncated = result.total_matches_any > returned or (
+        semantic and returned >= limit
+    )
+    if len(terms) > 1 and result.total_matches != result.total_matches_any:
+        result.stats.notes.append(
+            f"total_matches counts rows containing every search word "
+            f"({result.total_matches:,}); the ranked rows come from the "
+            f"{result.total_matches_any:,} rows containing any of them"
+        )
+    if semantic:
+        result.stats.notes.append(
+            "counts are lexical; semantic (template-level) matches are not "
+            "included in them"
+        )
     return result
 
 
@@ -564,6 +626,7 @@ def _index_only_filters(
     terms: tuple[str, ...],
     severity: str | None,
     window: TimeWindow | None,
+    min_match: int | None = None,
 ) -> tuple[list[sql.Composable], list]:
     """Match, severity and window clauses read straight off a self-contained index.
 
@@ -574,7 +637,7 @@ def _index_only_filters(
     """
     clauses = [
         sql.SQL("{m} @@ {matcher}").format(
-            m=dataset.sql_for("message"), matcher=_matcher(terms)
+            m=dataset.sql_for("message"), matcher=_matcher(terms, min_match)
         )
     ]
     params: list = list(terms)

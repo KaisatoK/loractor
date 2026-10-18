@@ -313,3 +313,30 @@ def test_a_result_without_total_matches_keeps_the_limit_heuristic():
                         function=lambda: QueryResult(rows))
     assert env["total_matches"] is None
     assert env["truncated"] is True
+
+
+def test_search_figures_reach_the_envelope_and_the_record():
+    from backend.db.stats import QueryResult
+    from backend.pipeline.tools.envelope import envelope_metadata, run_enveloped
+
+    result = QueryResult(
+        [{"a": 1}] * 10, total_matches=0, total_matches_any=154469,
+        search_mode="lexical", truncated=True,
+    )
+    envelope = run_enveloped(
+        operation="search", function=lambda: result, kind="search", limit=10
+    )
+    assert envelope["total_matches"] == 0
+    assert envelope["total_matches_any"] == 154469
+    assert envelope["search_mode"] == "lexical"
+    assert envelope["truncated"] is True
+    meta = envelope_metadata(envelope, "search_logs_tool")
+    assert meta["total_matches_any"] == 154469 and meta["search_mode"] == "lexical"
+
+
+def test_other_tools_do_not_gain_search_keys():
+    from backend.pipeline.tools.envelope import envelope_metadata, run_enveloped
+
+    envelope = run_enveloped(operation="x", function=lambda: [{"a": 1}], kind="aggregate")
+    assert "search_mode" not in envelope and "total_matches_any" not in envelope
+    assert "search_mode" not in envelope_metadata(envelope, None)

@@ -178,12 +178,14 @@ copy step no longer exists.
 ### Three tiers
 
 **Tier A — local, indexed, exact.** `openstack` and `bgl`. Millisecond searches
-and exact counts. Both carry an `EventTemplate` derived at load time, and both are
-loaded with `--no-embed`, so search is lexical (BM25) for now. Template-level
-embeddings remain available as an opt-in step (`backend.db.templates`): for BGL,
-about 20,352 distinct templates stand in for 4.7M rows, which is what makes
-semantic search affordable at that size (embedding every row would take days;
-embedding the templates took 36 minutes).
+and exact counts. Both carry an `EventTemplate` derived at load time. Search is
+always lexical (BM25); where a corpus also has complete template embeddings it
+is fused with a template-level semantic branch (`search_mode` `template`), which
+is what lets a described symptom find lines that share none of its words. Both
+corpora are loaded with `--no-embed`, so the embeddings are a separate step
+(`backend.db.templates`): BGL's ~20,352 distinct templates stand in for 4.7M rows
+and OpenStack's 86 for 207,820 (embedding every row would take days; embedding
+BGL's templates took 36 minutes). See **Semantic search: making sure it runs**.
 
 **Tier B — remote, metered, approximate.** `otel_s3`, read via `read_parquet`.
 Every query must carry a time window of at most 300 seconds. Before running,
@@ -457,6 +459,7 @@ a few dozen concurrent investigations.
 | `SERENEDB_POOL_MIN` / `SERENEDB_POOL_MAX` | `2` / `32` | Shared SereneDB connection pool |
 | `SERENEDB_STATEMENT_TIMEOUT_MS` | `30000` | Server-side per-query timeout |
 | `SERENEDB_HOST` / `SERENEDB_PORT` / `SERENEDB_DB` / `SERENEDB_USER` / `SERENEDB_PASSWORD` | `localhost` / `7890` / `postgres` / `postgres` / `postgres` | SereneDB target (with Docker the host port is the mapped one, see `docker ps`, and can change when the container is recreated) |
+| `TEMPLATE_VECTOR_CACHE_TTL_S` | `60` | Seconds "template vectors available" is cached; a CLI-built embedding table is noticed within this time (`0` re-checks every search) |
 | `CHECKPOINT_BACKEND` | `sqlite` | Graph state store: `sqlite`, `memory`, or `postgres` |
 | `CHECKPOINT_SQLITE_PATH` | `./.data/checkpoints.sqlite` | SQLite checkpoint file |
 | `CHECKPOINT_POSTGRES_URL` | – | Required when `CHECKPOINT_BACKEND=postgres` |
@@ -793,8 +796,79 @@ recorded. `templates_status()` reports `model`, `stored_dimension`,
 unattributable rather than proven wrong.
 
 A model change therefore means rebuilding: BGL is 20,352 embedding calls and
-OpenStack's current corpus yields 54,043 distinct templates, above the 50,000
-`SERENEDB_MAX_TEMPLATES` cap, so it is refused until the cap is raised.
+OpenStack's current corpus yields 86 distinct templates (measured), far below the
+50,000 `SERENEDB_MAX_TEMPLATES` cap.
+
+### Semantic search: making sure it runs
+
+`search_logs_tool` is always BM25. It *also* matches on template embeddings, but
+only when every condition below holds; otherwise it silently searches lexically.
+The result says which happened: `search_mode` is `template` (semantic on) or
+`lexical` (off). Check that field first.
+
+Semantic search is on for a corpus when **all** of these are true:
+
+1. The corpus's template table exists and **every** template has a vector. A
+   partial table falls back to lexical (a half-embedded table would miss whole
+   event shapes without saying so).
+2. The stored vector width equals `EMBEDDING_DIMENSION`, and the recorded model
+   equals `EMBEDDING_MODEL` (an unrecorded model is tolerated; a different one is
+   not).
+3. `EMBEDDING_MODEL`, `EMBEDDING_DIMENSION` and `EMBEDDING_SECRET` in `.env`
+   describe the model that built the vectors. The query text is embedded with
+   them at search time, so a mismatch ranks on noise.
+4. The server-side secret named by `EMBEDDING_SECRET` exists, is `PERSISTENT`, and
+   its endpoint is reachable **from the database**.
+
+The current setup uses `EMBEDDING_MODEL=nomic-embed-text:v1.5`,
+`EMBEDDING_DIMENSION=768`, `EMBEDDING_SECRET=local_ai`; BGL (20,352) and
+OpenStack (86) are both embedded with it. `.env.example` shows the Gemini
+alternative; do not mix the two on one table.
+
+**Check it** (read-only, safe to run any time):
+
+```bash
+uv run python -m backend.db.provision --report                    # per corpus: templates, embedded, width
+uv run python -m backend.db.provision --report --probe-embedding  # also one embedding call
+uv run python -c "from backend.db import templates as t; print(t.templates_status('bgl')); print(t.embedding_compatibility('bgl'))"
+```
+
+Healthy output: `embedded` equals `templates`, `complete: True`,
+`model_matches_config` and `dimension_matches_config` both `True`, and
+`embedding_compatibility(...)['ok']` is `True`. `model: None` means the vectors
+predate model recording (still used, but unattributable).
+
+**Build or finish it** for one corpus, without reloading the log table:
+
+```bash
+uv run python -c "from backend.db.templates import build_templates; print(build_templates('openstack'))"
+```
+
+A build only fills NULL vectors, so re-running it resumes an interrupted one.
+Use `build_templates(dataset, rebuild=True)` after changing the model or width.
+Do **not** use `bash ./setup.sh --embed` for this on an already-loaded corpus: it
+drops and reloads the log table (BGL takes a long time).
+
+**If search stays lexical**, the backend log says why (a `WARNING` naming the
+corpus). Typical causes: a partial build (re-run the build); the width or model in
+`.env` differs from the stored one (restore `.env` or rebuild); the secret is
+missing after the database was recreated (`uv run python -m backend.db.provision
+--secret`); or the Ollama/provider endpoint is unreachable from the database.
+Availability is cached for `TEMPLATE_VECTOR_CACHE_TTL_S` seconds (default 60;
+`0` re-checks on every search), so a running backend notices a build done from
+the CLI within a minute without a restart.
+
+**After the database restarts**, re-apply the memory ceiling and confirm the
+port: a restarted server reports 5.7 GiB, and a Docker container's host port can
+change (update `SERENEDB_PORT` in `.env` to match). `uv run python -m
+backend.db.provision --wait --memory --report` does the first and shows the state.
+
+**Reading a search result.** `total_matches` counts rows containing *every*
+search word, `total_matches_any` rows containing *at least one* (the pool the
+shown rows are ranked from), and `truncated` follows that pool. They differ for
+multi-word queries: on BGL, "node malfunctioning" has 0 rows with both words and
+154,469 with either. In `template` mode the counts are lexical only; semantically
+matched lines are not included in them.
 
 ### Team ownership (fictional)
 
@@ -911,7 +985,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `0 failed, 1339 passed, 107 skipped` with SereneDB
+> The offline suite reports `0 failed, 1352 passed, 107 skipped` with SereneDB
 > reachable. Two tests,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
 > `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, are
@@ -1354,16 +1428,14 @@ measurement or the exact error behind it. Where a workaround exists it is named.
   then resume where the last one stopped. (At the default batch size of 100 the
   same cap embedded all 5 rows, because they rode in a single request -- the cap
   counts requests, not texts.)
-- **BGL's stored vectors are the wrong width for the configured model.** Its
-  20,352 vectors are 768-wide (built by `nomic-embed-text:v1.5`) while
-  `gemini-embedding-2` returns 3072, so `has_template_vectors()` is `False` and
-  search falls back to lexical BM25 until they are rebuilt. Nothing recorded
-  which model produced them, so the width is measured from a stored row.
-- **OpenStack cannot have template embeddings at all.** Its 207,820-row corpus
-  yields **54,043 distinct templates**, above the 50,000
-  `SERENEDB_MAX_TEMPLATES` cap, so the build is refused. One template per four
-  rows also means templating is barely collapsing OpenStack's messages, which is
-  most of what makes template-level embedding affordable in the first place.
+- **Semantic search is template-level, and available only when the vectors
+  are complete and match the configured model.** It matches the *shape* of a
+  message, not its individual text, so it generalises ("node malfunctioning"
+  finds "Node card is not fully functional") but cannot distinguish rows that
+  share a template. A partial table, or a width/model that differs from
+  `.env`, degrades the search to BM25; check `search_mode` in the result.
+  OTel has no semantic search: it would need a new index and chunk-embedding
+  design.
 - **A temporary embedding secret dies with the server, and two of them break
   it.** `ai_embed` resolves its endpoint and key from a server-side secret
   (`EMBEDDING_SECRET`, default `gemini`), and `CREATE SECRET` makes a
@@ -1470,7 +1542,7 @@ measurement or the exact error behind it. Where a workaround exists it is named.
 - **Runs are held in-process.** A single uvicorn worker owns the background
   investigation registry, so a backend restart loses any in-flight run (the
   persisted chat history survives).
-- **The offline suite is green** (`0 failed, 1,339 passed, 107 skipped`, identical
+- **The offline suite is green** (`0 failed, 1,352 passed, 107 skipped`, identical
   under `TOOLS_TRANSPORT=mcp`); the former inline-marker rendering edge cases are
   fixed and covered by `tests/test_answer_rendering.py`.
 - **The live corpus tests assume the full corpora.** With only loghub's 2,000-row

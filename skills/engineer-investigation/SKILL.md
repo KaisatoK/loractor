@@ -14,9 +14,15 @@ What failed, in which component, and what happened just before and after?
    (`category`) and, when the user named a period, by the time window
    (`start_time` and `end_time` together). Keep the `record_id` (the line id),
    timestamp, service and template of the best hits. The result's
-   `total_matches` counts every matching line, so say "n shown of
-   total_matches"; it is the number of matching log entries, not a frequency
-   over time (step 4 measures that).
+   `total_matches` counts the lines containing **every** search word and
+   `total_matches_any` those containing **at least one** (the pool the shown rows
+   are ranked from); say "n shown of total_matches_any" when `truncated`, and
+   when the two differ say that not every word appears together. Neither is a
+   frequency over time (step 4 measures that). `search_mode` says how the rows
+   were found: `lexical` matches the words you typed, `template` also pulls in
+   lines whose event *shape* is semantically close (a symptom described in other
+   words) -- for a literal message use its exact wording, for a symptom describe
+   it and expect semantically related lines.
 2. **Nearby events.** Call `get_nearby_events_tool` on the most relevant hit:
    `line_id` = its `record_id`, the same `dataset`. The rows are the lines just
    before and after it in file order, each with an `offset` (negative before,

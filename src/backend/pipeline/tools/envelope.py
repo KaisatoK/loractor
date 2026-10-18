@@ -156,11 +156,27 @@ class ToolEnvelope(BaseModel):
     total_matches: int | None = Field(
         None, description="Every row matching the filters, when the tool counted them."
     )
+    total_matches_any: int | None = Field(
+        None,
+        description=(
+            "Search only: rows containing at least one search word -- the pool "
+            "the ranked examples come from. `total_matches` counts rows "
+            "containing every word, so it is the smaller of the two."
+        ),
+    )
+    search_mode: str | None = Field(
+        None,
+        description=(
+            "Search only: 'lexical' (BM25 on words), 'template' (BM25 fused with "
+            "template-level semantic matching), 'hybrid' or 'index_only'."
+        ),
+    )
     truncated: bool | None = Field(
         None,
         description=(
             "True when more matching rows exist than were returned, False when "
-            "the result is provably complete, null when unknown."
+            "the result is provably complete, null when unknown. For a search "
+            "it follows the ranked pool (`total_matches_any`)."
         ),
     )
     data: list[dict[str, Any]] | None = Field(None, description="The result rows.")
@@ -187,6 +203,10 @@ class ToolEnvelope(BaseModel):
         None, description="Refusals: a concrete request that would be accepted."
     )
 
+
+# Search-only fields. Carried onto a result record only when the tool reported
+# them, so no other tool's record grows an always-empty key.
+OPTIONAL_ENVELOPE_FIELDS = ("total_matches_any", "search_mode")
 
 ENVELOPE_FIELDS = (
     "kind",
@@ -257,8 +277,15 @@ def build_envelope(
     total_matches: int | None = None,
     complete: bool = False,
     query_stats: dict[str, Any] | None = None,
+    total_matches_any: int | None = None,
+    search_mode: str | None = None,
+    truncated: bool | None = None,
 ) -> dict[str, Any]:
-    """Assemble the success envelope for one tool result."""
+    """Assemble the success envelope for one tool result.
+
+    ``truncated`` overrides the inferred value for a result whose
+    ``total_matches`` is not the pool its rows came from (a search).
+    """
     rows = list(data) if isinstance(data, list) else ([] if data is None else [data])
     rows = json_safe(rows)
     clipped_cells = dropped_rows = 0
@@ -278,6 +305,12 @@ def build_envelope(
         "truncated": is_truncated(returned, limit, total_matches, complete),
         "data": rows,
     }
+    if total_matches_any is not None:
+        envelope["total_matches_any"] = total_matches_any
+    if search_mode is not None:
+        envelope["search_mode"] = search_mode
+    if truncated is not None:
+        envelope["truncated"] = truncated
     if dropped_rows:
         # Rows were dropped for size, so the result is incomplete whatever the
         # query's own cap says.
@@ -342,6 +375,8 @@ def run_enveloped(
             total_matches=remote.get("total_matches"),
             complete=complete,
             query_stats=remote.get("query_stats"),
+            total_matches_any=remote.get("total_matches_any"),
+            search_mode=remote.get("search_mode"),
         )
         if "truncated" in remote and remote["truncated"] is not None:
             envelope["truncated"] = remote["truncated"]
@@ -360,6 +395,9 @@ def run_enveloped(
         total_matches=getattr(data, "total_matches", None),
         complete=complete,
         query_stats=_stats_of(data),
+        total_matches_any=getattr(data, "total_matches_any", None),
+        search_mode=getattr(data, "search_mode", None),
+        truncated=getattr(data, "truncated", None),
     )
 
 
@@ -370,6 +408,9 @@ def envelope_metadata(payload: dict[str, Any], tool_name: str | None) -> dict[st
     the tool, not of the call. Nothing else is guessed.
     """
     meta = {field: payload.get(field) for field in ENVELOPE_FIELDS}
+    meta.update(
+        {f: payload[f] for f in OPTIONAL_ENVELOPE_FIELDS if payload.get(f) is not None}
+    )
     if meta["kind"] is None:
         meta["kind"] = TOOL_KINDS.get(tool_name or "")
     return meta

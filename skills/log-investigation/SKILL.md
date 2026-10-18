@@ -52,7 +52,10 @@ count, then search inside it.
 3. **Then search text, on an indexed dataset.** `search_logs_tool` reads an
    inverted index. Pass the narrowed window (`start_time` and `end_time`
    together) so the search only ranks lines inside it, and report its
-   `total_matches` beside the rows shown. It is refused on the raw remote
+   `total_matches` (lines with every word) and `total_matches_any` (lines with
+   any word, the pool the rows come from) beside the rows shown, and its
+   `search_mode` (`template` means semantically related event shapes were
+   included, so the rows need not contain your words). It is refused on the raw remote
    corpus, which has none — so
    aggregate on the remote corpus to find the window, then search `otel_slice`
    to read lines. That index is built *in place* over the same Parquet files:

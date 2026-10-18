@@ -61,6 +61,8 @@ class QueryStats:
     elapsed_ms: int = 0
     window_seconds: float = 0.0
     row_count: int = 0
+    search_mode: str | None = None
+    """Search only: the shape the search took (lexical, template, hybrid, index_only)."""
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -137,6 +139,9 @@ class QueryResult(list):
         stats: QueryStats | None = None,
         refusal: object | None = None,
         total_matches: int | None = None,
+        total_matches_any: int | None = None,
+        search_mode: str | None = None,
+        truncated: bool | None = None,
     ) -> None:
         super().__init__(rows or [])
         self.stats = stats or QueryStats()
@@ -148,6 +153,14 @@ class QueryResult(list):
         ``None`` means not counted -- the envelope then infers truncation from
         the limit instead of claiming an exact figure.
         """
+        self.total_matches_any = total_matches_any
+        """Search only: rows matching *any* search word (the ranked pool)."""
+        self.search_mode = search_mode
+        """Search only: ``lexical``, ``template``, ``hybrid`` or ``index_only``."""
+        self.truncated = truncated
+        """An explicit answer to "were more rows available than returned?",
+        for results whose ``total_matches`` is not the pool the rows came from.
+        ``None`` leaves the envelope to infer it."""
 
     @property
     def refused(self) -> bool:

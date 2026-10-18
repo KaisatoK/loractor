@@ -242,7 +242,7 @@ def test_the_model_is_recorded_so_a_change_is_detectable(monkeypatch):
 
     class Cur:
         def execute(self, statement, params=None):
-            if params and "gemini" in str(params):
+            if params and templates.EMBEDDING_MODEL in str(params):
                 written.append(params)
 
     templates._record_embedding_model(Cur(), "bgl")
@@ -342,3 +342,33 @@ def test_every_embed_call_names_the_configured_secret():
         assert calls, f"{name}: no ai_embed call found"
         for call in calls:
             assert "{secret}" in call, f"{name}: {call}"
+
+
+# --- Completeness and expiry of the vector cache ---------------------------
+def test_a_partial_template_table_searches_lexically(monkeypatch):
+    templates.clear_vector_cache()
+    monkeypatch.setattr(
+        templates, "templates_status",
+        lambda ds: {"exists": True, "templates": 86, "embedded": 40, "complete": False,
+                    "model_matches_config": True, "dimension_matches_config": True},
+    )
+    assert templates.has_template_vectors("openstack") is False
+    templates.clear_vector_cache()
+
+
+def test_the_vector_cache_expires_so_a_cli_build_is_noticed(monkeypatch):
+    templates.clear_vector_cache()
+    states = iter([
+        {"exists": False},
+        {"exists": True, "templates": 2, "embedded": 2, "complete": True,
+         "model_matches_config": True, "dimension_matches_config": True},
+    ])
+    monkeypatch.setattr(templates, "templates_status", lambda ds: next(states))
+    clock = [1000.0]
+    monkeypatch.setattr(templates.time, "monotonic", lambda: clock[0])
+    assert templates.has_template_vectors("openstack") is False
+    clock[0] += templates.VECTOR_CACHE_TTL_S - 1
+    assert templates.has_template_vectors("openstack") is False  # still cached
+    clock[0] += 2
+    assert templates.has_template_vectors("openstack") is True   # re-probed
+    templates.clear_vector_cache()

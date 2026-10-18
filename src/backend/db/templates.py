@@ -596,15 +596,19 @@ def templates_status(dataset: Dataset | str) -> dict:
     }
 
 
-# Whether a dataset's template vectors exist, cached per process.
+# Whether a dataset's template vectors exist, cached per process for a short time.
 #
-# This is a build-time fact, not a per-query one: the table appears when an
-# operator builds it and disappears when one drops it. Probing the database on
-# every search would add a round trip to decide the shape of the search, and --
-# worse -- would make the query layer's behaviour depend on live state, so the
-# same call would compose different SQL on two machines. Cached, with an
-# explicit seam for tests and for the build path to invalidate.
-_VECTOR_CACHE: dict[str, bool] = {}
+# Probing the database on every search would add a round trip to decide the
+# shape of the search, so the answer is cached. But the cache must not be
+# permanent: an operator builds (or drops) the table from the CLI, in another
+# process, and a running backend would otherwise keep searching lexically until
+# restarted. Entries therefore expire after ``VECTOR_CACHE_TTL_S`` seconds
+# (env ``TEMPLATE_VECTOR_CACHE_TTL_S``; 0 re-probes every call). The build and
+# drop paths in *this* process still update the cache immediately.
+VECTOR_CACHE_TTL_S = float(os.getenv("TEMPLATE_VECTOR_CACHE_TTL_S", "60"))
+
+# dataset id -> (available, monotonic time it was recorded)
+_VECTOR_CACHE: dict[str, tuple[bool, float]] = {}
 
 
 def clear_vector_cache() -> None:
@@ -614,7 +618,18 @@ def clear_vector_cache() -> None:
 
 def set_vector_cache(dataset_id: str, available: bool) -> None:
     """Record template-vector availability without touching the database."""
-    _VECTOR_CACHE[dataset_id] = available
+    _VECTOR_CACHE[dataset_id] = (available, time.monotonic())
+
+
+def _cached_vectors(dataset_id: str) -> bool | None:
+    """The cached answer if it is still fresh, else ``None``."""
+    entry = _VECTOR_CACHE.get(dataset_id)
+    if entry is None:
+        return None
+    available, recorded = entry
+    if time.monotonic() - recorded >= VECTOR_CACHE_TTL_S:
+        return None
+    return available
 
 
 def has_template_vectors(dataset: Dataset | str) -> bool:
@@ -624,11 +639,24 @@ def has_template_vectors(dataset: Dataset | str) -> bool:
     raises; a corpus without template vectors simply searches lexically.
     """
     ds = resolve(dataset) if isinstance(dataset, str) else dataset
-    if ds.id in _VECTOR_CACHE:
-        return _VECTOR_CACHE[ds.id]
+    cached = _cached_vectors(ds.id)
+    if cached is not None:
+        return cached
     try:
         status = templates_status(ds)
         available = bool(status.get("exists") and status.get("embedded"))
+        # A partial table silently misses every template without a vector, so a
+        # semantic search that finds nothing would not mean nothing is there.
+        # Unlike a lexical search it cannot say so; searching lexically is the
+        # honest answer until the build finishes. ``complete`` absent (an older
+        # status) is not treated as incomplete.
+        if available and status.get("complete") is False:
+            logger.warning(
+                "%s has %s of %s template vectors; searching lexically until "
+                "the build completes",
+                ds.id, status.get("embedded"), status.get("templates"),
+            )
+            available = False
         # Vectors from a different model than the one that will embed the query
         # are worse than no vectors: every distance is meaningless, and the
         # search would rank confidently on noise. Searching lexically instead
@@ -659,7 +687,7 @@ def has_template_vectors(dataset: Dataset | str) -> bool:
     except Exception:  # noqa: BLE001 - absence must never break search
         logger.debug("Template status unavailable for %s", ds.id, exc_info=True)
         available = False
-    _VECTOR_CACHE[ds.id] = available
+    set_vector_cache(ds.id, available)
     return available
 
 

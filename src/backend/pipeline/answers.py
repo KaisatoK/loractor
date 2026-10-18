@@ -273,6 +273,17 @@ def _truncation(record: dict) -> str:
     truncated = record.get("truncated")
     total = record.get("total_matches")
     returned = record.get("returned") or record.get("row_count")
+    pool = record.get("total_matches_any")
+    if pool is not None and pool != total:
+        # A search whose words do not all appear together: the rows are the best
+        # of the any-word pool, so the all-words total is not the denominator.
+        mode = record.get("search_mode")
+        suffix = f"; {mode} search" if mode else ""
+        return (
+            f"{'truncated: yes' if truncated else 'truncated: no'} "
+            f"({returned} rows returned of {pool} matching any search word; "
+            f"{total} contain every word{suffix})"
+        )
     if truncated is True:
         more = f" of {total}" if total is not None else ""
         return f"truncated: yes ({returned}{more} rows returned; more matching rows exist)"

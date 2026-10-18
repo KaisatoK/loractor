@@ -205,7 +205,9 @@ class SearchLogs(_DatasetScoped):
             min_length=1,
             max_length=500,
             description=(
-                "Text or concept to find in log message bodies. Do not put a "
+                "Text or concept to find in log message bodies: exact wording for a "
+                "known message, or a described symptom where the corpus has "
+                "semantic search (search_mode 'template'). Do not put a "
                 "severity here merely as a filter -- use category."
             ),
         ),
@@ -217,8 +219,8 @@ class SearchLogs(_DatasetScoped):
             ge=1,
             le=50,
             description=(
-                "Most example rows to return (default 10). total_matches still "
-                "counts every match."
+                "Most example rows to return (default 10). total_matches and "
+                "total_matches_any still count every match."
             ),
         ),
     ] = 10

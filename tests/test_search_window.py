@@ -225,16 +225,50 @@ def test_the_template_branch_is_filtered_too(monkeypatch):
                       "FATAL", LO, HI, "FATAL", LO, HI]
 
 
-def test_a_semantic_search_reports_its_total_as_unknown(monkeypatch):
+def test_a_semantic_search_counts_lexically_and_says_so(monkeypatch):
     from backend.db.stats import QueryResult
 
     monkeypatch.setattr(templates, "has_template_vectors", lambda _d: True)
-    monkeypatch.setattr(query, "search_logs", lambda *a: QueryResult([{"r": 1}]))
+    monkeypatch.setattr(query, "search_logs", lambda *a: QueryResult([{"r": 1}] * 10))
     monkeypatch.setattr(query, "count_search_matches",
-                        lambda *a: pytest.fail("semantic matches are not countable"))
-    result = query.search_with_total("memory fault", "bgl")
-    assert result.total_matches is None
-    assert any("not counted" in n for n in result.stats.notes)
+                        lambda *a: QueryResult([{"n": 5}]))
+    result = query.search_with_total("memory", "bgl", None, 10)
+    assert result.total_matches == 5
+    assert result.search_mode == "template"
+    assert result.truncated is True  # the limit was reached: the pool may hold more
+    assert any("counts are lexical" in n for n in result.stats.notes)
+
+
+def test_total_is_all_words_and_truncated_follows_the_any_word_pool(monkeypatch, lexical):
+    """'node malfunctioning': 0 rows hold both words, 154,469 hold either."""
+    from backend.db.stats import QueryResult
+
+    def count(text, ds, sev, start, end, match="all"):
+        return QueryResult([{"n": 0 if match == "all" else 154469}])
+
+    monkeypatch.setattr(query, "search_logs", lambda *a: QueryResult([{"r": 1}] * 10))
+    monkeypatch.setattr(query, "count_search_matches", count)
+    result = query.search_with_total("node malfunctioning", "bgl", None, 10)
+    assert (result.total_matches, result.total_matches_any) == (0, 154469)
+    assert result.truncated is True
+    assert result.search_mode == "lexical"
+
+
+def test_a_pool_that_fits_is_not_truncated(monkeypatch, lexical):
+    from backend.db.stats import QueryResult
+
+    monkeypatch.setattr(query, "search_logs", lambda *a: QueryResult([{"r": 1}] * 3))
+    monkeypatch.setattr(query, "count_search_matches", lambda *a: QueryResult([{"n": 3}]))
+    result = query.search_with_total("timeout", "openstack", None, 10)
+    assert (result.total_matches, result.total_matches_any, result.truncated) == (3, 3, False)
+
+
+def test_the_all_word_count_requires_every_word():
+    text = normalized(_count("node malfunctioning", dataset="bgl")[0])
+    assert "ts_any([" in text and text.count("ts_levenshtein") == 2
+    assert "], 2)" in text
+    any_text = normalized(_count("node malfunctioning", dataset="bgl", match="any")[0])
+    assert "], 2)" not in any_text
 
 
 # --- The tool, invoked as the agent invokes it (Task 8) ---------------------------
