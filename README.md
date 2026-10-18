@@ -684,8 +684,14 @@ uv run python -m backend.db.provision --json                       # the same st
 ### Loading corpora on their own
 
 `setup.sh` is step 7 by itself. It loads the ownership table first, then the named corpora through the
-loghub loader (`backend.db.loghub`), each with `--no-embed` unless `--embed` is
-given. With no datasets named it loads these, in this order:
+loghub loader (`backend.db.loghub`). By default it passes `--no-embed`; passing
+`--embed` opts into template embeddings. These flags affect **templates only**:
+`--no-embed` does not create template vectors, while `--embed` embeds the
+corpus's distinct log templates. Neither option embeds the content/message of
+each individual log entry; per-log-content embeddings are never created by
+`setup.sh`.
+
+With no datasets named it loads these, in this order:
 
 1. `team_ownership` -- `src/backend/data/team_ownership.csv`, (re)loaded by
    `setup.sh` before any corpus. This recreates only the ownership table and
@@ -1091,6 +1097,7 @@ routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
 worked_investigation.sh  one topic as all three roles -> docs/worked_investigation.md
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 claims.sh     gated live claim-check tests (RUN_LIVE_CLAIMS=1) + HTML report
+profile_otel.sh  SereneDB EXPLAIN ANALYZE latency profile for OTel queries
 setup.sh      seed SereneDB via loghub (--no-embed by default; optional datasets, --embed)
 bootstrap.sh  the whole setup: uv, deps, .env, SereneDB, the embedding secret, corpora
 docker-compose.yml  SereneDB with a pinned host port and a named volume (--db docker)
@@ -1152,6 +1159,36 @@ skills/
 ├── recurring-patterns/SKILL.md     role playbook: counts, trends, teams
 └── risk-prioritization/SKILL.md    role playbook: ranked priorities and actions
 ```
+
+## OTel query profiling
+
+`profile_otel.sh` runs SereneDB `EXPLAIN ANALYZE` against the database functions
+behind the OTel evidence tools and writes a Markdown report instead of printing
+the result table to the terminal. The default report is
+`docs/otel_profile.md`; the report includes the selected window, run count,
+index coverage, query status, average/median/minimum/maximum milliseconds, and
+cumulative total milliseconds. It never builds an uncovered `otel_slice` index.
+
+```bash
+bash ./profile_otel.sh
+```
+
+All command-line options are:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--help` | – | Show the CLI help and exit. |
+| `--runs N` | `5` | Run `EXPLAIN ANALYZE` N times per database function. |
+| `--start TIMESTAMP` | First OTel footer timestamp | Start of the profiling window; use a UTC timestamp. |
+| `--window-seconds N` | `10` | Window length; the remote OTel limit is 300 seconds. |
+| `--search TEXT` | `error` | Search text for the existing `otel_slice` search cases. |
+| `--only LABELS` | All cases | Comma-separated database-function labels to profile. |
+| `--output PATH` | `docs/otel_profile.md` | Markdown report destination; parent directories are created. |
+
+The profiled database-function labels are `count_by_field`, `top_by_field`,
+`compare_periods`, `get_field_values`, `get_trend`, `trace_logs`, `search_logs`,
+and `count_search_matches`. The last two are the two SQL functions underlying
+the search tool; the profiler does not time the tool wrapper itself.
 
 ## MCP tool service
 

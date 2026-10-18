@@ -1,6 +1,6 @@
 """Zero-scan corpus measurement and a safe index-cost probe.
 
-Run with::
+Run with:
 
     uv run python -m backend.db.probe                 # metadata only (no scan)
     uv run python -m backend.db.probe --severity      # + severity distribution
