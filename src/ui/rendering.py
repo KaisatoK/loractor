@@ -7,7 +7,9 @@ import re
 
 import pandas as pd
 
-from ui.timeline_graph import timeline_dot
+from ui.timeline_graph import timeline_mermaid
+
+TIMELINE_ALT = "Timeline of log lines before and after the anchor line"
 
 # Canonical marker is [[RESULT:R1]], but models sometimes emit variants such as
 # [RESULT:R1], 【RESULT:R1】, ［RESULT:R1］, or 【R1】 with CJK/fullwidth brackets.
@@ -102,9 +104,9 @@ def render_answer(container, text: str, results: list | None) -> None:
         )
         # The engineer's timeline also gets its before -> anchor -> after chain,
         # drawn from the same record; the table above stays the source of truth.
-        dot = timeline_dot(by_id[value])
-        if dot is not None:
-            container.graphviz_chart(dot)
+        diagram = timeline_mermaid(by_id[value])
+        if diagram is not None:
+            container.mermaid_chart(diagram, alt=TIMELINE_ALT)
 
     # Trace before cost: how the data was reached, then how much it cost.
     render_sweep_trace(container, results)

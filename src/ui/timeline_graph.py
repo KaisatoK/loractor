@@ -1,14 +1,18 @@
-"""Graphviz DOT for the engineer's before -> anchor -> after chain.
+"""Mermaid flowchart for the engineer's before -> anchor -> after chain.
 
 Built from the derived ``timeline`` record (``backend.pipeline.timeline``), never by
 a model: the answer still only cites ``[[RESULT:Rn]]`` and the table stays the
 source of truth. This module is pure text-in, text-out (stdlib only, no Streamlit,
 no backend import), so the diagram is testable without a runtime.
 
+The chart is laid out left to right with two short lines per node so it stays
+compact in the chat (``st.mermaid_chart`` fits it to the chat width).
+
 Log text is untrusted, so no message text is drawn at all: a node shows only the
-offset, the seconds from the anchor, the severity and the service, each escaped for
-a quoted DOT string. Node ids are generated (``n0``, ``n1``...), never taken from
-the data.
+offset, the seconds from the anchor, the severity and the service. Each of those is
+reduced to a small safe character set; everything else becomes a Mermaid numeric
+entity (``#60;``), so a value can never close the label or add syntax. Node ids are
+generated (``n0``, ``n1``...), never taken from the data.
 """
 
 from __future__ import annotations
@@ -18,24 +22,34 @@ from typing import Any
 TIMELINE_TOOL_NAME = "timeline"
 # Most nodes drawn. The record is already capped at this many rows by the backend.
 MAX_NODES = 100
-_LABEL_CHARS = 40
+_LABEL_CHARS = 28
 
-_ANCHOR = 'style="filled,bold" fillcolor="#ffd6d6" color="#c0392b"'
-_SAME_REQUEST = 'style="filled" fillcolor="#e3f0ff" color="#2e6da4"'
-_PLAIN = 'style="filled" fillcolor="#f5f5f5" color="#999999"'
+# Punctuation that is harmless inside a quoted Mermaid label (letters and digits are
+# always kept). Everything else, including quotes, brackets, `<`, `>`, `&`, `#` and
+# `;`, is written as an entity.
+_SAFE_PUNCTUATION = frozenset(" _.-/:()@+?…,")
+
+_CLASS_DEFS = (
+    "  classDef anchor fill:#ffd6d6,stroke:#c0392b,stroke-width:2px,color:#222;",
+    "  classDef request fill:#e3f0ff,stroke:#2e6da4,color:#222;",
+    "  classDef plain fill:#f5f5f5,stroke:#999999,color:#222;",
+)
 
 
 def _escape(value: Any) -> str:
-    """Make ``value`` safe inside a double-quoted DOT string.
+    """Make ``value`` safe inside a double-quoted Mermaid label.
 
-    Backslashes and quotes are escaped, control characters (newlines included) become
-    spaces, and the text is cut so one long service name cannot widen the chart.
+    Control characters (newlines included) become spaces, the text is cut so one
+    long service name cannot widen the chart, and any character outside the safe set
+    is written as a numeric entity.
     """
     text = "" if value is None else str(value)
     text = "".join(" " if ord(ch) < 32 or ord(ch) == 127 else ch for ch in text)
     if len(text) > _LABEL_CHARS:
         text = text[: _LABEL_CHARS - 1] + "…"
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+    return "".join(
+        ch if ch.isalnum() or ch in _SAFE_PUNCTUATION else f"#{ord(ch)};" for ch in text
+    )
 
 
 def _signed(value: Any, *, suffix: str = "") -> str:
@@ -60,10 +74,10 @@ def _is_anchor(row: dict, anchor_record_id: Any) -> bool:
     return anchor_record_id is None and row.get("offset") == 0
 
 
-def timeline_dot(record: dict) -> str | None:
-    """DOT text for a ``timeline`` record, or ``None`` when there is nothing to draw.
+def timeline_mermaid(record: dict) -> str | None:
+    """Mermaid text for a ``timeline`` record, or ``None`` when there is nothing to draw.
 
-    One node per row in record-id order (the table's order), joined by edges; the
+    One node per row in record-id order (the table's order), joined by arrows; the
     anchor is highlighted and rows on the anchor's request are marked.
     """
     if not isinstance(record, dict) or record.get("tool_name") != TIMELINE_TOOL_NAME:
@@ -75,27 +89,22 @@ def timeline_dot(record: dict) -> str | None:
     arguments = record.get("arguments")
     anchor_id = arguments.get("anchor_record_id") if isinstance(arguments, dict) else None
 
-    lines = [
-        "digraph timeline {",
-        '  rankdir="TB";',
-        '  node [shape="box" fontname="Helvetica" fontsize="11"];',
-        '  edge [color="#666666"];',
-    ]
+    lines = ["flowchart LR"]
     for index, row in enumerate(rows):
+        offset = _escape(_signed(row.get("offset")))
+        seconds = _escape(_signed(row.get("seconds"), suffix="s"))
         label = (
-            f"{_escape(_signed(row.get('offset')))} lines · "
-            f"{_escape(_signed(row.get('seconds'), suffix='s'))}\\n"
+            f"{offset} · {seconds}<br/>"
             f"{_escape(row.get('severity'))} · {_escape(row.get('service'))}"
         )
         if _is_anchor(row, anchor_id):
-            attrs = _ANCHOR
-            label = f"ANCHOR\\n{label}"
+            css = "anchor"
+            label = f"ANCHOR {label}"
         elif row.get("same_request") is True:
-            attrs = _SAME_REQUEST
+            css = "request"
         else:
-            attrs = _PLAIN
-        lines.append(f'  n{index} [label="{label}" {attrs}];')
-    for index in range(len(rows) - 1):
-        lines.append(f"  n{index} -> n{index + 1};")
-    lines.append("}")
+            css = "plain"
+        lines.append(f'  n{index}["{label}"]:::{css}')
+    lines.append("  " + " --> ".join(f"n{index}" for index in range(len(rows))))
+    lines.extend(_CLASS_DEFS)
     return "\n".join(lines)

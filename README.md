@@ -765,7 +765,7 @@ confidence tests below are skipped unless enabled.
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
 | `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
-| `test_timeline.py` / `test_timeline_graph.py` / `test_claims.py` | the engineer's code-built before/after timeline and its DOT diagram; the number check that downgrades a measured finding whose figures the cited results do not show |
+| `test_timeline.py` / `test_timeline_graph.py` / `test_claims.py` | the engineer's code-built before/after timeline and its Mermaid diagram; the number check that downgrades a measured finding whose figures the cited results do not show |
 | `test_claim_check.py` / `test_live_claims.py` | the semantic claim check (which claims are sent, the request, the confidence gate, relabel and revision policy, with a fake classifier); gated live cases |
 | `test_live_scope_routes.py` | gated live scope-routing over scripted conversations (run with `bash ./routes.sh`) |
 | `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
