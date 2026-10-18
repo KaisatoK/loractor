@@ -35,6 +35,17 @@
 # Linux only: the SereneDB shell installer supports Linux, and on other systems
 # it stops and points at Docker -- use --db docker there.
 
+# This script uses bash features (arrays, [[, BASH_SOURCE). If it was started
+# with a POSIX shell such as dash (`sh ./bootstrap.sh`), re-exec under bash so
+# the user does not get cryptic syntax errors.
+if [ -z "${BASH_VERSION:-}" ]; then
+    if command -v bash >/dev/null 2>&1; then
+        exec bash "$0" "$@"
+    fi
+    echo "bootstrap.sh needs bash; run it as:  bash ./bootstrap.sh" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -110,7 +121,19 @@ PY
     fi
 }
 
-env_value() { sed -n "s/^$1=//p" .env 2>/dev/null | head -1; }
+# Read a key from .env. Strips an optional "export " prefix and a single pair
+# of surrounding single/double quotes, so a quoted value (KEY="value") is read
+# as its bare value -- matching how python-dotenv parses the same file.
+env_value() {
+    local raw
+    raw="$(sed -n "s/^[[:space:]]*\(export[[:space:]]\+\)\{0,1\}$1=//p" .env 2>/dev/null | head -1)"
+    # strip one matching pair of surrounding quotes
+    case "$raw" in
+        \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
+        \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
+    esac
+    printf '%s' "$raw"
+}
 
 
 # --- 1. preflight and uv ---------------------------------------------------
@@ -185,25 +208,33 @@ existing)
     note "using the server SERENEDB_* points at (${serenedb_port})"
     ;;
 native)
-    if ! command -v serened >/dev/null; then
-        note "serened is missing; SereneDB's Linux installer is:"
-        note "    curl https://linux.serenedb.com | sh"
-        confirm "download and run it?" || die "install SereneDB, or re-run with --db docker"
-        curl https://linux.serenedb.com | sh
-        export PATH="$HOME/.local/bin:$PATH"
-        command -v serened >/dev/null || die "serened not on PATH; add the directory the installer printed"
-    fi
-    note "serened present"
-    # The native server listens on 127.0.0.1:7890 and keeps its data (including
-    # persistent secrets) in the directory it is given.
-    data_dir="${SERENEDB_DATA_DIR:-$repo_root/.data/serenedb}"
-    mkdir -p "$data_dir" .data
-    set_env_key SERENEDB_HOST localhost
-    set_env_key SERENEDB_PORT 7890
-    serenedb_port=7890
-    if uv run python -c "from backend.db.provision import server_is_up; raise SystemExit(0 if server_is_up() else 1)" 2>/dev/null; then
-        note "a server is already answering on 127.0.0.1:7890"
+    # If a server is already answering on whatever SERENEDB_PORT currently
+    # points at, adopt it rather than install/start a native one and overwrite
+    # the port. This is what makes a pre-existing instance (e.g. a Docker
+    # container on a non-default host port) just work without --db existing.
+    serenedb_host="$(env_value SERENEDB_HOST)"
+    [ -n "$serenedb_host" ] || serenedb_host=localhost
+    set_env_key SERENEDB_HOST "$serenedb_host"
+    if SERENEDB_PORT="$serenedb_port" uv run python -c "from backend.db.provision import server_is_up; raise SystemExit(0 if server_is_up() else 1)" 2>/dev/null; then
+        note "a server is already answering on ${serenedb_port}; adopting it (SERENEDB_PORT left at $serenedb_port)"
+        set_env_key SERENEDB_PORT "$serenedb_port"
     else
+        if ! command -v serened >/dev/null; then
+            note "serened is missing; SereneDB's Linux installer is:"
+            note "    curl https://linux.serenedb.com | sh"
+            confirm "download and run it?" || die "install SereneDB, or re-run with --db docker"
+            curl https://linux.serenedb.com | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            command -v serened >/dev/null || die "serened not on PATH; add the directory the installer printed"
+        fi
+        note "serened present"
+        # The native server listens on 127.0.0.1:7890 and keeps its data
+        # (including persistent secrets) in the directory it is given.
+        data_dir="${SERENEDB_DATA_DIR:-$repo_root/.data/serenedb}"
+        mkdir -p "$data_dir" .data
+        set_env_key SERENEDB_HOST localhost
+        set_env_key SERENEDB_PORT 7890
+        serenedb_port=7890
         note "starting: serened $data_dir"
         nohup serened "$data_dir" >> .data/serened.log 2>&1 &
         echo $! > .data/serened.pid
