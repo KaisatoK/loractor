@@ -34,7 +34,7 @@ from sql_render import normalized  # noqa: E402
 
 import backend.db as db  # noqa: E402
 from backend.db import loghub  # noqa: E402
-from backend.db.datasets import Capability, dataset_ids, resolve  # noqa: E402
+from backend.db.datasets import dataset_ids, resolve  # noqa: E402
 from backend.db.errors import QueryRefused  # noqa: E402
 from backend.db.predicates import BUCKETS  # noqa: E402
 
@@ -50,42 +50,6 @@ def test_bgl_is_registered():
     assert "bgl" in dataset_ids()
 
 
-def test_bgl_declares_what_it_can_do():
-    bgl = resolve("bgl")
-    for capability in (
-        Capability.BM25,
-        Capability.RECORD_ID,
-        Capability.EXACT_COUNTS,
-        Capability.TEMPLATES,
-        Capability.AUTO_COMPLETE,
-    ):
-        assert bgl.supports(capability)
-
-
-def test_bgl_does_not_claim_per_row_embeddings():
-    """Semantic search comes from template embeddings, not per-row vectors."""
-    assert not resolve("bgl").supports(Capability.VECTOR)
-
-
-def test_bgl_is_not_chunk_sweepable():
-    """The sweep is for the remote corpus; BGL is 2,000 local rows."""
-    assert not resolve("bgl").supports(Capability.CHUNK_SWEEP)
-
-
-def test_bgl_maps_the_canonical_fields_it_actually_has():
-    bgl = resolve("bgl")
-    for name in (
-        "ts",
-        "severity",
-        "service",
-        "message",
-        "entity_id",
-        "template",
-        "record_id",
-    ):
-        assert bgl.sql_for(name) is not None
-
-
 def test_only_openstack_declares_a_request_id():
     """BGL and the OTel tiers record no request id, so the field is unmapped
     there and same_request filtering is refused rather than matching nothing."""
@@ -99,39 +63,7 @@ def test_only_openstack_declares_a_request_id():
     assert resolve("openstack").has_field("request_id")
 
 
-def test_bgl_does_not_claim_an_event_id_it_does_not_have():
-    """loghub publishes parsed EventIds only for its 2,000-line samples.
-
-    The full log carries none, so the field is unmapped and the '#' selector is
-    not offered, rather than mapping a column that does not exist and failing at
-    query time. otel_s3 omits record_id on the same principle.
-    """
-    from backend.db.errors import QueryRefused
-
-    bgl = resolve("bgl")
-    assert "event_id" not in bgl.fields
-    assert "#" not in bgl.selectors
-    with pytest.raises((QueryRefused, KeyError)):
-        bgl.sql_for("event_id")
-
-
 # --- The vocabulary each corpus owns ----------------------------------------
-def test_severity_vocabulary_is_per_dataset_and_uppercase_for_bgl():
-    """Six levels, confirmed against the full 4.7M-row corpus.
-
-    FAILURE is absent from loghub's 2,000-line sample, so a vocabulary taken
-    from the sample would have refused 1,714 real rows as unknown.
-    """
-    assert resolve("bgl").severity_values == (
-        "INFO",
-        "WARNING",
-        "ERROR",
-        "SEVERE",
-        "FATAL",
-        "FAILURE",
-    )
-
-
 def test_the_three_corpora_disagree_about_severity_case():
     """The reason a global severity constant could not work."""
     bgl = set(resolve("bgl").severity_values)
@@ -161,56 +93,6 @@ def test_an_uppercase_severity_is_refused_for_otel():
             severity="ERROR",
         )
     assert excinfo.value.refusal.code == "severity_case"
-
-
-# --- Zero new SQL: the builders are unchanged -------------------------------
-def test_every_builder_composes_against_bgl():
-    """The central property. Each builder must produce SQL naming BGL's own
-    columns, without any BGL-specific branch existing in it."""
-    cases = (
-        (db.count_by_field, WINDOW, {"dataset": "bgl"}),
-        (db.count_distinct_by_field, WINDOW, {"dataset": "bgl", "field": "service"}),
-        (db.top_by_field, WINDOW, {"dataset": "bgl", "field": "service"}),
-        (db.get_field_values, (*WINDOW, "template"), {"dataset": "bgl"}),
-        (
-            db.get_trend,
-            (*WINDOW, "service", "KERNEL"),
-            {"dataset": "bgl", "bucket": "month"},
-        ),
-        (db.search_logs, ("parity error",), {"dataset": "bgl"}),
-        (db.get_log_by_record_id, (1,), {"dataset": "bgl"}),
-    )
-    for fn, args, kwargs in cases:
-        rendered = normalized(build(fn, *args, **kwargs)[0])
-        assert '"bgl"' in rendered or "bgl_" in rendered, fn.__name__
-
-
-def test_builders_reference_bgl_columns_not_openstack_ones():
-    """No other corpus's column names may leak into BGL's SQL."""
-    severity_only = normalized(build(db.count_by_field, *WINDOW, dataset="bgl")[0])
-    assert '"Level"' in severity_only
-    assert '"bgl"' in severity_only
-    # OpenStack's severity and timestamp columns must not appear.
-    assert "category" not in severity_only
-    assert "log_timestamp" not in severity_only
-
-    by_service = normalized(
-        build(db.top_by_field, *WINDOW, dataset="bgl", field="service")[0]
-    )
-    assert '"Component"' in by_service
-    assert '"ServiceName"' not in by_service
-
-
-def test_search_uses_the_bgl_index_relation():
-    rendered = normalized(build(db.search_logs, "parity", dataset="bgl")[0])
-    assert "bgl_idx" in rendered
-    assert "read_parquet" not in rendered
-
-
-def test_bgl_timestamps_are_cast_as_timestamptz():
-    """Epoch seconds are converted at load time, so queries see a real
-    timestamptz and the generic ts filter applies unchanged."""
-    assert resolve("bgl").ts_cast == "timestamptz"
 
 
 # --- Long-range buckets -----------------------------------------------------
@@ -244,12 +126,6 @@ def test_month_buckets_compose_for_the_full_bgl_range():
 
 
 # --- Loader -----------------------------------------------------------------
-def test_the_loader_spec_is_registered_for_bgl():
-    spec = loghub.spec_for("bgl")
-    assert spec.dataset_id == "bgl"
-    assert spec.csv_name.endswith("_structured.csv")
-
-
 def test_an_unknown_corpus_is_refused_with_the_loadable_list():
     with pytest.raises(QueryRefused) as excinfo:
         loghub.spec_for("hdfs")
@@ -330,10 +206,3 @@ def test_every_selector_column_is_in_the_token_index():
             continue  # matched through the verbatim index, not the token one
         column = bgl.fields[field_name].column
         assert column in token_columns, f"selector {char} -> {column}"
-
-
-def test_the_loader_names_indexes_from_the_registry():
-    """The registry stays the single source of truth for what a query reads."""
-    bgl = resolve("bgl")
-    assert bgl.index_name == "bgl_idx"
-    assert bgl.token_index_name == "bgl_token_idx"

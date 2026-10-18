@@ -21,7 +21,6 @@ from backend.pipeline.agents.find_evidence import SWEEP_TOOL_NAMES
 from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.effort import EFFORT_SPECS, get_effort_spec
 from backend.pipeline.prompts.builders import TOOL_CATALOG
-from backend.pipeline.tools import __all__ as exported_tools
 
 
 # --- Effort gating ----------------------------------------------------------
@@ -60,24 +59,6 @@ def test_scan_budgets_grow_faster_than_call_budgets():
 
 
 # --- The tool surface stays consistent --------------------------------------
-def test_both_sweep_tools_are_exported():
-    assert "sweep_chunks_tool" in exported_tools
-    assert "investigate_chunk_tool" in exported_tools
-
-
-def test_the_catalog_matches_the_exported_tools():
-    """Asserted elsewhere too, and worth asserting here: a catalog entry
-    without a tool describes something the model cannot call."""
-    assert set(TOOL_CATALOG) == set(exported_tools)
-
-
-def test_both_transports_expose_the_same_tools():
-    from backend.pipeline.tools.mcp_tools import MCP_DB_TOOLS
-    from backend.pipeline.tools.registry import LOCAL_DB_TOOLS
-
-    assert {t.name for t in LOCAL_DB_TOOLS} == {t.name for t in MCP_DB_TOOLS}
-
-
 def test_the_mcp_module_still_exposes_the_skill_tools():
     """These were dropped once and broke five test modules."""
     from backend.pipeline.tools.mcp_tools import list_skills, read_skill

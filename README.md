@@ -853,27 +853,33 @@ confidence tests below are skipped unless enabled.
 | `test_checkpointer.py` | checkpointer backend selection |
 | `test_config.py` | env-driven config and the pooled connection layer |
 | `test_observability.py` | metrics registry and request-correlation middleware |
-| `test_chat_client.py` / `test_rendering.py` / `test_manage.py` / `test_demo.py` | UI client, marker rendering, provisioning CLI, demo auto-login |
+| `test_chat_client.py` / `test_manage.py` / `test_demo.py` | UI client, provisioning CLI, demo auto-login |
 | `test_chat_box_stop.py` / `test_chat_stop_ui.py` / `test_stopped_turns.py` | chat box lock and stop button, stopped/failed runs in the UI, the stored `stopped` flag and the transcript label |
+| `test_main_page_live.py` | the live investigation panel: progress lines grouped under the stage markers the backend emits, including a run with none |
 | `test_decision_nodes.py` / `test_confidence_prompts.py` / `test_live_confidence.py` / `test_find_evidence.py` | scope & confidence decisions, atomic classifier payloads, gated live confidence checks, evidence-node wiring |
 | `test_clarify_and_assumed_scope.py` | what the clarifier is shown, the code-built options line, the assumed-scope line, the no-evidence answer rules |
+| `test_normalize_node_direct.py` | the `normalize` generator and a direct `normalize_node` call, whose stage emission is guarded outside a runnable context |
 | `test_stream_projection.py` / `test_tool_progress.py` / `test_answer_rendering.py` | streaming projection, tool-progress events, serializer↔renderer sync |
 | `test_stream_events.py` | the shared event reducer: backend-saved and live progress agree, refusals never saved as failures, malformed payloads |
 | `test_skill_progress.py` | the skill lines in the progress panel: the injected playbook, skills the agent reads (real agent run), failed reads not reported |
 | `test_tool_envelope.py` / `test_data_scope.py` / `test_ownership.py` | tool-result contract and query capture, code-built data scope, ownership table |
 | `test_evidence_builder.py` / `test_answer_catalog.py` | code-built evidence items and tool calls, the answer prompt's result catalog |
 | `test_role_playbooks.py` / `test_answer_ledger.py` / `test_worked_investigation.py` | role objectives and playbooks, findings ledger and priority score, document generator |
-| `test_timeline.py` / `test_claims.py` | the engineer's code-built before/after timeline; the number check that downgrades a measured finding whose figures the cited results do not show |
+| `test_timeline.py` / `test_timeline_graph.py` / `test_claims.py` | the engineer's code-built before/after timeline and its DOT diagram; the number check that downgrades a measured finding whose figures the cited results do not show |
 | `test_claim_check.py` / `test_live_claims.py` | the semantic claim check (which claims are sent, the request, the confidence gate, relabel and revision policy, with a fake classifier); gated live cases |
+| `test_live_scope_routes.py` | gated live scope-routing over scripted conversations (run with `bash ./routes.sh`) |
 | `test_role_switch.py` / `test_role_switch_ui.py` | per-role answer cache, role-switch endpoint and buttons |
 | `test_query_layer.py` / `test_budget.py` / `test_search_terms.py` | dataset registry, bounded/metered queries, disk budget, tokenizer |
-| `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors), trend and period-comparison query shapes |
+| `test_cost_guidance.py` / `test_cost_reporting.py` | the cost guidance the agent receives and the per-effort scan budget; cost accounting and its presentation in the answer |
+| `test_datasets.py` / `test_trend_compare_queries.py` | registrations (incl. the `openstack` table and selectors) and the per-corpus contract parametrized over `openstack`/`bgl`, trend and period-comparison query shapes |
 | `test_auto_complete.py` / `test_session_time_zone.py` | type-ahead merged across `openstack` + `bgl` and the chat-box selector gate; every DB session pinned to UTC |
-| `test_registry.py` / `test_mcp.py` | local↔MCP tool parity (fourteen tools), MCP server validation (no auto-complete tool) |
+| `test_registry.py` | local↔MCP tool parity (fourteen tools) |
 | `test_tool_specs.py` | every tool is generated from the spec table: same name, description, arguments, bounds and enums on the local tools, the pipeline's MCP wrappers and the server; catalog and kinds derived; no hand-written tool left |
-| `test_mcp_contract.py` | the server's contract: instructions, the shared result schema, size limits with the visible cut marker, actionable error messages |
+| `test_mcp_contract.py` | the server's contract: instructions, the shared result schema, size limits with the visible cut marker, actionable error messages, the omitted in-process tools |
 | `test_mcp_prompts_resources.py` | role prompts built from the pipeline's `evidence_brief`, completions, skill and `logs://` resources rendered from their sources |
 | `test_mcp_transport.py` | the bearer token (constant-time), Host/Origin guard, `/health`, stdio round trip; a real-server smoke test gated by `RUN_MCP_SMOKE=1` |
+| `test_mcp_operations.py` / `test_mcp_sweep_progress.py` | server operations: lifespan, logging without payloads, rate limiting and the one cached tool; sweep progress to the client and the server's cost cap |
+| `test_mcp_bridge_session.py` / `test_mcp_bridge_timeout.py` | the pipeline's MCP bridge: one session kept per bridge, relayed server progress, and the sweep-only call timeout |
 | `test_nearby_events.py` | nearby events: schema, the one-statement SQL (both sides, correlation filters, omitted sides), refusals, explanatory notes, the tool on both transports with one shared description |
 | `test_otel_index_tool.py` | the in-place OTel index: window coverage, automatic indexing from search, the index tool, no SAVEPOINT or advisory lock |
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
@@ -885,16 +891,15 @@ confidence tests below are skipped unless enabled.
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_provision.py` | the setup steps against the database: the secret is persistent and unshadowed, the key never reaches a log, readiness runs a query, and a loaded corpus is not rebuilt |
 | `test_embedding_compatibility.py` | the embedding model check: missing secret, width mismatch, vectors from another model, the build refusal and the lexical fallback |
-| `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
-| `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
+| `test_openstack.py` / `test_openstack_live.py` | OpenStack's request-id derivation, spec and nova-log parser/multi-file loader; gated live checks against the loaded 207,820-row corpus |
+| `test_bgl.py` / `test_bgl_live.py` | BGL's parser, epoch handling and long-range bucket behaviour; gated live checks against the full 4.7M-row corpus |
 | `test_sampling_and_external.py` / `test_promotion.py` | cluster-sample uncertainty, in-place index plans, promote/digest/teardown |
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `3 failed, 1251 passed, 107 skipped` with SereneDB
-> reachable. All three failures are known and pre-existing, in
-> `tests/test_rendering.py` (inline-marker rendering edge cases). Two further
-> tests, `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
+> The offline suite reports `0 failed, 1339 passed, 107 skipped` with SereneDB
+> reachable. Two tests,
+> `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
 > `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, are
 > not gated but need a reachable database, so they fail when `SERENEDB_PORT`
 > points at nothing (the host port moves -- see **Limitations**). The skips are
@@ -1420,9 +1425,9 @@ measurement or the exact error behind it. Where a workaround exists it is named.
 - **Runs are held in-process.** A single uvicorn worker owns the background
   investigation registry, so a backend restart loses any in-flight run (the
   persisted chat history survives).
-- **Three test failures are pre-existing**, all inline-marker rendering edge
-  cases in `tests/test_rendering.py`; the offline suite is otherwise green
-  (1,251 passed, 107 skipped, identical under `TOOLS_TRANSPORT=mcp`).
+- **The offline suite is green** (`0 failed, 1,339 passed, 107 skipped`, identical
+  under `TOOLS_TRANSPORT=mcp`); the former inline-marker rendering edge cases are
+  fixed and covered by `tests/test_answer_rendering.py`.
 - **The live corpus tests assume the full corpora.** With only loghub's 2,000-row
   samples loaded, 13 of `tests/test_openstack_live.py` fail on row-count
   assertions; they pass against the 207,820-row corpus.

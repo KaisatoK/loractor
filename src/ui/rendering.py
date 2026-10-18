@@ -275,6 +275,7 @@ def _strip_inline_markers(line: str) -> tuple[str, list[str]]:
     parts: list[str] = []
     result_ids: list[str] = []
     pos = 0
+    end = 0
 
     for match in MARKER_RE.finditer(line):
         start, end = _expand_wrappers(line, match.start(), match.end())
@@ -285,6 +286,10 @@ def _strip_inline_markers(line: str) -> tuple[str, list[str]]:
 
     cleaned = re.sub(r"[ \t]{2,}", " ", "".join(parts))
     cleaned = re.sub(r"[ \t]+([,.;:!?])", r"\1", cleaned)
+    # A marker removed at end-of-line leaves its separating space behind; when
+    # the last match (wrappers included) ended the line, drop that trailing gap.
+    if result_ids and end == len(line.rstrip()):
+        cleaned = cleaned.rstrip()
     return cleaned, result_ids
 
 

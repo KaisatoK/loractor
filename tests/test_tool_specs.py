@@ -195,6 +195,22 @@ def test_the_server_rejects_what_the_schema_forbids_and_says_how_to_fix_it():
     assert result.is_error and "dataset" in result.content[0].text
 
 
+def test_the_server_rejects_an_inverted_window_on_a_windowed_tool():
+    # ``_Windowed._ordered`` owns the rule; the same bound must hold on the
+    # server, not only in the pipeline's schema.
+    result = _call(
+        "get_trend_tool",
+        {
+            "start_time": "2017-05-16 01:00:00",
+            "end_time": "2017-05-16 00:00:00",
+            "type": ["service", "nova"],
+        },
+    )
+    assert result.is_error
+    text = result.content[0].text
+    assert "end_time" in text and "start_time" in text
+
+
 def test_the_server_rejects_unknown_arguments_instead_of_dropping_them():
     result = _call("search_logs_tool", {"query_text": "x", "severity": "ERROR"})
     assert result.is_error

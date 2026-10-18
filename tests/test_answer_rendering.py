@@ -1,8 +1,8 @@
 """Unit tests for the answer generator, serialization, and marker rendering.
 
-Pure/offline: these never touch SereneDB, unlike ``test_db_queries.py``. They
-cover ``generate_answer`` (a direct model call that validates the message text
-locally), the structured-answer serializer, and the markdown canonicalization
+Pure/offline: these never touch SereneDB. They cover ``generate_answer`` (a
+direct model call that validates the message text locally), the
+structured-answer serializer, and the markdown canonicalization
 that guarantees no marker decoration ("weird trailing characters") reaches the
 UI.
 """
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from backend.pipeline.agents import answer as answer_module
 from backend.pipeline.answers import serialize_answer
 from backend.pipeline.contracts import AnswerOutput, AnswerText
-from ui.rendering import canonicalize, render_answer
+from ui.rendering import MARKER_RE, canonicalize, render_answer
 
 
 class FakeContainer:
@@ -109,6 +109,29 @@ def test_short_form_marker_keeps_sentence_punctuation():
 
     assert _tables(container) == ["R1"]
     assert _prose(container) == ["See."]
+
+
+def test_marker_regex_accepts_variants():
+    for text in ["[[RESULT:R1]]", "[RESULT:R1]", "【RESULT:R1】", "［RESULT:R1］", "【R1】"]:
+        assert MARKER_RE.search(text), text
+
+
+def test_trailing_punctuation_moves_before_marker():
+    # A marker removed at end-of-line must not leave its separating space behind.
+    container = FakeContainer()
+    render_answer(container, "done. [[RESULT:R1]]", _results("R1"))
+
+    assert _prose(container) == ["done."]
+    assert _kinds(container) == ["markdown", "dataframe"]
+
+
+def test_empty_marker_rows_are_skipped():
+    # A cited result with no rows is not rendered as an empty table; the prose
+    # before the marker still renders.
+    container = FakeContainer()
+    render_answer(container, "only text [[RESULT:R1]]", [{"id": "R1", "rows": []}])
+
+    assert _kinds(container) == ["markdown"]
 
 
 def test_unknown_marker_renders_nothing():

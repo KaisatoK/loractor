@@ -121,6 +121,8 @@ def test_wrong_case_category_is_refused(loaded):
 
 def test_schema_requires_paired_window_and_local_ids():
     assert CountByTeam().datasets is None
+    assert CountByTeam().start_time is None
+    CountByTeam(start_time="2017-05-16 00:00:00", end_time="2017-05-17 00:00:00")
     assert CountByTeam(datasets=["bgl", "bgl"]).datasets == ["bgl"]
     with pytest.raises(ValidationError):
         CountByTeam(datasets=["otel_s3"])

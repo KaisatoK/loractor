@@ -175,6 +175,7 @@ def test_the_skills_are_served_with_their_manifest():
     for skill in ROLE_SKILLS.values():
         assert f"skill://{skill}/SKILL.md" in uris and f"skill://{skill}/_manifest" in uris
     assert "skill://log-investigation/SKILL.md" in uris
+    assert "# Log Investigation" in _read("skill://log-investigation/SKILL.md")
     manifest = json.loads(_read("skill://risk-prioritization/_manifest"))
     assert manifest["skill"] == "risk-prioritization"
     assert any(f["path"] == "SKILL.md" for f in manifest["files"])

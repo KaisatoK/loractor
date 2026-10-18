@@ -4,6 +4,7 @@ import threading
 
 from fastmcp import Context, FastMCP
 
+from backend.mcp_server import server
 from backend.pipeline.tools.mcp_bridge import MCPBridge
 
 
@@ -94,3 +95,15 @@ def test_concurrent_calls_share_the_session():
     finally:
         bridge.close()
     assert results == [{"ok": True}] * 8
+
+
+def test_sync_bridge_uses_one_loop_and_preserves_skill_result():
+    """The real server: two calls over one loop, and a skill read round-trips."""
+    bridge = MCPBridge(target=server.mcp, timeout=10)
+    try:
+        assert bridge.call_tool("read_skill", {"name": "log-investigation"}).startswith("#")
+        thread_name = bridge._thread.name
+        assert bridge.call_tool("list_skills", {})[0]["name"] == "log-investigation"
+        assert bridge._thread.name == thread_name
+    finally:
+        bridge.close()

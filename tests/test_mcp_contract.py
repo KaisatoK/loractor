@@ -129,6 +129,60 @@ def test_a_refused_query_is_a_result_not_an_error(monkeypatch):
     assert result.structured_content["suggestion"] == "narrow to 300 s"
 
 
+# --- The served surface: one round-trip and what it omits ---------------------
+def test_the_server_omits_the_dropped_and_in_process_tools():
+    names = {tool.name for tool in _run(lambda c: c.list_tools())}
+    # get_log_templates_tool was dropped; auto_complete is a chat-box feature
+    # served in-process, not an evidence tool.
+    assert "get_log_templates_tool" not in names
+    assert "auto_complete" not in names
+
+
+def test_a_served_tool_round_trips_and_rejects_bad_input(monkeypatch):
+    from backend.db.stats import QueryResult
+
+    monkeypatch.setattr(
+        specs,
+        "get_nearby_events",
+        lambda *a: QueryResult([{"record_id": 1, "offset": 0}]),
+    )
+    tool = {t.name: t for t in _run(lambda c: c.list_tools())}["get_nearby_events_tool"]
+    assert "offset" in tool.description and "same_request" in tool.description
+    assert {"line_id", "same_entity", "same_request"} <= set(
+        tool.input_schema["properties"]
+    )
+
+    ok = _call("get_nearby_events_tool", {"line_id": 1})
+    assert not ok.is_error
+    assert ok.structured_content["status"] == "success"
+    assert ok.structured_content["kind"] == "context"
+
+    for bad in ({"line_id": 0}, {"line_id": 1, "before": 51}, {"line_id": 1, "dataset": "t"}):
+        assert _call("get_nearby_events_tool", bad).is_error, bad
+
+
+def test_the_team_count_tool_round_trips_as_a_measured_result(monkeypatch):
+    # The team join itself is covered by ``test_count_by_team.py``; this is the
+    # server round-trip the deleted ``test_mcp.py`` had no successor for.
+    rows = QueryResult([
+        {"dataset": "openstack", "team": "API Gateway", "severity": "ERROR", "count": 12},
+        {"dataset": "bgl", "team": "unowned", "severity": "FATAL", "count": 3},
+    ])
+    monkeypatch.setattr(specs, "count_by_team", lambda **kwargs: rows)
+
+    result = _call("count_by_team_tool", {"datasets": ["openstack", "bgl"]})
+    assert not result.is_error
+    envelope = result.structured_content
+    assert envelope["status"] == "success"
+    assert envelope["kind"] == "aggregate"
+    assert envelope["truncated"] is False
+    assert envelope["returned"] == 2
+    assert {(r["dataset"], r["team"], r["severity"], r["count"]) for r in envelope["data"]} == {
+        ("openstack", "API Gateway", "ERROR", 12),
+        ("bgl", "unowned", "FATAL", 3),
+    }
+
+
 # --- Size limits -----------------------------------------------------------------
 def test_long_text_is_cut_with_a_visible_marker_and_counted():
     rows, clipped, dropped = clip_rows([{"message": "x" * (MAX_CELL_CHARS + 50), "n": 1}])

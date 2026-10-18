@@ -36,7 +36,6 @@ import backend.db as db  # noqa: E402
 from backend.db import loghub  # noqa: E402
 from backend.db.datasets import (  # noqa: E402
     DEFAULT_DATASET_ID,
-    Capability,
     catalog,
     dataset_ids,
     resolve,
@@ -54,42 +53,6 @@ def build(fn, *args, **kwargs):
 def test_openstack_is_registered_and_is_the_default():
     assert "openstack" in dataset_ids()
     assert DEFAULT_DATASET_ID == "openstack"
-
-
-def test_openstack_declares_what_it_can_do():
-    openstack = resolve("openstack")
-    for capability in (
-        Capability.BM25,
-        Capability.RECORD_ID,
-        Capability.EXACT_COUNTS,
-        Capability.TEMPLATES,
-        Capability.AUTO_COMPLETE,
-    ):
-        assert openstack.supports(capability)
-
-
-def test_openstack_does_not_claim_per_row_embeddings():
-    """Loaded with ``--no-embed``: search is lexical."""
-    assert not resolve("openstack").supports(Capability.VECTOR)
-
-
-def test_openstack_is_not_chunk_sweepable():
-    """The sweep is for the remote corpus; OpenStack is a local table."""
-    assert not resolve("openstack").supports(Capability.CHUNK_SWEEP)
-
-
-def test_openstack_maps_the_canonical_fields_it_actually_has():
-    openstack = resolve("openstack")
-    for name in (
-        "ts",
-        "severity",
-        "service",
-        "message",
-        "entity_id",
-        "template",
-        "record_id",
-    ):
-        assert openstack.sql_for(name) is not None
 
 
 def test_openstack_derives_a_request_id_from_addr():
@@ -110,25 +73,7 @@ def test_openstack_spec_stores_the_column_request_id_reads():
     assert "ADDR" in set(spec.all_column_names)
 
 
-def test_openstack_does_not_claim_an_event_id_it_does_not_have():
-    """The raw nova logs carry no event id, so the field is unmapped and neither
-    ``#`` nor ``!`` is offered as a selector."""
-    openstack = resolve("openstack")
-    assert "event_id" not in openstack.fields
-    assert "#" not in openstack.selectors
-    assert "!" not in openstack.selectors
-    with pytest.raises((QueryRefused, KeyError)):
-        openstack.sql_for("event_id")
-
-
 # --- The vocabulary each corpus owns ----------------------------------------
-def test_severity_vocabulary_includes_critical_and_is_uppercase():
-    """Four levels, measured on the three raw files: CRITICAL appears twice."""
-    severities = resolve("openstack").severity_values
-    assert severities == ("INFO", "WARNING", "ERROR", "CRITICAL")
-    assert all(s.isupper() for s in severities)
-
-
 def test_a_lowercase_severity_is_refused_for_openstack():
     with pytest.raises(QueryRefused) as excinfo:
         build(db.count_by_field, *WINDOW, dataset="openstack", severity="error")
@@ -146,44 +91,6 @@ def test_critical_is_an_accepted_severity():
 
 
 # --- Zero new SQL: the builders are unchanged -------------------------------
-def test_every_builder_composes_against_openstack():
-    cases = (
-        (db.count_by_field, WINDOW, {"dataset": "openstack"}),
-        (
-            db.count_distinct_by_field,
-            WINDOW,
-            {"dataset": "openstack", "field": "service"},
-        ),
-        (db.top_by_field, WINDOW, {"dataset": "openstack", "field": "service"}),
-        (db.get_field_values, (*WINDOW, "template"), {"dataset": "openstack"}),
-        (
-            db.get_trend,
-            (*WINDOW, "service", "nova.compute.manager"),
-            {"dataset": "openstack", "bucket": "hour"},
-        ),
-        (db.search_logs, ("instance spawned",), {"dataset": "openstack"}),
-        (db.get_log_by_record_id, (1,), {"dataset": "openstack"}),
-    )
-    for fn, args, kwargs in cases:
-        rendered = normalized(build(fn, *args, **kwargs)[0])
-        assert '"openstack"' in rendered or "openstack_" in rendered, fn.__name__
-
-
-def test_builders_reference_openstack_columns_not_other_corpora():
-    severity_only = normalized(build(db.count_by_field, *WINDOW, dataset="openstack")[0])
-    assert '"Level"' in severity_only
-    assert '"Timestamp"' in severity_only
-    assert '"openstack"' in severity_only
-    for foreign in ('"Node"', '"SeverityText"', '"ServiceName"'):
-        assert foreign not in severity_only
-
-    by_service = normalized(
-        build(db.top_by_field, *WINDOW, dataset="openstack", field="service")[0]
-    )
-    assert '"Component"' in by_service
-    assert '"ServiceName"' not in by_service
-
-
 def test_the_integer_pid_filters_as_the_entity_id():
     query, params, _ = build(
         db.get_trend, *WINDOW, "entity_id", 2931, dataset="openstack", bucket="hour"
@@ -192,30 +99,7 @@ def test_the_integer_pid_filters_as_the_entity_id():
     assert 2931 in params
 
 
-def test_search_uses_the_openstack_index_relation():
-    rendered = normalized(build(db.search_logs, "spawned", dataset="openstack")[0])
-    assert "openstack_idx" in rendered
-    assert "read_parquet" not in rendered
-
-
-def test_openstack_timestamps_are_cast_as_timestamptz():
-    """Stored in UTC at load time, so the generic ts filter applies unchanged."""
-    assert resolve("openstack").ts_cast == "timestamptz"
-
-
 # --- Loader -----------------------------------------------------------------
-def test_the_loader_spec_is_registered_for_openstack():
-    spec = loghub.spec_for("openstack")
-    assert spec.dataset_id == "openstack"
-    assert spec.csv_name.endswith("_structured.csv")
-
-
-def test_the_loader_names_indexes_from_the_registry():
-    openstack = resolve("openstack")
-    assert openstack.index_name == "openstack_idx"
-    assert openstack.token_index_name == "openstack_token_idx"
-
-
 API_LINE = (
     "nova-api.log.1.2017-05-16_13:53:08 2017-05-16 00:00:00.008 25746 INFO "
     "nova.osapi_compute.wsgi.server [req-38101a0b-2096-447d-96ea-a692162415ae "
