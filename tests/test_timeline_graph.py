@@ -25,32 +25,70 @@ def _timeline():
     return timeline_record([_context_record()])
 
 
-def _node_lines(diagram):
-    return [line for line in diagram.splitlines() if re.match(r"\s+n\d+\[", line)]
+def _nodes(diagram):
+    """The node definitions ``n3["..."]`` in node-number order (not grid order)."""
+    found = re.findall(r'n(\d+)\["[^"\n]*"\]', diagram)
+    by_index = {int(m.group(1)): m.group(0) for m in re.finditer(r'n(\d+)\["[^"\n]*"\]', diagram)}
+    assert len(found) == len(by_index)
+    return [by_index[i] for i in sorted(by_index)]
 
 
-def test_one_node_per_row_in_line_order_joined_by_one_chain():
+def _classes(diagram):
+    return dict(re.findall(r"^  class (n\d+) (\w+)$", diagram, flags=re.M))
+
+
+def test_one_node_per_row_in_line_order_joined_by_arrows():
     diagram = timeline_mermaid(_timeline())
-    assert diagram.startswith("flowchart TB")  # rows of boxes, stacked
-    assert len(_node_lines(diagram)) == 4
-    assert "    n0 --> n1 --> n2 --> n3" in diagram.splitlines()
+    assert "block-beta" in diagram  # a real grid, so the arrows can cross rows
+    assert len(_nodes(diagram)) == 4
+    assert [f"  n{i} --> n{i + 1}" in diagram.splitlines() for i in range(3)] == [True] * 3
     # Record-id order: the first node is the earliest line (offset -2).
-    assert _node_lines(diagram)[0].strip().startswith('n0["-2 ·')
+    assert _nodes(diagram)[0].startswith('n0["-2 ·')
 
 
 def test_only_the_anchor_is_highlighted_and_same_request_rows_are_marked():
     diagram = timeline_mermaid(_timeline())
     assert diagram.count("ANCHOR") == 1
-    anchor = next(line for line in _node_lines(diagram) if "ANCHOR" in line)
-    assert anchor.strip().startswith("n2[") and anchor.endswith(":::anchor")
-    marked = [line for line in _node_lines(diagram) if line.endswith(":::request")]
-    assert len(marked) == 1 and marked[0].strip().startswith("n1[")
-    assert sum(line.endswith(":::plain") for line in _node_lines(diagram)) == 2
+    assert "ANCHOR" in _nodes(diagram)[2]
+    classes = _classes(diagram)
+    assert classes["n2"] == "anchor" and classes["n1"] == "request"
+    assert sorted(classes.values()) == ["anchor", "plain", "plain", "request"]
 
 
 def test_nodes_are_two_short_lines():
-    for line in _node_lines(timeline_mermaid(_timeline())):
-        assert line.count("<br/>") == 1
+    for node in _nodes(timeline_mermaid(_timeline())):
+        assert node.count("<br/>") == 1
+
+
+def test_the_chain_snakes_so_every_turn_between_rows_is_drawn():
+    record = _timeline()
+    record["rows"] = [
+        {"offset": i, "record_id": i, "seconds": float(i), "severity": "INFO", "service": "s"}
+        for i in range(10)
+    ]
+    record["arguments"]["anchor_record_id"] = 3
+    lines = timeline_mermaid(record).splitlines()
+    grid = [ln for ln in lines if ln.startswith("  n") and "[" in ln]
+    order = [[int(n) for n in re.findall(r'n(\d+)\["', ln)] for ln in grid]
+    spaces = [ln.count("space") for ln in grid]
+    assert order[0] == [0, 1, 2, 3]
+    assert order[1] == [7, 6, 5, 4]  # the second row runs right to left
+    assert order[2] == [8, 9]
+    assert spaces == [0, 0, 0]
+    # every consecutive pair is joined, including the turns 3 -> 4 and 7 -> 8
+    assert all(f"  n{i} --> n{i + 1}" in lines for i in range(9))
+
+
+def test_a_short_odd_row_stays_under_the_end_of_the_row_above():
+    record = _timeline()
+    record["rows"] = [
+        {"offset": i, "record_id": i, "seconds": float(i), "severity": "INFO", "service": "s"}
+        for i in range(6)
+    ]
+    record["arguments"]["anchor_record_id"] = 3
+    second = [ln for ln in timeline_mermaid(record).splitlines() if 'n5["' in ln][0]
+    assert second.split()[:2] == ["space", "space"]
+    assert second.index('n4["') > second.index('n5["')  # n4 is last, under n3
 
 
 def test_log_text_cannot_break_out_of_a_label():
@@ -58,13 +96,13 @@ def test_log_text_cannot_break_out_of_a_label():
     record["rows"][0]["service"] = 'a" --> n9["x"]; %% {x} <b>\n"'
     record["rows"][0]["severity"] = "x\\"
     diagram = timeline_mermaid(record)
-    first = _node_lines(diagram)[0]
+    first = _nodes(diagram)[0]
     # Only our own delimiters survive: the opening and closing quote of the label.
     assert first.count('"') == 2
-    assert "<b>" not in diagram and "n9" not in diagram.replace(first, "")
+    assert "<b>" not in diagram and "--> n9" not in diagram
     assert "#34;" in first and "#60;" in first and "#37;" in first
     assert "\n" not in first
-    assert len(_node_lines(diagram)) == 4
+    assert len(_nodes(diagram)) == 4
 
 
 def test_message_text_is_never_drawn():
@@ -93,7 +131,9 @@ def test_nodes_are_capped():
         for i in range(MAX_NODES + 25)
     ]
     record["arguments"]["anchor_record_id"] = 3
-    assert len(_node_lines(timeline_mermaid(record))) == MAX_NODES
+    diagram = timeline_mermaid(record)
+    assert len(_nodes(diagram)) == MAX_NODES
+    assert "ANCHOR" in diagram  # the window is centred on the anchor, not the first rows
 
 
 @pytest.mark.parametrize(

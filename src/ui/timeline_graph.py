@@ -24,7 +24,7 @@ from typing import Any
 TIMELINE_TOOL_NAME = "timeline"
 # Most nodes drawn: a window of lines centred on the anchor (the table lists them all).
 MAX_NODES = 12
-# Boxes per row; the chain wraps into a grid so each box keeps a readable width.
+# Boxes per row; the chain wraps into a snake-like grid so each box stays readable.
 NODES_PER_ROW = 4
 _LABEL_CHARS = 28
 
@@ -32,6 +32,10 @@ _LABEL_CHARS = 28
 # always kept). Everything else, including quotes, brackets, `<`, `>`, `&`, `#` and
 # `;`, is written as an entity.
 _SAFE_PUNCTUATION = frozenset(" _.-/:()@+?…,")
+
+# Mermaid's default block padding leaves no room to draw an arrow between boxes, so
+# the diagram carries its own config (st.mermaid_chart takes none).
+_FRONTMATTER = ("---", "config:", "  block:", "    padding: 22", "---")
 
 _CLASS_DEFS = (
     "  classDef anchor fill:#ffd6d6,stroke:#c0392b,stroke-width:2px,color:#222;",
@@ -82,9 +86,11 @@ def timeline_mermaid(record: dict) -> str | None:
     """Mermaid text for a ``timeline`` record, or ``None`` when there is nothing to draw.
 
     Nodes follow record-id order (the table's order), at most ``MAX_NODES`` of them,
-    a window centred on the anchor. Each grid row is an invisible subgraph with its
-    own left-to-right arrows; rows read top to bottom. The anchor is highlighted and
-    rows on the anchor's request are marked.
+    a window centred on the anchor, drawn as a Mermaid block diagram (a real grid).
+    The chain snakes: the first row reads left to right, the next right to left, and
+    so on, so the last box of a row sits directly above the first of the next and
+    every arrow, including the turn between rows, is drawn. The anchor is highlighted
+    and rows on the anchor's request are marked.
     """
     if not isinstance(record, dict) or record.get("tool_name") != TIMELINE_TOOL_NAME:
         return None
@@ -99,8 +105,8 @@ def timeline_mermaid(record: dict) -> str | None:
         start = max(0, min(anchor_index - MAX_NODES // 2, len(rows) - MAX_NODES))
         rows = rows[start : start + MAX_NODES]
 
-    lines = ["flowchart TB"]
-    for index, row in enumerate(rows):
+    labels: list[tuple[str, str]] = []
+    for row in rows:
         offset = _escape(_signed(row.get("offset")))
         seconds = _escape(_signed(row.get("seconds"), suffix="s"))
         label = (
@@ -108,24 +114,24 @@ def timeline_mermaid(record: dict) -> str | None:
             f"{_escape(row.get('severity'))} · {_escape(row.get('service'))}"
         )
         if _is_anchor(row, anchor_id):
-            css = "anchor"
-            label = f"ANCHOR {label}"
+            labels.append(("anchor", f"ANCHOR {label}"))
         elif row.get("same_request") is True:
-            css = "request"
+            labels.append(("request", label))
         else:
-            css = "plain"
-        lines.append(f'  n{index}["{label}"]:::{css}')
+            labels.append(("plain", label))
 
-    grid = range(0, len(rows), NODES_PER_ROW)
-    for band, first in enumerate(grid):
-        last = min(first + NODES_PER_ROW, len(rows))
-        lines.append(f'  subgraph r{band}[" "]')
-        lines.append("    direction LR")
-        lines.append("    " + " --> ".join(f"n{i}" for i in range(first, last)))
-        lines.append("  end")
-    if len(grid) > 1:
-        # Invisible links between the row subgraphs stack them without arrows.
-        lines.append("  " + " ~~~ ".join(f"r{band}" for band in range(len(grid))))
-    lines.extend(f"  style r{band} fill:none,stroke:none" for band in range(len(grid)))
+    lines = [*_FRONTMATTER, "block-beta", f"  columns {NODES_PER_ROW}"]
+    for first in range(0, len(rows), NODES_PER_ROW):
+        band = list(range(first, min(first + NODES_PER_ROW, len(rows))))
+        if (first // NODES_PER_ROW) % 2 == 1:
+            # Odd rows run right to left; a short last row is padded on the side
+            # the chain arrives from, so it stays under the previous row's end.
+            band = band[::-1]
+            band = [None] * (NODES_PER_ROW - len(band)) + band
+        lines.append(
+            "  " + " ".join(f'n{i}["{labels[i][1]}"]' if i is not None else "space" for i in band)
+        )
+    lines.extend(f"  n{i} --> n{i + 1}" for i in range(len(rows) - 1))
+    lines.extend(f"  class n{i} {css}" for i, (css, _) in enumerate(labels))
     lines.extend(_CLASS_DEFS)
     return "\n".join(lines)
