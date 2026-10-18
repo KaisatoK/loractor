@@ -808,14 +808,15 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 1160 passed, 107 skipped`. Three failures
-> are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
-> rendering edge cases). The other two,
-> `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
-> `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, need a
-> reachable SereneDB although they are not gated, and pass when it is (then
-> `3 failed, 1162 passed`). The skips are the gated live cases below. The suite
-> passes identically under `TOOLS_TRANSPORT=local` and `TOOLS_TRANSPORT=mcp`.
+> The offline suite reports `3 failed, 1192 passed, 99 skipped` with SereneDB
+> reachable. All three failures are known and pre-existing, in
+> `tests/test_rendering.py` (inline-marker rendering edge cases). Two further
+> tests, `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
+> `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, are
+> not gated but need a reachable database, so they fail when `SERENEDB_PORT`
+> points at nothing (the host port moves -- see **Limitations**). The skips are
+> the gated live cases below. The suite passes identically under
+> `TOOLS_TRANSPORT=local` and `TOOLS_TRANSPORT=mcp`.
 
 ### Live corpus tests
 
@@ -1164,6 +1165,138 @@ Keep the actual token out of committed files. After connecting, the agent receiv
 the server's instructions; pick a role prompt (for example `investigate_as_manager`)
 to start the same workflow the chatbot runs. The external agent talks to the MCP
 service directly, so the backend does not need `TOOLS_TRANSPORT=mcp` for it.
+
+## Limitations
+
+Every entry below is something that bites in the current build, with the
+measurement or the exact error behind it. Where a workaround exists it is named.
+
+### Embedding and semantic search
+
+- **A full template build exceeds the embedding provider's quota.** Embedding
+  costs **44-53 ms per template** in the batched `UPDATE` the build issues
+  (20-23 templates/s; a single `ai_embed` call is ~0.40s, so SereneDB runs 8-10
+  of them concurrently inside one statement), which puts BGL's 20,352 templates
+  at 15-18 minutes. In practice a 200-row batch failed with `HTTP 429: You
+  exceeded your current quota` after roughly 330 calls in a few minutes. The
+  batch rolls back whole -- 0 of 600 rows written, so nothing is half-embedded
+  -- and the window recovers on its own (the first call after the limit took
+  7.96s, then 1.97s, then 0.40s and 0.32s). A complete build therefore needs a
+  raised quota, or `SET sdb_ai_throw_on_error = false` and repeated
+  `build_templates(dataset)` passes: the build fills only NULL embeddings, so
+  each pass resumes where the last one stopped.
+- **BGL's stored vectors are the wrong width for the configured model.** Its
+  20,352 vectors are 768-wide (built by `nomic-embed-text:v1.5`) while
+  `gemini-embedding-2` returns 3072, so `has_template_vectors()` is `False` and
+  search falls back to lexical BM25 until they are rebuilt. Nothing recorded
+  which model produced them, so the width is measured from a stored row.
+- **OpenStack cannot have template embeddings at all.** Its 207,820-row corpus
+  yields **54,043 distinct templates**, above the 50,000
+  `SERENEDB_MAX_TEMPLATES` cap, so the build is refused. One template per four
+  rows also means templating is barely collapsing OpenStack's messages, which is
+  most of what makes template-level embedding affordable in the first place.
+- **The embedding secret does not survive the container.** `ai_embed` resolves
+  its endpoint and key from the server-side secret (`EMBEDDING_SECRET`, default
+  `gemini`); a recreated container has none and every call fails with
+  `secret '<name>' not found`. `MODEL_BASE_URL` is read by no query path and
+  cannot substitute for it.
+
+### The in-place OTel index
+
+- **An uncovered search pays a multi-minute build.** The index covers one window
+  at a time, and a search outside it rebuilds: **446.7s and 444.6s** measured
+  for a one-second window (87,650 rows, 5.1 MiB). The cost is flat, so a
+  narrower window is no cheaper -- there is no way to make an uncovered search
+  fast.
+- **Only one window is searchable at a time.** A build replaces the previous
+  index, so coverage moves rather than accumulating; `otel_index_tool` reports
+  what is covered, and `release=true` returns the disk (measured 5.1 MiB,
+  423.6 -> 418.6 MiB).
+- **Only problem severities are indexed** (`error`, `fatal`, `warn`), so a
+  full-text search for info-level lines on `otel_slice` cannot be served even
+  inside the covered window.
+- **A search with no window and no index is refused**, because the request does
+  not say what to index.
+- **`search_logs_tool` is advertised read-only although it may build.** The MCP
+  `readOnlyHint` is per tool, not per call, and flagging every search -- including
+  the millisecond local ones -- would misdescribe the common case. The warning
+  lives in the tool's description instead.
+- **Builds are serialized in-process only.** SereneDB rejects both `SAVEPOINT`
+  and `pg_advisory_xact_lock`, so there is no cross-process lock: the backend
+  and a separately run MCP server could build at the same time.
+
+### SereneDB operational constraints
+
+- **`memory_limit` is global and reverts on restart.** A restarted instance came
+  back at **5.7 GiB** against a 512 MiB budget -- the configuration `budget.py`
+  records as the cause of three earlier OOM kills. Two index builds then died
+  mid-`CREATE INDEX` ("server closed the connection unexpectedly"), each time
+  taking the instance down and changing its host port; holding the ceiling at
+  the budget let the same build finish twice (446.7s, 444.6s), which is strong
+  circumstantial evidence rather than a kernel log. Index builds now hold it
+  themselves (`external.hold_memory_ceiling`), but **the corpus loaders and
+  chunk promotion do not**, so those remain exposed.
+- **The container's host port is unstable.** It moved 7891 -> 7892 -> 7893 in a
+  single session, so `SERENEDB_PORT` in `.env` goes stale after any crash or
+  restart (`docker ps` shows the current mapping).
+- **Remote Parquet reads fail transiently.** The same read failed 5/5 with
+  `Could not resolve hostname` and then succeeded 5/5 minutes later with no
+  change, while inline `read_parquet` worked throughout. Retry before
+  investigating the caller.
+- **The database cannot describe its own external objects.** An external index is
+  invisible to `pg_relation_size` and `information_schema` (so its size is
+  recorded at build time), and a `FLOAT[n]` column reports only as `ARRAY` (so a
+  vector's width is measured from a row).
+- **`SERENEDB_BUILD_THREADS` defaults to 16, the server default**, so the knob
+  documented as reducing a build's peak memory currently reduces nothing. It is
+  the next dial to turn if builds are still killed, at the cost of build time.
+
+### Coverage and measurement
+
+- **The sweep is not exhaustive and never claims to be**: at Extreme effort it
+  covers roughly 7% of one of fifty files in ten minutes. See *What this does not
+  do* above; a profiled chunk was counted, not read.
+- **Remote aggregates are approximate** (computed over pruned row groups), every
+  remote query must carry a window of at most 300 seconds, and the remote tier's
+  disk allowance is **0 bytes**, so nothing can be built from it.
+- **Cluster samples carry wide uncertainty.** 2,000 rows from a few windows are
+  about 8 independent observations, so the output quotes a range (26-99%) rather
+  than a midpoint.
+- **Counts are log entries, never incidents**, and search results are examples
+  that never establish frequency.
+
+### Scope and data
+
+- **The hypothesis-test tools the brief asks for are not built.** T8-T12
+  (`get_request_trace_tool`, temporal precedence, counterexample, control group,
+  recurrence) and T13 are specified in `docs/tool_requests.md` and awaiting their
+  owner; the answer's hypotheses are therefore model-written judgements over
+  measured evidence, not deterministic tests.
+- **The team ownership table is invented.** `src/backend/data/team_ownership.csv`
+  is a fictional `dataset,component,team` mapping, so every "owning team" in an
+  answer is fictional until it is replaced.
+- **No corpus records which run a row came from.** The three OpenStack logs share
+  one table, so a control-group comparison has to use time windows instead.
+- **`request_id` exists only on OpenStack**, so request-level correlation is
+  refused elsewhere; and the local corpora have no event id, so recurring
+  patterns are counted by template.
+
+### Operations and tests
+
+- **Runs are held in-process.** A single uvicorn worker owns the background
+  investigation registry, so a backend restart loses any in-flight run (the
+  persisted chat history survives).
+- **Three test failures are pre-existing**, all inline-marker rendering edge
+  cases in `tests/test_rendering.py`; the offline suite is otherwise green
+  (1,192 passed, 99 skipped, identical under `TOOLS_TRANSPORT=mcp`).
+- **The live corpus tests assume the full corpora.** With only loghub's 2,000-row
+  samples loaded, 13 of `tests/test_openstack_live.py` fail on row-count
+  assertions; they pass against the 207,820-row corpus.
+- **The gated live suites are stochastic and must be run alone** (routes,
+  confidence, claims). A flipped row is a product signal to re-run once and then
+  judge, never to re-baseline.
+- **No lint, format, typecheck or CI is configured** -- none of ruff, black, mypy
+  or pyright is installed, so there is no automated check beyond pytest.
 
 ## License
 
