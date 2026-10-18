@@ -6,7 +6,9 @@ source of truth. This module is pure text-in, text-out (stdlib only, no Streamli
 no backend import), so the diagram is testable without a runtime.
 
 The chart is laid out left to right with two short lines per node so it stays
-compact in the chat (``st.mermaid_chart`` fits it to the chat width).
+compact in the chat: the chain wraps into rows of ``NODES_PER_ROW`` boxes
+(``st.mermaid_chart`` fits it to the chat width) and shows a window of at most
+``MAX_NODES`` lines around the anchor.
 
 Log text is untrusted, so no message text is drawn at all: a node shows only the
 offset, the seconds from the anchor, the severity and the service. Each of those is
@@ -20,8 +22,10 @@ from __future__ import annotations
 from typing import Any
 
 TIMELINE_TOOL_NAME = "timeline"
-# Most nodes drawn. The record is already capped at this many rows by the backend.
-MAX_NODES = 100
+# Most nodes drawn: a window of lines centred on the anchor (the table lists them all).
+MAX_NODES = 12
+# Boxes per row; the chain wraps into a grid so each box keeps a readable width.
+NODES_PER_ROW = 4
 _LABEL_CHARS = 28
 
 # Punctuation that is harmless inside a quoted Mermaid label (letters and digits are
@@ -77,19 +81,25 @@ def _is_anchor(row: dict, anchor_record_id: Any) -> bool:
 def timeline_mermaid(record: dict) -> str | None:
     """Mermaid text for a ``timeline`` record, or ``None`` when there is nothing to draw.
 
-    One node per row in record-id order (the table's order), joined by arrows; the
-    anchor is highlighted and rows on the anchor's request are marked.
+    Nodes follow record-id order (the table's order), at most ``MAX_NODES`` of them,
+    a window centred on the anchor. Each grid row is an invisible subgraph with its
+    own left-to-right arrows; rows read top to bottom. The anchor is highlighted and
+    rows on the anchor's request are marked.
     """
     if not isinstance(record, dict) or record.get("tool_name") != TIMELINE_TOOL_NAME:
         return None
     rows = [r for r in (record.get("rows") or []) if isinstance(r, dict)]
     if len(rows) < 2:
         return None
-    rows = sorted(rows, key=_record_id)[:MAX_NODES]
+    rows = sorted(rows, key=_record_id)
     arguments = record.get("arguments")
     anchor_id = arguments.get("anchor_record_id") if isinstance(arguments, dict) else None
+    if len(rows) > MAX_NODES:
+        anchor_index = next((i for i, r in enumerate(rows) if _is_anchor(r, anchor_id)), 0)
+        start = max(0, min(anchor_index - MAX_NODES // 2, len(rows) - MAX_NODES))
+        rows = rows[start : start + MAX_NODES]
 
-    lines = ["flowchart LR"]
+    lines = ["flowchart TB"]
     for index, row in enumerate(rows):
         offset = _escape(_signed(row.get("offset")))
         seconds = _escape(_signed(row.get("seconds"), suffix="s"))
@@ -105,6 +115,17 @@ def timeline_mermaid(record: dict) -> str | None:
         else:
             css = "plain"
         lines.append(f'  n{index}["{label}"]:::{css}')
-    lines.append("  " + " --> ".join(f"n{index}" for index in range(len(rows))))
+
+    grid = range(0, len(rows), NODES_PER_ROW)
+    for band, first in enumerate(grid):
+        last = min(first + NODES_PER_ROW, len(rows))
+        lines.append(f'  subgraph r{band}[" "]')
+        lines.append("    direction LR")
+        lines.append("    " + " --> ".join(f"n{i}" for i in range(first, last)))
+        lines.append("  end")
+    if len(grid) > 1:
+        # Invisible links between the row subgraphs stack them without arrows.
+        lines.append("  " + " ~~~ ".join(f"r{band}" for band in range(len(grid))))
+    lines.extend(f"  style r{band} fill:none,stroke:none" for band in range(len(grid)))
     lines.extend(_CLASS_DEFS)
     return "\n".join(lines)

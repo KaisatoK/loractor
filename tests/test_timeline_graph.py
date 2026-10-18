@@ -31,9 +31,9 @@ def _node_lines(diagram):
 
 def test_one_node_per_row_in_line_order_joined_by_one_chain():
     diagram = timeline_mermaid(_timeline())
-    assert diagram.startswith("flowchart LR")  # left to right keeps the chat compact
+    assert diagram.startswith("flowchart TB")  # rows of boxes, stacked
     assert len(_node_lines(diagram)) == 4
-    assert "  n0 --> n1 --> n2 --> n3" in diagram.splitlines()
+    assert "    n0 --> n1 --> n2 --> n3" in diagram.splitlines()
     # Record-id order: the first node is the earliest line (offset -2).
     assert _node_lines(diagram)[0].strip().startswith('n0["-2 ·')
 
