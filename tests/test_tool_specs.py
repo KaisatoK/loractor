@@ -25,6 +25,10 @@ from backend.pipeline.tools.local import LOCAL_TOOLS
 from backend.pipeline.tools.mcp_tools import MCP_TOOLS
 
 AVAILABLE = [s for s in specs.SPECS if s.available]
+# The pipeline's own tools (what the local and wrapper transports generate) and
+# every tool the server offers (which adds server-only ones).
+PIPELINE = [s for s in specs.SPECS if s.available and s.pipeline]
+SERVER = [s for s in specs.SPECS if s.available]
 SRC = Path(__file__).resolve().parents[1] / "src" / "backend"
 
 
@@ -36,12 +40,35 @@ def _server_tools() -> dict:
     return asyncio.run(run())
 
 
-def test_every_available_tool_exists_on_every_transport():
-    names = {s.name for s in AVAILABLE}
+def test_every_pipeline_tool_exists_on_every_transport():
+    names = {s.name for s in PIPELINE}
     assert set(LOCAL_TOOLS) == set(MCP_TOOLS) == names
     served = set(_server_tools())
     assert names <= served
-    assert served - names == {"list_skills", "read_skill"}
+    server_only = {s.name for s in SERVER if not s.pipeline}
+    assert served - names == {"list_skills", "read_skill"} | server_only
+
+
+def test_a_server_only_spec_is_offered_on_the_server_only(monkeypatch):
+    """A ``pipeline=False`` tool reaches the server and nothing in the pipeline."""
+    from dataclasses import replace
+
+    fake = replace(
+        specs.BY_NAME["count_by_dataset_tool"], name="fake_server_only_tool", pipeline=False
+    )
+    monkeypatch.setattr(specs, "SPECS", (*specs.SPECS, fake))
+    assert "fake_server_only_tool" in {s.name for s in specs.server_specs()}
+    assert "fake_server_only_tool" not in {s.name for s in specs.agent_specs()}
+    assert "fake_server_only_tool" not in {s.name for s in specs.pipeline_specs()}
+
+
+def test_the_rank_priorities_tool_is_server_only():
+    """No answer_node exists on an external agent, so only the server ranks."""
+    assert "rank_priorities_tool" in {s.name for s in specs.server_specs()}
+    assert "rank_priorities_tool" not in LOCAL_TOOLS
+    assert "rank_priorities_tool" not in MCP_TOOLS
+    assert "rank_priorities_tool" not in TOOL_CATALOG
+    assert "rank_priorities_tool" in _server_tools()
 
 
 def test_planned_tools_are_declared_but_offered_nowhere():
@@ -54,21 +81,24 @@ def test_planned_tools_are_declared_but_offered_nowhere():
 
 
 def test_catalog_and_kinds_are_derived_from_the_table():
-    assert list(TOOL_CATALOG) == [s.name for s in specs.SPECS]
-    assert TOOL_CATALOG == {s.name: s.catalog for s in specs.SPECS}
+    pipeline = specs.pipeline_specs()
+    assert list(TOOL_CATALOG) == [s.name for s in pipeline]
+    assert TOOL_CATALOG == {s.name: s.catalog for s in pipeline}
+    # The kinds cover every spec, so a server-only tool still gets classified.
     assert TOOL_KINDS == {s.name: s.kind for s in specs.SPECS}
 
 
-@pytest.mark.parametrize("spec", AVAILABLE, ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", SERVER, ids=lambda s: s.name)
 def test_one_description_everywhere(spec):
     served = _server_tools()[spec.name]
-    assert LOCAL_TOOLS[spec.name].description == spec.description
-    assert MCP_TOOLS[spec.name].description == spec.description
     assert served.description == spec.description
     assert served.title == spec.title
+    if spec.pipeline:
+        assert LOCAL_TOOLS[spec.name].description == spec.description
+        assert MCP_TOOLS[spec.name].description == spec.description
 
 
-@pytest.mark.parametrize("spec", AVAILABLE, ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", PIPELINE, ids=lambda s: s.name)
 def test_the_same_arguments_everywhere(spec):
     served = _server_tools()[spec.name].input_schema
     local = LOCAL_TOOLS[spec.name].tool_call_schema.model_json_schema()
@@ -83,7 +113,7 @@ def test_the_same_arguments_everywhere(spec):
     assert served["additionalProperties"] is False
 
 
-@pytest.mark.parametrize("spec", AVAILABLE, ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", SERVER, ids=lambda s: s.name)
 def test_every_argument_is_described_and_every_limit_is_bounded(spec):
     schema = input_schema(spec)
     for name, prop in schema["properties"].items():
@@ -101,7 +131,7 @@ def test_dataset_vocabulary_comes_from_the_registry():
     assert set(sweep["enum"]) <= set(dataset_ids()) and sweep["default"] == "otel_s3"
 
 
-@pytest.mark.parametrize("spec", AVAILABLE, ids=lambda s: s.name)
+@pytest.mark.parametrize("spec", SERVER, ids=lambda s: s.name)
 def test_descriptions_do_not_restate_the_arguments(spec):
     """Inputs are described once, in the parameter schema; the description says
     what the tool is for, what it returns and what an empty result means."""
@@ -112,7 +142,7 @@ def test_descriptions_do_not_restate_the_arguments(spec):
 
 def test_annotations_say_what_each_tool_does_to_the_world():
     tools = _server_tools()
-    for spec in AVAILABLE:
+    for spec in SERVER:
         ann = tools[spec.name].annotations
         assert ann.read_only_hint is spec.read_only
         assert ann.idempotent_hint is True
@@ -136,7 +166,7 @@ def test_no_tool_is_written_out_by_hand_any_more():
 
 
 def test_the_agent_gets_the_sweep_pair_last():
-    order = [s.name for s in specs.available_specs()]
+    order = [s.name for s in specs.agent_specs()]
     assert order[0] == "list_datasets_tool"
     assert order[-2:] == ["sweep_chunks_tool", "investigate_chunk_tool"]
 

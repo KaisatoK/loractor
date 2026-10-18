@@ -101,12 +101,13 @@ def result_contract() -> str:
 )
 def priority_score() -> str:
     """How problems are ranked for a manager: a deterministic score over measured
-    counts. Compute it from query results; never estimate it."""
+    counts, computed by rank_priorities_tool. Never estimate it."""
     return _json({
         "formula": priority.FORMULA,
         "weights": priority.WEIGHTS,
         "informational_levels": sorted(priority.INFO_LEVELS),
         "severe_levels": sorted(priority.SEVERE_LEVELS),
+        "tool": "rank_priorities_tool",
     })
 
 

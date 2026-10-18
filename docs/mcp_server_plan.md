@@ -26,7 +26,7 @@ Done, committed locally (not pushed):
 | M1 one spec per tool | `5592636` | `pipeline/tools/specs.py`; local tools, pipeline MCP wrappers and server tools generated from it; `TOOL_KINDS` and `TOOL_CATALOG` derived (catalog byte-identical, so the classifiers' input is unchanged); parameter descriptions and registry-backed dataset enums in `schemas.py`; six hand-written tool modules deleted |
 | M2 contract and guidance | `dc5ce53` | rendered instructions, `ToolEnvelope` output schema, size limits in `build_envelope` (`…[cut]`, `clipped_cells`, `clipped_rows`), actionable errors with `mask_error_details`, annotations, version |
 | M4 transports and auth | `041ec19` | `--transport http\|stdio`, `fastmcp.json`, `TokenVerifier` with `compare_digest`, Host/Origin guard, `/health` |
-| M5 T2/T3 from the tool owner | merge of `origin/main` (`52369c0`, `ac4b2f8`) | `get_nearby_events_tool` and `count_by_team_tool` converted from hand-written tools into `ToolSpec` entries (`run`, operation and filters in `specs.py`; their duplicate descriptions in `schemas.py` and the `count_tools`/`context_tools`/`planned_tools` modules dropped); upstream's trend burst summary (`add_burst_summary`) now runs inside the trend spec's `run`; their tests patch `specs.<name>` once for every transport |
+| M5 tool-owner merge from `origin/main` | merge of `origin/main` (`52369c0`, `ac4b2f8`) | `get_nearby_events_tool` and `count_by_team_tool` converted from hand-written tools into `ToolSpec` entries (`run`, operation and filters in `specs.py`; their duplicate descriptions in `schemas.py` and the `count_tools`/`context_tools`/`planned_tools` modules dropped); upstream's trend burst summary (`add_burst_summary`) now runs inside the trend spec's `run`; their tests patch `specs.<name>` once for every transport |
 | M3 prompts and resources | `b11c9f9` | `evidence_brief` (pipeline prompt byte-identical across 36 role/effort/scope variants), role prompts, `worked_investigation`, completions, `SkillsDirectoryProvider` and `logs://` resources |
 
 Offline suite: `5 failed, 1025 passed, 92 skipped` under both transports (the 5 are
@@ -85,8 +85,9 @@ with a model does this by hand)
 - [ ] Connect a client (Kiro: add `"ai-chatbot-logs": {"url":
       "http://127.0.0.1:8010/mcp"}` to `.kiro/settings/mcp.json`; Claude Code:
       `claude mcp add --transport http ...`; Claude Desktop: stdio) and confirm it
-      receives the instructions, 13 tools, 4 prompts and the resources. Whether
-      Kiro surfaces prompts and resources is unverified.
+      receives the instructions, the thirteen pipeline tools plus the server-only
+      `rank_priorities_tool` (fourteen evidence tools), 4 prompts and the
+      resources. Whether Kiro surfaces prompts and resources is unverified.
 - [ ] Ask one question per role without naming a tool and note the first tool
       called: engineer "why did instances fail to spawn?" (catalog, then a
       search), team lead "what problems keep recurring?" (catalog, then counts by
@@ -94,18 +95,17 @@ with a model does this by hand)
       not a search). Ask the engineer "what's going on?" with no target: it should
       ask for one.
 - [ ] Check every number in the answers cites an executed `query`, hypotheses are
-      labelled, and no team is invented (T3 is live) and no ranking is invented while T13 is missing.
+      labelled, and no team is invented and no ranking is invented (rank with
+      `rank_priorities_tool`).
 - [ ] A wrong first tool is fixed in that tool's `description` in
       `pipeline/tools/specs.py`, never by naming tools in a prompt.
 
 **Waiting for the tool owner** (M5)
 
-- [x] T2 `get_nearby_events_tool` and T3 `count_by_team_tool`: landed on
+- [x] `get_nearby_events_tool` and `count_by_team_tool`: landed on
       origin/main and merged into the spec table (`run` supplied,
       `available=True`, catalog prefix dropped, playbooks name them). Still
       to re-run: `routes.sh` and `confidence.sh` (the catalog changed).
-- [ ] T13 `rank_priorities_tool` (requested in `docs/tool_requests.md`):
-      server-only spec entry; assert it is absent from the pipeline's tools.
 
 **Our MCP work not started** (D6: only if time remains)
 
@@ -142,7 +142,7 @@ with a model does this by hand)
 
 | Work | Owner |
 | --- | --- |
-| Every tool's behaviour: DB functions in `backend/db/`, the SQL, and the new tools T2 (`get_nearby_events_tool`), T3 (`count_by_team_tool`) and `rank_priorities_tool` (spec in "Requested from the tool owner"), with the AGENTS.md checklist for new tools | the tool owner (not us) |
+| Every tool's behaviour: DB functions in `backend/db/`, the SQL, and the new tools `get_nearby_events_tool`, `count_by_team_tool` and `rank_priorities_tool` (server-only), with the AGENTS.md checklist for new tools | the tool owner (not us) |
 | How tools are declared and exposed (`ToolSpec` table, schema aliases, descriptions, titles, annotations, result contract), the MCP server (instructions, prompts, resources, transports, auth, progress, middleware) and the pipeline's MCP bridge | us (this plan) |
 
 Coordination point: M1 replaces the hand-written tool definitions in
@@ -153,18 +153,8 @@ any of their tools land before M1, M1 converts them like the existing ones.
 
 ## Requested from the tool owner
 
-Hand over with `docs/tool_requests.md` (add it there when the plan is accepted;
-T2 and T3 are already listed).
-
-- **`rank_priorities_tool`** (kind `derived`, offered on the MCP server only;
-  the pipeline already adds its own ranking in `answer_node`). Inputs:
-  `datasets`, `group_by` (`template | service | team`), `baseline_start/end`,
-  `recent_start/end`. Runs the counts and the period comparison through the same
-  DB functions as `count_by_category_tool` / `count_by_team_tool` /
-  `compare_periods_tool`, scores them with `priority.compute_priorities` and
-  `playbooks.team_for` (no second scoring or SQL path), and returns the ranked
-  rows, the formula, the terms used and the executed queries in the standard
-  envelope. Never accepts numbers from the caller.
+Handed over with `docs/tool_requests.md`; the tools requested there have landed.
+The remaining hypothesis tests T8-T12 are still listed there for the tool owner.
 
 ## Decisions taken (and why)
 
@@ -230,7 +220,7 @@ Judged: descriptions, limits, selection.
   `MCP_DB_TOOLS` are derived from it. Delete the hand-written copies in
   `tools.py`, `list_tools.py`, `count_tools.py`, `trend_tools.py`,
   `catalog_tools.py`, `sweep_tools.py`, `mcp_tools.py`, `server.py` and
-  `builders.TOOL_CATALOG`. The planned T2/T3 entries moved into the table marked
+  `builders.TOOL_CATALOG`. The planned `get_nearby_events_tool`/`count_by_team_tool` entries moved into the table marked
   unavailable until the tool owner landed them (done, see M5). Agree the `ToolSpec` shape with the tool owner first
   (see "Ownership").
 - Descriptions: purpose, when to use it (and which tool instead), output
@@ -417,9 +407,9 @@ M5 whenever a tool from the tool owner lands (after M1)
 
 ## Housekeeping
 
-- Done: `README.md` and `AGENTS.md` carry the new offline counts and the
-  one-spec-per-tool checklist; `rank_priorities_tool` is requested in
-  `docs/tool_requests.md` (T13).
+- Done: `README.md` and `AGENTS.md` carry the new offline counts, the
+  one-spec-per-tool checklist and the server-only (`pipeline=False`) flag;
+  `rank_priorities_tool` is built.
 - Still to do: see "Remaining tasks".
 
 ## Verification (each step, before marking it done)

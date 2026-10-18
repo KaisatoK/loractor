@@ -50,8 +50,11 @@ from backend.pipeline.tools.specs import SPECS
 # ``trend``     counts per time bucket
 # ``lookup``    one record by key
 # ``catalog``   discovery: a field's known values, or each dataset's rows/span/levels
+# ``derived``   computed in code from measured counts (the priority ranking)
 # ``test``      a deterministic hypothesis test (planned; see AGENTS.md)
-RESULT_KINDS = ("search", "context", "aggregate", "trend", "lookup", "catalog", "test")
+RESULT_KINDS = (
+    "search", "context", "aggregate", "trend", "lookup", "catalog", "derived", "test"
+)
 
 # Kinds whose numbers measure frequency over the stated scope.
 MEASURED_KINDS = frozenset({"aggregate", "trend"})
@@ -135,9 +138,10 @@ class ToolEnvelope(BaseModel):
         None,
         description=(
             "What the rows are. 'aggregate' and 'trend' are measured frequencies "
-            "over the stated scope; 'search', 'context', 'lookup' and 'catalog' "
-            "rows are examples or metadata and never establish how often "
-            "something happens."
+            "over the stated scope; 'derived' rows are computed in code from the "
+            "measured counts whose queries are listed in `query`; 'search', "
+            "'context', 'lookup' and 'catalog' rows are examples or metadata and "
+            "never establish how often something happens."
         ),
     )
     dataset: str | None = Field(None, description="The queried corpus id.")

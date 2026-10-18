@@ -271,18 +271,45 @@ def test_the_remote_trend_lists_every_second_of_the_window():
     assert sum(r["count"] for r in rows) == values[0]["count"]
 
 
-# --- Zero-filled trend on the remote corpus -----------------------------------
-def test_the_remote_trend_lists_every_second_of_the_window():
-    """Nanosecond timestamps are truncated and cast, so generated buckets and
-    row buckets join; every second of a 10-second window is one row."""
-    import backend.db as db
+# --- Rank priorities (T13, server-only tool) -----------------------------------
+def _rank(**arguments):
+    import asyncio
 
-    lo, hi = "2025-09-23 00:00:00+00", "2025-09-23 00:00:10+00"
-    values = db.get_field_values(lo, hi, "service", dataset="otel_s3", limit=1)
-    assert values and not values.refused
-    service = values[0]["value"]
+    from fastmcp import Client
 
-    rows = db.get_trend(lo, hi, "service", service, dataset="otel_s3", bucket="second")
-    assert not rows.refused
-    assert len(rows) == 10
-    assert sum(r["count"] for r in rows) == values[0]["count"]
+    from backend.mcp_server import server
+
+    async def go():
+        async with Client(server.mcp) as client:
+            return await client.call_tool(
+                "rank_priorities_tool", arguments, raise_on_error=False
+            )
+
+    return asyncio.run(go())
+
+
+def test_rank_priorities_labels_remote_results_approximate():
+    """Two windows of at most 300 s; the counts have no exact-counts capability,
+    so the ranking must say so."""
+    result = _rank(
+        datasets=["otel_s3"], group_by="service",
+        baseline_start=LO, baseline_end=HI_5S,
+        recent_start=HI_5S, recent_end=HI_10S,
+    )
+    assert not result.is_error, result.content[0].text
+    envelope = result.structured_content
+    if envelope["status"] == "refused":
+        pytest.skip(envelope["reason"])
+    assert envelope["kind"] == "derived"
+    assert envelope["query_stats"]["approximate"] is True
+    assert any("approximate" in note for note in envelope["query_stats"]["notes"])
+
+
+def test_rank_priorities_refuses_team_on_the_remote_corpus():
+    result = _rank(
+        datasets=["otel_s3"], group_by="team",
+        baseline_start=LO, baseline_end=HI_5S,
+        recent_start=HI_5S, recent_end=HI_10S,
+    )
+    assert result.is_error
+    assert "group_by='service'" in result.content[0].text

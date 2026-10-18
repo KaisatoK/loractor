@@ -18,7 +18,7 @@ from backend.pipeline.effort import get_effort_spec
 from backend.pipeline.playbooks import ownership_context, role_answer_rules, role_playbook
 from backend.pipeline.state import PipelineState, Role
 from backend.pipeline.tools.envelope import CUT_MARKER, MEASURED_KINDS
-from backend.pipeline.tools.specs import SPECS
+from backend.pipeline.tools.specs import pipeline_specs
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ ANSWER_EFFORT_NOTES = {
 # What the classifiers (scope and confidence) know about the evidence tools: one
 # line each, read from the spec table (``tools/specs.py``) so the catalog cannot
 # drift from the tools. Planned tools are listed with a "NOT AVAILABLE YET" line.
-TOOL_CATALOG = {spec.name: spec.catalog for spec in SPECS}
+TOOL_CATALOG = {spec.name: spec.catalog for spec in pipeline_specs()}
 
 # How the agent is expected to spend its budget. Code enforces the bounds; this
 # tells the model why they exist so it plans within them instead of hitting them.
@@ -230,6 +230,12 @@ def _catalog_entry(record: dict, example_rows: int) -> str:
     )
     if record.get("kind") == "derived":
         entry += f"\n  formula: {record.get('formula')}"
+        if record.get("approximate_datasets"):
+            entry += (
+                "\n  approximate datasets: "
+                + ", ".join(record["approximate_datasets"])
+                + " (do not present this ranking as an exact measurement)"
+            )
     if shown:
         entry += "\n  data:\n" + "\n".join(
             "    {" + ", ".join(f"{k}: {_clip(v)}" for k, v in row.items()) + "}"

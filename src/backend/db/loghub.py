@@ -902,7 +902,9 @@ def main() -> None:
     Each corpus is one table, dropped and rebuilt on every run: ``openstack``
     from its three nova logs, ``bgl`` from ``BGL.log``, and the ``*_2k`` specs
     from loghub's structured samples (which replace the same table).
-    ``bash ./setup.sh`` runs this for ``openstack`` and then ``bgl``.
+    ``bash ./setup.sh`` runs this for ``openstack`` and then ``bgl`` by default;
+    pass dataset ids to ``setup.sh`` to load others (``--embed``/``--no-embed``
+    likewise).
     """
     import argparse
     import json

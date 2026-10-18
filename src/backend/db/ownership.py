@@ -7,7 +7,8 @@ not listed count as ``UNOWNED_TEAM``. Replace the CSV when the organisers'
 ownership table is available, keeping the three columns.
 
 ``uv run python -m backend.db.ownership`` (re)creates the ``team_ownership``
-table; it touches no log table.
+table; it touches no log table. ``bash ./setup.sh`` runs this before loading the
+corpora.
 """
 
 from __future__ import annotations

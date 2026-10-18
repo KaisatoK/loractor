@@ -21,7 +21,7 @@ from backend.mcp_server.app import mcp
 from backend.mcp_server.errors import to_tool_error
 from backend.mcp_server.skills import list_skill_infos, read_skill_text
 from backend.pipeline.tools.envelope import ToolEnvelope, run_enveloped
-from backend.pipeline.tools.specs import ToolSpec, available_specs
+from backend.pipeline.tools.specs import ToolSpec, server_specs
 
 
 def _strip_titles(node: Any, *, top: bool = False) -> None:
@@ -136,7 +136,7 @@ class SpecTool(Tool):
         return ToolResult(structured_content=envelope)
 
 
-for _spec in available_specs():
+for _spec in server_specs():
     mcp.add_tool(SpecTool.from_spec(_spec))
 
 

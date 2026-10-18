@@ -2,7 +2,7 @@
 
 Gated by ``RUN_BGL_LIVE=1`` because they need the corpus loaded:
 
-    uv run python -m backend.db.loghub            # load + embed templates
+    bash ./setup.sh --embed bgl    # load BGL + embed templates
     RUN_BGL_LIVE=1 uv run pytest tests/test_bgl_live.py
 
 Kept out of the default suite so a fresh checkout does not fail for want of a
@@ -321,3 +321,74 @@ def test_windowed_team_counts_are_bounded(loaded):
     if rows.refused:
         pytest.skip(f"team_ownership is not loaded: {rows.refusal.reason}")
     assert sum(row["count"] for row in rows) <= BGL_ROWS
+
+
+# --- Rank priorities (T13, server-only tool) -----------------------------------
+def _rank(**arguments):
+    import asyncio
+
+    from fastmcp import Client
+
+    from backend.mcp_server import server
+
+    async def go():
+        async with Client(server.mcp) as client:
+            return await client.call_tool("rank_priorities_tool", arguments)
+
+    return asyncio.run(go())
+
+
+def _halves(dataset_id):
+    """The two halves of the dataset's own window, from list_datasets_tool."""
+    from datetime import datetime
+
+    row = next(r for r in db.list_datasets() if r["dataset"] == dataset_id)
+    start = datetime.strptime(row["window_start"], "%Y-%m-%d %H:%M:%S")
+    end = datetime.strptime(row["window_end"], "%Y-%m-%d %H:%M:%S")
+    middle = start + (end - start) / 2
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return start.strftime(fmt), middle.strftime(fmt), end.strftime(fmt)
+
+
+def _direct_counts(dataset, group_by, lo, mid, hi):
+    """Non-INFO and severe counts per value, from the same 200-group queries."""
+    from backend.pipeline.priority import INFO_LEVELS, SEVERE_LEVELS
+    from backend.pipeline.ranking import CANDIDATE_GROUPS
+
+    totals: dict[str, dict[str, int]] = {}
+    for start, end in ((lo, mid), (mid, hi)):
+        if group_by == "team":
+            rows = db.count_by_team(datasets=(dataset,), start_time=start, end_time=end)
+        else:
+            rows = db.count_by_field(start, end, group_by, dataset, None, CANDIDATE_GROUPS)
+        assert not rows.refused
+        for row in rows:
+            if group_by == "team" and row["dataset"] != dataset:
+                continue
+            severity = str(row["severity"]).upper()
+            if severity in INFO_LEVELS:
+                continue
+            bucket = totals.setdefault(str(row[group_by]), {"non_info": 0, "error": 0})
+            bucket["non_info"] += int(row["count"])
+            if severity in SEVERE_LEVELS:
+                bucket["error"] += int(row["count"])
+    return totals
+
+
+@pytest.mark.parametrize("group_by", ["service", "template", "team"])
+def test_rank_priorities_rows_equal_the_direct_count_sums(loaded, group_by):
+    lo, mid, hi = _halves("bgl")
+    result = _rank(
+        datasets=["bgl"], group_by=group_by,
+        baseline_start=lo, baseline_end=mid, recent_start=mid, recent_end=hi,
+    )
+    envelope = result.structured_content
+    if envelope["status"] == "refused":
+        pytest.skip(envelope["reason"])
+    assert envelope["kind"] == "derived"
+    assert envelope["data"]
+    expected = _direct_counts("bgl", group_by, lo, mid, hi)
+    for row in envelope["data"]:
+        value = str(row[group_by])
+        assert row["non_info_rows"] == expected[value]["non_info"]
+        assert row["error_rows"] == expected[value]["error"]

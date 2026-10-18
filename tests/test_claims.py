@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("TYPESAFE_API_KEY", "test-key")
 
 from backend.pipeline.answers import serialize_answer
-from backend.pipeline.claims import unsupported_numbers
+from backend.pipeline.claims import unsupported_narrative_numbers, unsupported_numbers
 from backend.pipeline.contracts import AnswerOutput
 
 
@@ -34,6 +34,26 @@ def test_a_statement_without_numbers_passes():
 
 def test_numbers_present_in_a_cited_row_pass():
     assert unsupported_numbers("30 ERROR rows from the compute manager.", [COUNTS]) == []
+
+
+# --- the narrative check (prose) ---------------------------------------------
+
+
+def test_a_grouped_total_a_row_shows_passes_in_prose():
+    assert unsupported_narrative_numbers("There were 1,969 warnings.", [COUNTS]) == []
+
+
+def test_a_grouped_total_no_row_shows_is_reported_in_prose():
+    # 30 + 1969 = 1999 is arithmetic nobody ran, stated only in the prose.
+    assert unsupported_narrative_numbers("988,783 problem entries over the window.", [COUNTS]) == [
+        "988,783"
+    ]
+
+
+def test_bare_numbers_in_prose_are_not_flagged():
+    """A list marker, a window length, a dataset count: prose needs them."""
+    text = "1. otel_s3: 30 seconds\n2. bgl: three datasets"
+    assert unsupported_narrative_numbers(text, [COUNTS]) == []
 
 
 def test_a_number_no_row_shows_is_reported():

@@ -78,6 +78,16 @@ def test_every_tool_the_instructions_name_exists():
     assert named and named <= served, named - served
 
 
+def test_the_instructions_tell_the_agent_to_rank_with_the_tool():
+    """An external agent has no answer_node, so it must be pointed at the
+    server-only ranking tool and the formula it applies (never its own arithmetic)."""
+    from backend.pipeline import priority
+
+    text = build_instructions()
+    assert "rank_priorities_tool" in text
+    assert priority.FORMULA in text
+
+
 # --- The result schema -----------------------------------------------------------
 def test_every_evidence_tool_advertises_the_shared_envelope_as_its_output():
     tools = {t.name: t for t in _run(lambda c: c.list_tools())}

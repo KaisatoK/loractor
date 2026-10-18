@@ -215,12 +215,15 @@ def compare_periods(
     group_field = ds.sql_for(field)
     has_severity = ds.has_field("severity")
     severity_column = ds.sql_for("severity") if has_severity else None
+    # When the grouped field *is* severity, the second severity column would be a
+    # complete duplicate of the first (same value, same name), so it is dropped.
+    separate_severity = severity_column is not None and field != "severity"
 
     def period(window) -> tuple[sql.Composable, list]:
         clause, params = pred.where(pred.ts_filter(ds, window))
         columns = [sql.SQL("{col} AS grp").format(col=group_field)]
         group = [group_field]
-        if severity_column is not None:
+        if separate_severity:
             columns.append(sql.SQL("{col} AS sev").format(col=severity_column))
             group.append(severity_column)
         return (
@@ -242,7 +245,7 @@ def compare_periods(
 
     join_keys = [sql.SQL("r.grp = b.grp")]
     select_sev: sql.Composable = sql.SQL("")
-    if severity_column is not None:
+    if separate_severity:
         join_keys.append(sql.SQL("r.sev = b.sev"))
         select_sev = sql.SQL("COALESCE(r.sev, b.sev) AS severity,")
 

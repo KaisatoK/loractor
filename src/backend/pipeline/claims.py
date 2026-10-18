@@ -149,6 +149,30 @@ def unsupported_numbers(statement: str, records: Sequence[dict]) -> list[str]:
     return missing
 
 
+# Only thousands-grouped figures are checked in prose. A stated total is what a
+# reader takes as measured, and a list marker ("1.") or a window length ("30")
+# never looks like one, so the check stays quiet where the narrative legitimately
+# says things no query returned.
+_GROUPED_NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?")
+
+
+def unsupported_narrative_numbers(text: str, records: Sequence[dict]) -> list[str]:
+    """Thousands-grouped totals in the narrative that no cited result shows.
+
+    The exact check (:func:`unsupported_numbers`) runs on findings, which are
+    structured and easy to verify. The narrative is prose, where a bare number
+    (a window length, a count of datasets, a list marker) would make the check
+    noisy -- but a grouped total such as "988,783" reads as measured, so a model
+    that added counts up instead of quoting one is caught here.
+    """
+    haystack = _Haystack([r for r in records if isinstance(r, dict)])
+    missing: list[str] = []
+    for token in _GROUPED_NUMBER_RE.findall(text or ""):
+        if token not in missing and not haystack.has_number(token):
+            missing.append(token)
+    return missing
+
+
 # --- which claims go to the semantic check -----------------------------------
 
 # Starting values. The classifier request holds one question per claim and shows

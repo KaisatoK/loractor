@@ -206,6 +206,16 @@ def test_every_registered_tool_has_a_kind():
     assert set(TOOL_NAMES) <= set(TOOL_KINDS)
 
 
+def test_derived_is_a_result_kind_but_not_a_measured_one():
+    # The ranking is computed in code from measured counts, so it has its own
+    # kind but is not one of the kinds a query itself measures.
+    from backend.pipeline.tools.envelope import MEASURED_KINDS, RESULT_KINDS
+
+    assert "derived" in RESULT_KINDS
+    assert "derived" not in MEASURED_KINDS
+    assert TOOL_KINDS["rank_priorities_tool"] == "derived"
+
+
 def test_uncapped_queries_are_complete_not_unknown():
     # Grouped counts, trends, catalogs and key lookups have no LIMIT: every
     # matching group is returned, so ``truncated`` is False rather than unknown.

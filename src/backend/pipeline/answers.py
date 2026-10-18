@@ -333,7 +333,13 @@ def render_appendix(records: Sequence[dict], notes: Sequence[str] = ()) -> str:
         lines.append(header)
         if kind == "derived":
             sources = ", ".join(record.get("source_ids") or [])
-            lines.append(f"  computed in code from {sources}: {record.get('formula')}")
+            line = f"  computed in code from {sources}: {record.get('formula')}"
+            if record.get("approximate_datasets"):
+                line += (
+                    "; approximate: "
+                    + ", ".join(record["approximate_datasets"])
+                )
+            lines.append(line)
             continue
         query = record.get("query")
         if query:

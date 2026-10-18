@@ -571,15 +571,16 @@ uv run python -m backend.appdb.manage <username> <password>
 
 ```bash
 uv sync           # install dependencies and the project itself
-bash ./setup.sh   # load the local log corpora (no arguments)
+bash ./setup.sh   # ownership + both local corpora (openstack, then bgl)
 ```
 
-`setup.sh` loads the ownership table first, then both local corpora through the
-loghub loader (`backend.db.loghub`), in this order, each with `--no-embed`:
+`setup.sh` loads the ownership table first, then the named corpora through the
+loghub loader (`backend.db.loghub`), each with `--no-embed` unless `--embed` is
+given. With no datasets named it loads these, in this order:
 
-1. `team_ownership` -- `src/backend/data/team_ownership.csv`, loaded by
-   `uv run python -m backend.db.ownership`. This recreates only the ownership
-   table and does not touch log tables.
+1. `team_ownership` -- `src/backend/data/team_ownership.csv`, (re)loaded by
+   `setup.sh` before any corpus. This recreates only the ownership table and
+   does not touch log tables.
 2. `openstack` -- one table from the three nova logs, read one after another in
    chronological order: `src/backend/data/openstack_abnormal.log` (2017-05-14),
    `openstack_normal1.log`, `openstack_normal2.log` (2017-05-16 to 05-17), 207,820
@@ -595,16 +596,18 @@ as `TIMESTAMPTZ` in UTC and every database session is pinned to UTC, so a time
 window means the same thing on every machine.
 
 To load one corpus, or loghub's 2,000-line structured samples instead (these
-replace the same table):
+replace the same table), name the datasets -- it is the same loader, so
+everything goes through `setup.sh`:
 
 ```bash
-uv run python -m backend.db.loghub openstack --no-embed
-uv run python -m backend.db.loghub openstack_2k --no-embed   # src/backend/data/OpenStack_2k.log_structured.csv
-uv run python -m backend.db.loghub bgl_2k --no-embed         # src/backend/data/BGL_2k.log_structured.csv
+bash ./setup.sh openstack            # one corpus
+bash ./setup.sh openstack_2k         # src/backend/data/OpenStack_2k.log_structured.csv
+bash ./setup.sh bgl_2k               # src/backend/data/BGL_2k.log_structured.csv
+bash ./setup.sh --embed openstack    # also build template embeddings
 ```
 
-Dropping `--no-embed` also builds template-level embeddings, which needs the
-Ollama embedding model from Prerequisites.
+`--embed` builds template-level embeddings, which needs the Ollama embedding
+model from Prerequisites.
 
 ### Team ownership (fictional)
 
@@ -642,9 +645,10 @@ Testing (`load-generator`). OTel is remote and therefore is not accepted by
 `count_by_team_tool`; use its bounded service aggregates instead.
 
 `backend.db.ownership` validates the file (header, no empty fields, no component
-mapped twice); `uv run python -m backend.db.ownership` loads it into SereneDB as
-`team_ownership` without touching log tables. Replace the CSV if the organisers'
-ownership table becomes available; keep the three columns and reload it.
+mapped twice); `bash ./setup.sh` loads it into SereneDB as `team_ownership`
+without touching log tables (the same table is reloaded on every `setup.sh`
+run). Replace the CSV if the organisers' ownership table becomes available;
+keep the three columns and reload it.
 
 ## Running
 
@@ -700,6 +704,7 @@ confidence tests below are skipped unless enabled.
 | `test_catalog.py` | dataset catalog: per-level profile SQL, footer and index-build-window profiles, unloaded/failed datasets, the tool on both transports |
 | `test_count_by_dataset.py` | whole-dataset severity counts: one `UNION ALL` statement, local datasets only, unloaded datasets refused, data scope |
 | `test_count_by_team.py` | team ownership joins, `unowned` preservation, window/category validation, data scope and measured envelope |
+| `test_rank_priorities.py` | the server-only `rank_priorities_tool`: arguments (non-overlapping windows, local-only team), per-dataset scoring with synthetic rows, and the envelope through the in-memory client |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
@@ -708,14 +713,14 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `5 failed, 1118 passed, 99 skipped`. Three failures
+> The offline suite reports `5 failed, 1160 passed, 107 skipped`. Three failures
 > are known and pre-existing, all in `tests/test_rendering.py` (inline-marker
 > rendering edge cases). The other two,
 > `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
 > `test_sampling_and_external.py::test_the_sample_query_tags_every_window`, need a
-> reachable SereneDB although they are not gated, and pass when it is. The skips
-> are the gated live cases below. The suite passes identically under `TOOLS_TRANSPORT=local` and
-> `TOOLS_TRANSPORT=mcp`.
+> reachable SereneDB although they are not gated, and pass when it is (then
+> `3 failed, 1162 passed`). The skips are the gated live cases below. The suite
+> passes identically under `TOOLS_TRANSPORT=local` and `TOOLS_TRANSPORT=mcp`.
 
 ### Live corpus tests
 
@@ -902,7 +907,7 @@ routes.sh     gated live route tests (RUN_LIVE_ROUTES=1) + HTML report
 worked_investigation.sh  one topic as all three roles -> docs/worked_investigation.md
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 claims.sh     gated live claim-check tests (RUN_LIVE_CLAIMS=1) + HTML report
-setup.sh      load the local corpora via loghub: openstack, then bgl (--no-embed; no arguments)
+setup.sh      seed SereneDB via loghub (--no-embed by default; optional datasets, --embed)
 src/
 ├── stream_events/       one event reducer shared by backend/jobs.py (saved progress) and the UI (live)
 ├── backend/
@@ -981,11 +986,13 @@ MCP tool: it is a chat-box feature and is always answered in-process.
 
 ### What the server offers
 
-- **Tools.** The thirteen evidence tools, plus `list_skills` and `read_skill`. Each is
-  declared once in `src/backend/pipeline/tools/specs.py` and generated for the local
-  agent, the pipeline's MCP wrappers and the server, so the name, description,
-  arguments and bounds are the same everywhere. The server advertises each
-  argument's description, limits, patterns and dataset enum in the tool's JSON
+- **Tools.** The fourteen evidence tools, plus `list_skills` and `read_skill`. Thirteen
+  are the pipeline's own (`rank_priorities_tool` is server-only: an external agent
+  has no `answer_node`, so it needs the ranking, which the pipeline adds itself).
+  Each is declared once in `src/backend/pipeline/tools/specs.py` and generated for
+  the local agent, the pipeline's MCP wrappers and the server, so the name,
+  description, arguments and bounds are the same everywhere. The server advertises
+  each argument's description, limits, patterns and dataset enum in the tool's JSON
   schema, a title, read-only/idempotent/open-world annotations, and the shared
   result envelope as its output schema. Bad arguments and failures come back as
   messages that say what to fix.
@@ -996,7 +1003,9 @@ MCP tool: it is a chat-box feature and is always answered in-process.
   say so); `get_log_by_line_id_tool` returns the whole row.
 - **Instructions.** On connect the server tells the client how to work: start with
   `list_datasets_tool`, follow the role's skill, which results are frequencies, and
-  the answer rules. They are rendered from the code that owns each rule. Print them
+  the answer rules -- including that team lead and manager rank with
+  `rank_priorities_tool` (and its formula) rather than doing the arithmetic
+  themselves. They are rendered from the code that owns each rule. Print them
   with `uv run python -c "from backend.mcp_server.instructions import build_instructions; print(build_instructions())"`.
 - **Prompts.** `investigate_as_engineer`, `investigate_as_team_lead`,
   `investigate_as_manager` (arguments `question`, `effort`) and

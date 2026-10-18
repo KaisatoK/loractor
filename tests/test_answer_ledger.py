@@ -12,7 +12,12 @@ from backend.pipeline.answers import (
     strip_appendix,
 )
 from backend.pipeline.contracts import AnswerOutput
-from backend.pipeline.priority import DERIVED_TOOL_NAME, compute_priorities, with_priority
+from backend.pipeline.priority import (
+    DERIVED_TOOL_NAME,
+    MAX_ROWS,
+    compute_priorities,
+    with_priority,
+)
 from ui.rendering import canonicalize
 
 
@@ -201,6 +206,191 @@ def test_priority_needs_counts():
     assert compute_priorities([SEARCH]) is None
 
 
+def test_priority_prefers_the_dimension_it_can_trend():
+    """A manager run brings template counts *and* a service period comparison.
+
+    The ranking must pick the dimension whose trend it can measure (service), not
+    the count-only one (template), so the derived record is trend-aware instead of
+    leaving the answer to rank the counts itself.
+    """
+    templates = _rec("R5", "aggregate", [
+        {"template": "data TLB error interrupt", "severity": "FATAL", "count": 152_734},
+    ], tool="count_by_category_tool")
+    compare = _rec("R3", "aggregate", [
+        {"service": "KERNEL", "severity": "FATAL",
+         "baseline_count": 593_592, "recent_count": 33_164},
+        {"service": "APP", "severity": "FATAL",
+         "baseline_count": 89_716, "recent_count": 138_820},
+    ], tool="compare_periods_tool")
+    ranking = compute_priorities([templates, compare])
+    assert ranking["dimension"] == "service"
+    assert "trend_up" in ranking["terms_used"]
+    by_name = {r["service"]: r for r in ranking["rows"]}
+    # The comparison's two windows are added: KERNEL 593,592 + 33,164.
+    assert by_name["KERNEL"]["non_info_rows"] == 626_756
+    assert by_name["KERNEL"]["error_rows"] == 626_756
+    assert by_name["KERNEL"]["trend_up"] == 0.0
+    assert by_name["APP"]["non_info_rows"] == 228_536
+    assert by_name["APP"]["trend_up"] == 0.55
+    # Only the dimension that was ranked is cited as a source.
+    assert ranking["source_ids"] == ["R3"]
+
+
+def test_priority_without_a_comparison_keeps_the_table_order_dimension():
+    # No comparison to trend, so the first count-bearing dimension still wins.
+    templates = _rec("R5", "aggregate", [
+        {"template": "t", "severity": "FATAL", "count": 10},
+    ])
+    service = _rec("R2", "aggregate", [
+        {"service": "s", "severity": "ERROR", "count": 5},
+    ])
+    assert compute_priorities([templates, service])["dimension"] == "template"
+
+
+def _window_record(rid, rows, start, end, *, truncated=False):
+    return _rec(
+        rid, "aggregate", rows, tool="count_by_category_tool", truncated=truncated,
+        filters={"start_time": start, "end_time": end, "group_by": "template"},
+    )
+
+
+def test_priority_pairs_two_windowed_counts_into_a_trend():
+    """Two halves brought as separate counts give every candidate both windows.
+
+    A period comparison is ordered by volume_change and truncated, so a large,
+    flat template gets no trend; pairing the halves measures the trend for it.
+    """
+    baseline = _window_record(
+        "R5",
+        [{"template": "rises", "severity": "ERROR", "count": 10},
+         {"template": "flat", "severity": "ERROR", "count": 1000}],
+        "2017-05-14 19:39:01", "2017-05-16 04:00:00",
+    )
+    recent = _window_record(
+        "R6",
+        [{"template": "rises", "severity": "ERROR", "count": 40},
+         {"template": "flat", "severity": "ERROR", "count": 1000}],
+        "2017-05-16 04:00:00", "2017-05-17 12:02:36",
+    )
+    ranking = compute_priorities([baseline, recent])
+    assert ranking["dimension"] == "template"
+    assert "trend_up" in ranking["terms_used"]
+    by_name = {r["template"]: r for r in ranking["rows"]}
+    assert by_name["rises"]["non_info_rows"] == 50      # 10 + 40, not max
+    assert by_name["rises"]["trend_up"] == 1.0
+    assert by_name["flat"]["non_info_rows"] == 2000
+    assert by_name["flat"]["trend_up"] == 0.0
+    assert ranking["source_ids"] == ["R5", "R6"]        # both halves cited
+
+
+def test_priority_does_not_pair_the_same_window_counted_twice():
+    rows = [{"template": "a", "severity": "ERROR", "count": 10}]
+    same = _window_record("R1", rows, "2017-05-14 00:00:00", "2017-05-17 00:00:00")
+    again = _window_record("R2", rows, "2017-05-14 00:00:00", "2017-05-17 00:00:00")
+    ranking = compute_priorities([same, again])
+    # One window, not two halves: overlapping counts are maxed, never summed.
+    assert ranking["rows"][0]["non_info_rows"] == 10
+    assert "trend_up" not in ranking["terms_used"]
+
+
+def test_priority_does_not_pair_overlapping_windows():
+    baseline = _window_record(
+        "R1", [{"template": "a", "severity": "ERROR", "count": 10}],
+        "2017-05-14 00:00:00", "2017-05-16 12:00:00",
+    )
+    recent = _window_record(
+        "R2", [{"template": "a", "severity": "ERROR", "count": 5}],
+        "2017-05-16 00:00:00", "2017-05-17 00:00:00",
+    )
+    ranking = compute_priorities([baseline, recent])
+    assert ranking["rows"][0]["non_info_rows"] == 10
+    assert "trend_up" not in ranking["terms_used"]
+
+
+def test_priority_drops_a_value_missing_from_a_truncated_half():
+    baseline = _window_record(
+        "R1", [{"template": "only_baseline", "severity": "ERROR", "count": 10}],
+        "2017-05-14 00:00:00", "2017-05-16 00:00:00",
+    )
+    recent = _window_record(
+        "R2", [{"template": "other", "severity": "ERROR", "count": 5}],
+        "2017-05-16 00:00:00", "2017-05-17 00:00:00", truncated=True,
+    )
+    ranking = compute_priorities([baseline, recent])
+    names = {row["template"] for row in ranking["rows"]}
+    assert "other" in names and "only_baseline" not in names
+
+
+def test_priority_does_not_synthesize_a_pair_when_a_comparison_exists():
+    compare = _rec("R3", "aggregate", [
+        {"template": "a", "severity": "ERROR", "baseline_count": 10, "recent_count": 40},
+    ], tool="compare_periods_tool")
+    baseline = _window_record(
+        "R4", [{"template": "a", "severity": "ERROR", "count": 10}],
+        "2017-05-14 00:00:00", "2017-05-16 00:00:00",
+    )
+    recent = _window_record(
+        "R5", [{"template": "a", "severity": "ERROR", "count": 40}],
+        "2017-05-16 00:00:00", "2017-05-17 00:00:00",
+    )
+    ranking = compute_priorities([compare, baseline, recent])
+    assert ranking["rows"][0]["non_info_rows"] == 50    # not doubled by a pair
+    assert ranking["rows"][0]["trend_up"] == 1.0
+
+
+def test_priority_ranks_each_dataset_on_its_own():
+    """Shares are within a dataset, so a large corpus cannot drown a small one."""
+    bgl = _rec("R1", "aggregate", [
+        {"service": "KERNEL", "severity": "FATAL", "count": 900},
+        {"service": "MMCS", "severity": "ERROR", "count": 100},
+    ], dataset="bgl")
+    otel = _rec("R2", "aggregate", [
+        {"service": "frontend", "severity": "error", "count": 1_000_000},
+    ], dataset="otel_s3")
+    ranking = compute_priorities([bgl, otel])
+    by = {(r["dataset"], r["service"]): r for r in ranking["rows"]}
+    assert by[("bgl", "KERNEL")]["volume_share_pct"] == 90.0
+    assert by[("otel_s3", "frontend")]["volume_share_pct"] == 100.0
+    # Ranks restart per dataset, and the rows are ordered by dataset then rank.
+    assert [(r["dataset"], r["rank"]) for r in ranking["rows"]] == [
+        ("bgl", 1), ("bgl", 2), ("otel_s3", 1),
+    ]
+    assert ranking["total_ranked"] == 3
+
+
+def test_priority_marks_approximate_datasets():
+    exact = _rec("R1", "aggregate", [
+        {"service": "a", "severity": "ERROR", "count": 10},
+    ], dataset="bgl")
+    approximate = _rec("R2", "aggregate", [
+        {"service": "b", "severity": "error", "count": 20},
+    ], dataset="otel_s3", query_stats={"approximate": True})
+    assert compute_priorities([exact, approximate])["approximate_datasets"] == ["otel_s3"]
+    assert compute_priorities([exact])["approximate_datasets"] == []
+
+
+def test_priority_splits_a_multi_dataset_record_by_row_dataset():
+    team = _rec("R1", "aggregate", [
+        {"dataset": "bgl", "team": "Kernel", "severity": "ERROR", "count": 100},
+        {"dataset": "openstack", "team": "Kernel", "severity": "ERROR", "count": 1},
+    ], tool="count_by_team_tool", dataset=None)
+    ranking = compute_priorities([team])
+    assert ranking["dimension"] == "team"
+    by = {(r["dataset"], r["team"]): r["volume_share_pct"] for r in ranking["rows"]}
+    assert by == {("bgl", "Kernel"): 100.0, ("openstack", "Kernel"): 100.0}
+
+
+def test_priority_max_rows_can_exceed_the_default():
+    """The pipeline's derived record keeps the default cap; a caller with a larger
+    allowance (``rank_priorities_tool``) can ask for more."""
+    rows = _rec("R1", "aggregate", [
+        {"service": f"svc-{i}", "category": "ERROR", "count": 100 - i}
+        for i in range(30)
+    ])
+    assert len(compute_priorities([rows], max_rows=25)["rows"]) == 25
+    assert len(compute_priorities([rows])["rows"]) == MAX_ROWS
+
+
 def test_with_priority_is_idempotent_and_appends_derived_record():
     once = with_priority([SEARCH, COUNTS])
     twice = with_priority(once)
@@ -224,6 +414,18 @@ def _answer_state(role):
         "evidence_report": {},
         "tool_results": [SEARCH, COUNTS],
     }
+
+
+def test_answer_node_flags_a_narrative_total_no_result_shows(monkeypatch):
+    answer = _answer(blocks=[{
+        "type": "text",
+        "text": "There were 988,783 problem log entries across the datasets.",
+    }])
+    monkeypatch.setattr(graph, "generate_answer", lambda prompt: answer)
+    out = graph.answer_node(_answer_state("manager"))
+    # 988,783 is a sum nobody ran; it reads as measured, so code notes it.
+    assert "988,783" in out["answer"]
+    assert "no cited result shows" in out["answer"]
 
 
 def test_answer_node_adds_priority_for_manager_not_engineer(monkeypatch):

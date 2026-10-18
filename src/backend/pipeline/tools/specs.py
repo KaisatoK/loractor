@@ -12,6 +12,12 @@ in :data:`SPECS`, and every transport is generated from it:
 * ``mcp_server/tools.py`` the MCP server's tools;
 * ``envelope.TOOL_KINDS`` and ``prompts.TOOL_CATALOG`` are derived from the table.
 
+``agent_specs()`` is what the pipeline's agent offers; ``server_specs()`` is what
+the MCP server offers (every available spec, including server-only ones such as
+``rank_priorities_tool``); ``pipeline_specs()`` is what the pipeline may declare
+(planned tools included), and it is the key set of ``TOOL_CATALOG`` and
+``tools.__all__``.
+
 What lives where:
 
 * argument names, bounds, enums and their descriptions: ``tools/schemas.py``
@@ -55,7 +61,7 @@ from backend.db import (
     top_by_field,
 )
 from backend.db.query import search_with_total
-from backend.db.stats import QueryResult
+from backend.db.stats import QueryResult, QueryStats, merge
 from backend.pipeline.sweep import (
     SweepBudget,
     estimate_sweep,
@@ -104,6 +110,12 @@ class ToolSpec:
     # Planned tools (docs/tool_requests.md) are declared so the catalog, kinds and
     # schemas exist, but no transport offers them until their owner flips this.
     available: bool = True
+    # False for a tool that only the MCP server offers (``rank_priorities_tool``):
+    # an external agent has no ``answer_node``, so it needs the ranking, while the
+    # pipeline adds its own derived record. A server-only tool is absent from the
+    # local tools, the pipeline's MCP wrappers, ``tools.__all__`` and the
+    # classifiers' ``TOOL_CATALOG``; it keeps its entry in ``TOOL_KINDS``.
+    pipeline: bool = True
     # Seconds the MCP server allows one call; None = unbounded (the sweep).
     timeout: float | None = 45.0
 
@@ -195,6 +207,27 @@ def count_by_team_operation(datasets: list[str] | None, start_time: str | None,
     if category:
         operation += f" for '{category}'"
     return operation
+
+
+def rank_priorities_operation(args: dict) -> str:
+    datasets = args["datasets"]
+    scope = ", ".join(datasets) if datasets else "every local dataset"
+    return (
+        f"rank {args['group_by']} problems in {scope} from "
+        f"{args['baseline_start']} to {args['baseline_end']} against "
+        f"{args['recent_start']} to {args['recent_end']}"
+    )
+
+
+def rank_priorities_filters(args: dict) -> dict:
+    return {
+        "datasets": args["datasets"],
+        "group_by": args["group_by"],
+        "baseline_start": args["baseline_start"],
+        "baseline_end": args["baseline_end"],
+        "recent_start": args["recent_start"],
+        "recent_end": args["recent_end"],
+    }
 
 
 def nearby_operation(line_id: int, dataset: str, before: int, after: int,
@@ -334,6 +367,80 @@ def _run_count_by_team(args, progress):
         start_time=args["start_time"],
         end_time=args["end_time"],
         category=args["category"],
+    )
+
+
+def _run_rank_priorities(args, progress):
+    """Fetch the per-window counts, then score them in ``pipeline.ranking``.
+
+    Two ``count_by_field`` calls per dataset (or one ``count_by_team`` call per
+    window in team mode) produce the same per-window counts the pipeline's own
+    ``count_by_category_tool`` / ``count_by_team_tool`` would; the scoring, and
+    the trust rule for a value missing from a capped window, live in
+    ``pipeline/ranking.py``, which has no database access.
+    """
+    from backend.db.datasets import local_datasets, resolve
+    from backend.pipeline import ranking  # lazy: priority -> envelope -> specs is cyclic
+    from backend.pipeline.playbooks import team_for
+
+    datasets = args["datasets"] or sorted(d.id for d in local_datasets())
+    dimension = args["group_by"]
+    windows = (
+        ("baseline", args["baseline_start"], args["baseline_end"]),
+        ("recent", args["recent_start"], args["recent_end"]),
+    )
+    rows_by_window: dict[str, dict[str, list]] = {"baseline": {}, "recent": {}}
+    cut_by_window: dict[str, dict[str, bool]] = {"baseline": {}, "recent": {}}
+    approximate: dict[str, bool] = {}
+    stats: list[QueryStats] = []
+
+    if dimension == "team":
+        for label, start, end in windows:
+            result = count_by_team(
+                datasets=tuple(datasets), start_time=start, end_time=end
+            )
+            if result.refused:
+                return result
+            for row in result:
+                rows_by_window[label].setdefault(row["dataset"], []).append(row)
+            # count_by_team has no row cap, so no window here is cut.
+            cut_by_window[label] = {dataset_id: False for dataset_id in datasets}
+            stats.append(result.stats)
+    else:
+        for dataset_id in datasets:
+            approximate[dataset_id] = not resolve(dataset_id).exact_counts
+            for label, start, end in windows:
+                result = count_by_field(
+                    start, end, dimension, dataset_id, None, ranking.CANDIDATE_GROUPS
+                )
+                if result.refused:
+                    return result
+                rows_by_window[label][dataset_id] = list(result)
+                cut_by_window[label][dataset_id] = (
+                    len(result) >= ranking.CANDIDATE_GROUPS
+                )
+                stats.append(result.stats)
+
+    combined = ranking.rank_all(
+        [
+            {
+                "dataset": dataset_id,
+                "baseline_rows": rows_by_window["baseline"].get(dataset_id, []),
+                "recent_rows": rows_by_window["recent"].get(dataset_id, []),
+                "baseline_cut": cut_by_window["baseline"].get(dataset_id, False),
+                "recent_cut": cut_by_window["recent"].get(dataset_id, False),
+                "approximate": approximate.get(dataset_id, False),
+            }
+            for dataset_id in datasets
+        ],
+        dimension=dimension,
+        limit=args["limit"],
+        team_for=team_for,
+    )
+    merged = merge(stats) if stats else QueryStats()
+    merged.notes.extend(combined["notes"])
+    return QueryResult(
+        combined["rows"], stats=merged, total_matches=combined["total_ranked"]
     )
 
 
@@ -861,12 +968,84 @@ SPECS: tuple[ToolSpec, ...] = (
         complete=True,
         open_world=False,
     ),
+    ToolSpec(
+        name="rank_priorities_tool",
+        title="Rank problems across datasets",
+        description=(
+            "Rank the biggest problems in each dataset from measured counts in two "
+            "adjacent time windows, on the server. Use it instead of ranking "
+            "counts yourself: it takes no numbers from the caller, reads every "
+            "count from SQL and scores with the pipeline's own formula, so the "
+            "order is checkable. Returns kind=derived rows, one per ranked value, "
+            "each carrying dataset, rank, the grouped value (template, service or "
+            "team), non_info_rows, error_rows, volume_share_pct, error_share_pct, "
+            "trend_up, breadth and score -- at most `limit` rows per dataset "
+            "(default 10), while `total_matches` says how many values were ranked "
+            "in all. A row is a ranking, not a frequency: quote its "
+            "non_info_rows and the queries in `query`, never the score alone. The "
+            "two windows must not overlap, because a value's count is the sum of "
+            "its two window counts and the trend compares them. A remote dataset "
+            "is ranked only with group_by='service' or 'template', in windows of "
+            "at most 300 seconds, and its counts are approximate; group_by='team' "
+            "is local only. Empty data means no non-informational rows in either "
+            "window for that dataset; `query_stats.notes` names the formula and "
+            "the terms used, and flags any value dropped because a window hit its "
+            "group cap."
+        ),
+        kind="derived",
+        catalog=(
+            "TIER server. Ranks problems per dataset from two non-overlapping "
+            "windows; params: datasets, group_by (template|service|team), "
+            "baseline_start/end, recent_start/end, limit (1-50). Scores measured "
+            "SQL counts with the pipeline formula and returns kind=derived rows "
+            "plus the formula, terms used and queries. Offered on the MCP server "
+            "only: the pipeline adds its own ranking in answer_node."
+        ),
+        args_model=schemas.RankPriorities,
+        run=_run_rank_priorities,
+        operation=rank_priorities_operation,
+        filters=rank_priorities_filters,
+        # Several datasets, each ranked on its own: named in the filters.
+        dataset_of=lambda a: None,
+        limit_of=lambda a: a["limit"],
+        open_world=True,
+        pipeline=False,
+    ),
 )
 
 BY_NAME: dict[str, ToolSpec] = {spec.name: spec for spec in SPECS}
 
 
-def available_specs() -> list[ToolSpec]:
-    """The tools a transport offers: available ones, the sweep pair last."""
-    live = [spec for spec in SPECS if spec.available]
+def _sweep_last(specs: list[ToolSpec]) -> list[ToolSpec]:
+    """Available specs in table order, with the sweep pair last.
+
+    The sweep tools run last on purpose: ``tool_progress`` only reaches the UI
+    from depth <= 1, and a sweep that reports nothing while it runs for minutes
+    is worse than no sweep.
+    """
+    live = [spec for spec in specs if spec.available]
     return [s for s in live if not s.sweep] + [s for s in live if s.sweep]
+
+
+def agent_specs() -> list[ToolSpec]:
+    """The tools the pipeline's agent offers: available and pipeline, sweep last."""
+    return _sweep_last([spec for spec in SPECS if spec.pipeline])
+
+
+def server_specs() -> list[ToolSpec]:
+    """Every tool the MCP server offers: every available spec, sweep last.
+
+    Unlike :func:`agent_specs`, this includes server-only tools
+    (``pipeline=False``), which the pipeline's own agent never sees.
+    """
+    return _sweep_last(list(SPECS))
+
+
+def pipeline_specs() -> list[ToolSpec]:
+    """Every spec the pipeline may offer, planned ones included.
+
+    ``tools.__all__`` and the classifiers' ``TOOL_CATALOG`` are built from this
+    (planned tools are declared there with a "NOT AVAILABLE YET" line), while
+    :func:`agent_specs` is what a transport actually generates.
+    """
+    return [spec for spec in SPECS if spec.pipeline]

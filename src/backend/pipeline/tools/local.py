@@ -11,7 +11,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 
 from backend.pipeline.tools.executor import execute_database_tool
-from backend.pipeline.tools.specs import ToolSpec, available_specs
+from backend.pipeline.tools.specs import ToolSpec, agent_specs
 
 
 def _execute(spec: ToolSpec, runtime: ToolRuntime, args: dict) -> dict:
@@ -63,5 +63,5 @@ def make_local_tool(spec: ToolSpec) -> BaseTool:
 
 
 LOCAL_TOOLS: dict[str, BaseTool] = {
-    spec.name: make_local_tool(spec) for spec in available_specs()
+    spec.name: make_local_tool(spec) for spec in agent_specs()
 }

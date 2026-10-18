@@ -13,7 +13,7 @@ from pydantic_core import to_jsonable_python
 
 from backend.pipeline.tools.executor import execute_database_tool
 from backend.pipeline.tools.mcp_bridge import get_mcp_bridge
-from backend.pipeline.tools.specs import ToolSpec, available_specs
+from backend.pipeline.tools.specs import ToolSpec, agent_specs
 
 
 def _call(runtime: ToolRuntime, spec: ToolSpec, args: dict) -> dict:
@@ -79,6 +79,6 @@ def list_skills() -> str:
 
 
 MCP_TOOLS: dict[str, BaseTool] = {
-    spec.name: make_mcp_tool(spec) for spec in available_specs()
+    spec.name: make_mcp_tool(spec) for spec in agent_specs()
 }
 MCP_DB_TOOLS = list(MCP_TOOLS.values())

@@ -77,6 +77,10 @@ LocalDatasetId = Annotated[
     str, _vocabulary(d.id for d in local_datasets())
 ]
 
+# Every registered dataset, remote included (``rank_priorities_tool`` accepts the
+# OTel tiers as well as the local corpora).
+DatasetId = Annotated[str, _vocabulary(dataset_ids())]
+
 
 class _DatasetScoped(BaseModel):
     """Base for every tool argument set: a validated corpus id."""
@@ -478,6 +482,121 @@ class CountByTeam(BaseModel):
             raise ValueError("give start_time and end_time together, or neither")
         if self.start_time is not None and self.end_time <= self.start_time:
             raise ValueError("end_time must be after start_time")
+        return self
+
+
+class RankPriorities(BaseModel):
+    """Rank problems in each dataset from measured counts in two windows.
+
+    No number is accepted from the caller: the counts are read from SQL. A
+    value's count is its baseline plus its recent count, so the two windows
+    must not overlap -- they are halves of one timeline, added together.
+    """
+
+    datasets: Annotated[
+        list[DatasetId] | None,
+        Field(
+            min_length=1,
+            description=(
+                "Datasets to rank, each ranked on its own. Omit to rank every "
+                "local dataset. A remote dataset is ranked only with "
+                "group_by='service' or 'template' (window at most 300 seconds, "
+                "counts approximate)."
+            ),
+        ),
+    ] = None
+    group_by: Annotated[
+        Literal["template", "service", "team"],
+        Field(
+            description=(
+                "What a ranked row is: 'template' (a recurring event pattern), "
+                "'service' (the emitting component) or 'team' (the owning team). "
+                "Team ranking joins the ownership mapping and is local only."
+            )
+        ),
+    ] = "service"
+    baseline_start: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Baseline window start, 'YYYY-MM-DD HH:MM:SS' (UTC). Add a UTC "
+                "offset ('+00') for a remote dataset."
+            ),
+        ),
+    ]
+    baseline_end: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Baseline window end, exclusive. After baseline_start and no "
+                "later than recent_start."
+            ),
+        ),
+    ]
+    recent_start: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description=(
+                "Recent window start, 'YYYY-MM-DD HH:MM:SS' (UTC). The counts of "
+                "both windows are added together, so the windows must not "
+                "overlap."
+            ),
+        ),
+    ]
+    recent_end: Annotated[
+        str,
+        Field(
+            pattern=DATETIME_REGEX,
+            description="Recent window end, exclusive. After recent_start.",
+        ),
+    ]
+    limit: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=50,
+            description=(
+                "Most ranked rows to return per dataset (default 10). The total "
+                "number of ranked values is reported even when it exceeds this."
+            ),
+        ),
+    ] = 10
+
+    @field_validator("datasets")
+    @classmethod
+    def _known_datasets(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        bad = [v for v in value if v not in dataset_ids()]
+        if bad:
+            raise ValueError(
+                f"Unknown dataset(s) {', '.join(bad)}. Choose from: "
+                f"{', '.join(dataset_ids())}."
+            )
+        return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def _windows(self) -> Self:
+        if self.baseline_end <= self.baseline_start:
+            raise ValueError("baseline_end must be after baseline_start")
+        if self.recent_end <= self.recent_start:
+            raise ValueError("recent_end must be after recent_start")
+        if self.baseline_end > self.recent_start:
+            raise ValueError(
+                "baseline_end must not be after recent_start: the two windows "
+                "must not overlap, because their counts are added together"
+            )
+        if self.group_by == "team":
+            local = {d.id for d in local_datasets()}
+            remote = [v for v in (self.datasets or []) if v not in local]
+            if remote:
+                raise ValueError(
+                    f"team ranking is local only; use group_by='service' for "
+                    f"{', '.join(remote)}."
+                )
         return self
 
 

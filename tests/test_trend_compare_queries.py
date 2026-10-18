@@ -208,3 +208,17 @@ def test_compare_periods_groups_by_field_and_severity():
         assert column in text
     assert stats.dataset == "openstack"
     assert len(params) == 4
+
+
+def test_compare_periods_drops_the_duplicate_column_when_field_is_severity():
+    """Grouping by severity would emit the same column twice; only one survives."""
+    query, _, _ = count_query.compare_periods.__wrapped__(
+        "2017-05-14 00:00:00", "2017-05-15 00:00:00", LO, HI,
+        dataset="openstack", field="severity",
+    )
+    text = normalized(query)
+
+    assert '"Level" AS grp' in text
+    assert '"Level" AS sev' not in text
+    assert "r.sev = b.sev" not in text
+    assert text.count('AS "severity"') == 1

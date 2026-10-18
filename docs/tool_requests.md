@@ -1,8 +1,8 @@
 # Tool requests (hand-off)
 
 Tools the evidence agent needs to cover the brief (`Making Sense of Logs - The
-Right Insights for the Right People.pdf`). T1-T7 are built and in the spec table;
-what remains is below. Written against the current data layer: corpora are
+Right Insights for the Right People.pdf`). What remains below are the hypothesis
+tests T8-T12. Written against the current data layer: corpora are
 registered in `backend/db/datasets.py` (`openstack`, `bgl`, `otel_s3`,
 `otel_slice`), every tool takes a `dataset` id (never a table name), and rows use
 the canonical fields (`ts`, `severity`, `service`, `entity_id`, `message`,
@@ -70,9 +70,3 @@ Common rules for T8-T12:
 | T10 | `test_counterexample_tool` | same as T9 | `b_total`; `b_without_a`; up to 5 `record_id`s of B rows with no A in the preceding `within_seconds` |
 | T11 | `test_control_group_tool` | `dataset`, `match`, `case_start`/`case_end` and `control_start`/`control_end` (two windows chosen by the agent from measured data -- trend, period comparison -- never hard-coded; they may not overlap) | per group (`case`, `control`): `matches`, `total_rows`, `rate_per_1k`. Groups are time windows because a corpus is one table (the three OpenStack runs share one; nothing records which run a row came from). |
 | T12 | `test_recurrence_tool` | `dataset`, `match`, window, `bucket` (as `get_trend_tool`; omitted = chosen from the window) | `buckets_total`, `buckets_with_match`, `longest_gap_seconds`, `distinct_entities` (`entity_id`: process on OpenStack, node on BGL), `distinct_services`, `distinct_requests` (`null` where the dataset has no `request_id`) |
-
-## For the MCP server (see `docs/mcp_server_plan.md`)
-
-| # | Tool | Inputs | Output rows | Notes |
-| --- | --- | --- | --- | --- |
-| T13 | `rank_priorities_tool` (kind `derived`, offered on the MCP server only -- the pipeline adds its own ranking in `answer_node`) | `datasets`, `group_by` (`template`, `service` or `team`), `baseline_start/end`, `recent_start/end` | the ranked rows, the formula, the terms used and the executed queries, in the standard envelope | Runs the counts and the period comparison through the same DB functions as `count_by_category_tool` / `count_by_team_tool` / `compare_periods_tool` and scores them with `priority.compute_priorities` and `playbooks.team_for`: no second scoring or SQL path. Never accepts numbers from the caller, so an external agent cannot rank by anything but measured counts. |

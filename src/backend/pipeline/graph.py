@@ -25,7 +25,7 @@ from backend.pipeline.agents import (
 )
 from backend.pipeline.agents.evidence_report import generate_evidence_judgement
 from backend.pipeline.answers import serialize_answer
-from backend.pipeline.claims import claim_targets
+from backend.pipeline.claims import claim_targets, unsupported_narrative_numbers
 from backend.pipeline.contracts import EvidenceReport
 from backend.pipeline.data_scope import build_data_scope
 from backend.pipeline.evidence import build_evidence
@@ -269,6 +269,21 @@ def find_evidence_node(state: PipelineState) -> PipelineState:
     }
 
 
+def _narrative_text(answer) -> str:
+    """The prose blocks of the structured answer, whatever its type."""
+    blocks = (
+        answer.get("blocks") if isinstance(answer, dict)
+        else getattr(answer, "blocks", None)
+    )
+    parts: list[str] = []
+    for block in blocks or []:
+        kind = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+        text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+        if kind == "text" and text:
+            parts.append(str(text))
+    return "\n".join(parts)
+
+
 def _check_claims(structured, valid_ids: set, records: list) -> list[dict]:
     """Judge each measured finding against the results it cites (one request).
 
@@ -317,6 +332,15 @@ def answer_node(state: PipelineState) -> PipelineState:
     # A measured finding the cited results do not back is shown as a hypothesis
     # (and a contradicted one sends the answer back, see confidence_node).
     checks = _check_claims(structured, valid_ids, records)
+    # The findings are checked above; the narrative is prose, so a total stated
+    # only there is checked for the figures that read as measured and noted.
+    narrative_missing = unsupported_narrative_numbers(_narrative_text(structured), records)
+    if narrative_missing:
+        notes = [
+            *notes,
+            "the narrative states totals no cited result shows: "
+            + ", ".join(narrative_missing),
+        ]
     answer = serialize_answer(
         structured,
         valid_ids,

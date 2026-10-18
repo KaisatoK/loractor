@@ -31,7 +31,11 @@ Which problems recur, how often, and which components or teams are involved?
    refused for too many buckets, take the suggested coarser bucket; if you
    split the period instead, split on whole buckets (on the hour for hour
    buckets), never at the dataset's first timestamp plus a duration.
-   `compare_periods_tool` (first half vs second half) is an alternative.
+   For the computed ranking, also count each half of the scope separately with
+   `count_by_category_tool` (the same `type` for both halves), so every candidate
+   has both window counts. `compare_periods_tool` is a quick "what changed fastest"
+   view, but it is ordered by volume change and truncates, so it misses large, flat
+   values.
 5. **One example per pattern** with `search_logs_tool` (limit 1-3), only to show
    what the message looks like.
 
@@ -46,3 +50,8 @@ Which problems recur, how often, and which components or teams are involved?
 ## Never
 - Infer frequency from search examples.
 - Treat each matching log entry as a separate incident.
+- Count a problem total that leaves out WARNING: problem severity is every level
+  above informational, WARNING/warn included.
+- Add counts up yourself: state a total only when a query returns it.
+- Rank one dataset against another: their windows and sizes differ, so give each
+  its own ranking.
