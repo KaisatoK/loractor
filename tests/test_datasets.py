@@ -91,10 +91,10 @@ def test_openstack_severity_vocabulary_includes_critical():
 def test_openstack_selector_map():
     d = ds.resolve("openstack")
     assert d.selector_field("@") == ds.SERVICE
-    assert d.selector_field("^") == ds.TEMPLATE
+    assert d.selector_field("#") == ds.TEMPLATE
     assert d.selector_field("$") == ds.MESSAGE
     # No event-id selector, and '!' is only the case modifier, never a selector.
-    assert d.selector_field("#") is None
+    assert d.selector_field("?") is None
     assert d.selector_field("!") is None
 
 
@@ -273,7 +273,7 @@ CORPORA = (
             # Derived, not a column: the request id is cut out of ``ADDR``.
             ("request_id", None, '"ADDR"'),
         ),
-        absent_selectors=("#", "!"),
+        absent_selectors=("?", "!"),
         index_name="openstack_idx",
         token_index_name="openstack_token_idx",
         ts_cast="timestamptz",
@@ -304,7 +304,7 @@ CORPORA = (
             ("template", "EventTemplate", None),
             ("record_id", "LineId", None),
         ),
-        absent_selectors=("#",),
+        absent_selectors=("?",),
         index_name="bgl_idx",
         token_index_name="bgl_token_idx",
         ts_cast="timestamptz",

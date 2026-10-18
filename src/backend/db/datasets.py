@@ -448,7 +448,7 @@ OPENSTACK = Dataset(
     selectors=MappingProxyType(
         {
             "@": SERVICE,
-            "^": TEMPLATE,
+            "#": TEMPLATE,
             "$": MESSAGE,
         }
     ),
@@ -768,7 +768,7 @@ BGL = Dataset(
     selectors=MappingProxyType(
         {
             "@": SERVICE,
-            "^": TEMPLATE,
+            "#": TEMPLATE,
             "$": MESSAGE,
         }
     ),

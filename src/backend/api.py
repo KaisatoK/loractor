@@ -550,7 +550,7 @@ def get_auto_complete(query: str) -> dict:
     """Type-ahead suggestions merged across every local corpus.
 
     ``query`` must start with a selector scoping it to one field (``@``
-    service, ``^`` template, ``$`` message text; a ``!`` right after the
+    service, ``#`` template, ``$`` message text; a ``!`` right after the
     selector switches to case-sensitive ranking); a query with no leading
     selector returns no suggestions. Every local corpus loaded from a ``.log``
     file (``openstack``, ``bgl``) is searched and the suggestions are merged; a

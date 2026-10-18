@@ -1,6 +1,6 @@
 """Type-ahead chat box, a no-build Streamlit custom component.
 The frontend reports the draft and the caret's *current word*; this looks it up
-via ``/auto-complete`` (required selector ``@`` component, ``^`` event template,
+via ``/auto-complete`` (required selector ``@`` component, ``#`` event template,
 ``$`` content; a ``!`` right after the selector means case-sensitive ranking).
 Suggestions are merged across the local corpora, so a ``$`` pick inserts a
 ``Line ID: n (dataset)`` reference.
@@ -19,12 +19,12 @@ _component = components.declare_component("chat_box", path=str(_DIR))
 _KEY = "chat_box"
 _SUBMIT_SEQ_KEY = "chat_box_submit_seq"
 _STOP_SEQ_KEY = "chat_box_stop_seq"
-_SELECTORS = "@^$"
+_SELECTORS = "@#$"
 
 
 def _suggestions(token: str, word: str) -> list[dict]:
     """Best-effort suggestions -- a lookup failure must never break the chat.
-    Opt-in via a selector: the word must start with ``@``/``^``/``$`` to scope to
+    Opt-in via a selector: the word must start with ``@``/``#``/``$`` to scope to
     component/template/content; any other word (including ``!word``) suggests
     nothing."""
     word = word.strip()

@@ -86,7 +86,7 @@ def get_messages(token: str, chat_id: str) -> list:
 def auto_complete(token: str, query: str) -> list[dict]:
     """Type-ahead suggestions from the log index's field values.
     A leading selector in ``query`` scopes it to one field: ``@`` component,
-    ``^`` event template, ``$`` content. No dataset is sent, so the backend
+    ``#`` event template, ``$`` content. No dataset is sent, so the backend
     merges every local corpus; a ``$`` suggestion carries its ``dataset``."""
     response = requests.get(
         f"{API_BASE}/auto-complete",

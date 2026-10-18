@@ -531,8 +531,8 @@ def test_auto_complete_resolves_selectors_per_dataset():
 
 
 def test_auto_complete_template_selector_reads_event_template_on_both():
-    assert '"EventTemplate"' in render_auto_complete("^Took", "openstack")
-    assert '"EventTemplate"' in render_auto_complete("^parity", "bgl")
+    assert '"EventTemplate"' in render_auto_complete("#Took", "openstack")
+    assert '"EventTemplate"' in render_auto_complete("#parity", "bgl")
 
 
 def test_auto_complete_has_no_pid_or_node_selector():
@@ -548,7 +548,7 @@ def test_auto_complete_bang_after_a_selector_is_the_case_modifier():
 
 
 def test_auto_complete_suppresses_a_selector_the_corpus_lacks():
-    # The OTel slice has no event_id field, so '#' suggests nothing.
+    # The OTel slice has no event-template field, so '#' suggests nothing there.
     assert NO_MATCH in render_auto_complete("#E25", "otel_slice")
 
 

@@ -8,7 +8,7 @@ matches, then popularity.
 
 A leading selector is required and scopes the lookup to one canonical field. The
 selector map lives in the **dataset registry**, not here, so each corpus exposes
-only the selectors it can serve: ``@`` service, ``^`` template, ``$`` message
+only the selectors it can serve: ``@`` service, ``#`` template, ``$`` message
 text. A selector a corpus lacks suggests nothing rather than erroring, and a
 query with no leading selector matches nothing.
 

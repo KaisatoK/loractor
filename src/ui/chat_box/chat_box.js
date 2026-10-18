@@ -19,10 +19,10 @@ let stopping = false;
 let basePlaceholder = "";
 
 const SPACE = /\s/;
-// ``@`` component/service, ``^`` event template, ``$`` message content. ``!`` is
+// ``@`` component/service, ``#`` event template, ``$`` message content. ``!`` is
 // not a selector: typed right after one (``@!nova``) it only switches the
 // backend to case-sensitive ranking, so it stays part of the queried word.
-const SELECTORS = "@^$";
+const SELECTORS = "@#$";
 
 // The selector that scoped the lookup behind the suggestions on screen, if the
 // queried word started with one. It is shown in the dropdown as a prefix but is

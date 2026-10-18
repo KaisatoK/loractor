@@ -82,7 +82,7 @@ def test_template_selector_returns_templates_from_both_corpora(per_dataset):
             "bgl": [{"suggestion": "instruction cache parity error", "count": 2}],
         }
     )
-    suggestions = {row["suggestion"] for row in ac.auto_complete("^t")}
+    suggestions = {row["suggestion"] for row in ac.auto_complete("#t")}
     assert suggestions == {"Took <*> seconds to spawn", "instruction cache parity error"}
 
 
@@ -165,16 +165,16 @@ def _chat_box(monkeypatch):
 
 def test_chat_box_selectors_are_service_template_and_content(monkeypatch):
     chat_box, seen = _chat_box(monkeypatch)
-    assert chat_box._SELECTORS == "@^$"
-    for word in ("@nova", "^Took", "$timeout", "@!nova"):
+    assert chat_box._SELECTORS == "@#$"
+    for word in ("@nova", "#Took", "$timeout", "@!nova"):
         assert chat_box._suggestions("t", word)
-    assert seen == ["@nova", "^Took", "$timeout", "@!nova"]
+    assert seen == ["@nova", "#Took", "$timeout", "@!nova"]
 
 
 def test_chat_box_does_not_look_up_a_bang_word(monkeypatch):
     chat_box, seen = _chat_box(monkeypatch)
     assert chat_box._suggestions("t", "!257") == []
-    assert chat_box._suggestions("t", "#E25") == []
+    assert chat_box._suggestions("t", "%wildcard") == []
     assert seen == []
 
 
@@ -185,5 +185,5 @@ def test_chat_box_inserts_a_dataset_qualified_line_reference():
     chat_box = _chat_box_module()
 
     js = (Path(chat_box.__file__).parent / "chat_box.js").read_text(encoding="utf-8")
-    assert 'const SELECTORS = "@^$";' in js
+    assert 'const SELECTORS = "@#$";' in js
     assert "`Line ID: ${s.line_id} (${s.dataset})`" in js

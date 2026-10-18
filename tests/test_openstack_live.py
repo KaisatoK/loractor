@@ -178,16 +178,16 @@ def test_fetch_by_record_id_returns_one_row(loaded):
 
 def test_every_selector_returns_suggestions(loaded):
     """Every offered selector, since a column missing from the token index fails
-    only at query time. No '#' (no event ids) and no '!' (only the case
+    only at query time. No '?' (no event ids) and no '!' (only the case
     modifier, never a selector). Checked per corpus through the private
     lookup, since the merged one hides which corpus answered."""
     from backend.db.auto_complete import _auto_complete_dataset
 
-    for query in ("@nova", "^Took", "$spawned"):
+    for query in ("@nova", "#Took", "$spawned"):
         suggestions = _auto_complete_dataset(query, dataset="openstack")
         assert suggestions, query
 
-    assert "#" not in resolve("openstack").selectors
+    assert "?" not in resolve("openstack").selectors
     assert "!" not in resolve("openstack").selectors
 
 
