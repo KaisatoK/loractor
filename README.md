@@ -225,7 +225,6 @@ tests/                 Offline tests plus gated live corpus and policy tests
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) — shortest path to a first answer
 - [Setup guide](setup.md) — full installation and environment reference
 - [Architecture](docs/architecture.md) — runtime components and investigation graph
 - [Grounding](docs/grounding.md) — findings ledger, citations, and claim checks
