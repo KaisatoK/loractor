@@ -632,8 +632,8 @@ after a reboot or a recreated container:
 | 1 | installs [uv](https://docs.astral.sh/uv/) | `uv` is on PATH |
 | 2 | `uv sync` | never (it is already incremental) |
 | 3 | creates `.env` from `.env.example` and reports unset keys | `.env` exists |
-| 4 | starts SereneDB | a server already answers |
-| 5 | waits for it to answer a *query*, and writes `SERENEDB_PORT` | – |
+| 4 | starts SereneDB and writes `SERENEDB_PORT` to `.env` | a server already answers |
+| 5 | waits for it to answer a *query*, not just accept a socket | – |
 | 6 | holds the memory ceiling, creates the embedding secret | – |
 | 7 | loads the ownership table and the corpora | that corpus is already loaded |
 | 8 | prints the resulting state, including what the model returns | – |
@@ -647,6 +647,7 @@ bash ./bootstrap.sh --skip-data          # set the server up, load nothing
 bash ./bootstrap.sh --embed              # also build template embeddings (spends provider quota)
 bash ./bootstrap.sh --force-reload       # rebuild corpora that are already loaded
 bash ./bootstrap.sh --yes                # never prompt (for CI or a non-interactive shell)
+bash ./bootstrap.sh --no-probe           # skip the single embedding call in step 8
 ```
 
 Two steps download and execute a vendor installer -- uv from `astral.sh` and

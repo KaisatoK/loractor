@@ -26,6 +26,7 @@
 #   bash ./bootstrap.sh --embed                # also build template embeddings (costs provider quota)
 #   bash ./bootstrap.sh --force-reload         # rebuild corpora even if already loaded
 #   bash ./bootstrap.sh --yes                  # never prompt (needed for CI / non-interactive)
+#   bash ./bootstrap.sh --no-probe             # skip the one embedding call in step 8
 #
 # Two steps download and execute a vendor installer (uv from astral.sh, SereneDB
 # from linux.serenedb.com). Both print the exact command first and ask, unless
@@ -60,7 +61,7 @@ while [ $# -gt 0 ]; do
         --force-reload) force_reload=1; shift ;;
         --no-probe) probe_embedding=0; shift ;;
         --yes|-y) assume_yes=1; shift ;;
-        -h|--help) sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "bootstrap.sh: unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -219,12 +220,17 @@ docker)
     fi
     set_env_key SERENEDB_HOST localhost
     set_env_key SERENEDB_PORT "$serenedb_port"
-    if docker compose version >/dev/null 2>&1 && [ -f docker-compose.yml ]; then
+    if docker ps -a --format '{{.Names}}' | grep -qx serenedb; then
+        # Adopt it rather than create one: docker-compose.yml pins
+        # container_name, so a container left by a plain `docker run` would make
+        # `docker compose up` fail on a name conflict. `docker start` is a no-op
+        # on a container that is already running.
+        note "reusing the existing serenedb container"
+        docker start serenedb >/dev/null
+        note "its published port is what counts here; docker ps shows the mapping"
+    elif docker compose version >/dev/null 2>&1 && [ -f docker-compose.yml ]; then
         note "docker compose up -d (host port $serenedb_port, volume serenedb-data)"
         SERENEDB_PORT="$serenedb_port" docker compose up -d
-    elif docker ps -a --format '{{.Names}}' | grep -qx serenedb; then
-        note "starting the existing serenedb container"
-        docker start serenedb >/dev/null
     else
         note "docker run -d --name serenedb -p ${serenedb_port}:7890 -v serenedb-data:/var/lib/serenedb serenedb/serenedb"
         docker run -d --name serenedb \
@@ -310,7 +316,16 @@ else
             to_load=("${resolved[@]}")
             note "--force-reload: rebuilding ${to_load[*]}"
         else
-            mapfile -t to_load < <(uv run python -m backend.db.provision --pending-datasets "${resolved[@]}")
+            if ! pending="$(uv run python -m backend.db.provision \
+                    --pending-datasets "${resolved[@]}")"; then
+                die "could not ask the database which corpora are loaded; it
+    answered step 5 but failed this query. Re-run, or load explicitly with
+    bash ./setup.sh ${resolved[*]}"
+            fi
+            to_load=()
+            while IFS= read -r line; do
+                [ -n "$line" ] && to_load+=("$line")
+            done <<< "$pending"
             skipped=()
             for dataset in "${resolved[@]}"; do
                 printf '%s\n' "${to_load[@]:-}" | grep -qx "$dataset" || skipped+=("$dataset")
