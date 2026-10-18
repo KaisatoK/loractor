@@ -54,10 +54,13 @@ SERENEDB_BUILD_THREADS = int(os.getenv("SERENEDB_BUILD_THREADS", "16"))
 
 # Where the *host* would reach an embedding service. Nothing in the query path
 # uses it: ``ai_embed`` runs inside SereneDB and resolves its endpoint and
-# credentials from the server-side secret named in the call (``local_ai``), so
-# changing this does not change where embeddings are fetched from. Create or
-# replace that secret to point the database at a different provider.
-MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://ai.google.dev/api/rest")
+# credentials from the server-side secret named in the call
+# (``EMBEDDING_SECRET``), so changing this does not change where embeddings are
+# fetched from. Create or replace that secret to point the database at a
+# different provider.
+MODEL_BASE_URL = os.getenv(
+    "MODEL_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"
+)
 
 # The embedding model named in every ``ai_embed`` call, and the width its
 # vectors are stored at. The two must agree with what the endpoint actually
@@ -69,7 +72,19 @@ MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://ai.google.dev/api/rest")
 # model and verified against a live probe before a build
 # (``templates.embedding_compatibility``).
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
-EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "768"))
+EMBEDDING_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "3072"))
+
+# The server-side secret every ``ai_embed`` call names. It holds the endpoint
+# and the API key, so it -- not ``MODEL_BASE_URL`` -- is what decides which
+# provider answers. It does not survive a container being recreated:
+#
+#   CREATE SECRET gemini (
+#       TYPE openai,
+#       base_url 'https://generativelanguage.googleapis.com/v1beta/openai',
+#       embeddings_path '/embeddings',
+#       api_key '...'
+#   );
+EMBEDDING_SECRET = os.getenv("EMBEDDING_SECRET", "gemini")
 
 # --- Team ownership ----------------------------------------------------------
 # A small FICTIONAL mapping (dataset, component, team) so team-lead and manager

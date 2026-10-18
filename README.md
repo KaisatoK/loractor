@@ -400,12 +400,13 @@ what was searched" rather than "not present".
 - [uv](https://docs.astral.sh/uv/)
 - A SereneDB instance on `localhost:7890` (default credentials
   `postgres`/`postgres`, database `postgres`)
-- An embedding service the **database** can reach -- only for the optional
+- An embedding provider the **database** can reach -- only for the optional
   template embeddings; `bash ./setup.sh` loads with `--no-embed` and needs no
   embedding model. `ai_embed` runs inside SereneDB and resolves its endpoint
-  and credentials from the server-side secret the calls name (`local_ai`), so
-  the host's own reachability is irrelevant and `MODEL_BASE_URL` does not
-  change where embeddings come from. See **Changing the embedding model**.
+  and credentials from the server-side secret the calls name
+  (`EMBEDDING_SECRET`, default `gemini`), so the host's own reachability is
+  irrelevant and `MODEL_BASE_URL` does not change where embeddings come from.
+  See **Changing the embedding model**.
 - The raw loghub logs in `src/backend/data/` (gitignored): the three OpenStack
   nova runs `openstack_normal1.log`, `openstack_normal2.log`,
   `openstack_abnormal.log`, and `BGL.log` (743 MB; `BGL_LOG_PATH` may point
@@ -655,21 +656,51 @@ vectors already stored. Three things break silently or obscurely otherwise, so
 `backend.db.templates.embedding_compatibility(dataset)` checks all three and
 `build_templates` refuses rather than spending the build:
 
-| Failure | How it shows | Fix |
+Three settings have to agree, and `backend.db.templates.embedding_compatibility(dataset)`
+checks each against the live database (`problems` carries a stable `code`):
+
+| Problem | How it shows | Fix |
 | --- | --- | --- |
-| The database cannot embed | `ai_embed: secret 'local_ai' not found` -- a recreated container loses its secrets | create the server-side secret, pointing it at a provider serving the model |
-| Width mismatch | the table stores `FLOAT[EMBEDDING_DIMENSION]` and the call casts to it, so a wider vector is **truncated**, not refused | set `EMBEDDING_DIMENSION` to what the probe reports, or ask the endpoint for a smaller `output_dimensionality` |
-| Vectors from another model | nothing: the table looks healthy and every distance is meaningless | rebuild (`build_templates(dataset, rebuild=True)`) |
+| `cannot_embed` / `missing_secret` | `ai_embed: secret '<name>' not found` -- a recreated container loses its secrets | create the secret (below) |
+| `declared_dimension` | the table stores `FLOAT[EMBEDDING_DIMENSION]` and the call casts to it, so a wider vector is **truncated**, not refused | set `EMBEDDING_DIMENSION` to what the probe reports, or ask the endpoint for a smaller `output_dimensionality` |
+| `stale_model` | nothing: the table looks healthy and every distance is meaningless | `build_templates(dataset, rebuild=True)` |
+| `stale_dimension` | a stored vector is a different width than the model now returns, so it came from another model | `build_templates(dataset, rebuild=True)` |
+
+`build_templates` refuses on any of these before spending the build; the two
+`stale_*` problems do not block `rebuild=True`, which drops the table and so
+cannot mix widths or models. Both are also enforced for search:
+`has_template_vectors()` returns `False` on a mismatch, so semantic search
+falls back to lexical BM25 instead of ranking on noise.
+
+The database reaches its provider through a **server-side secret**, named by
+`EMBEDDING_SECRET` (default `gemini`). For Gemini through its OpenAI-compatible
+endpoint:
+
+```sql
+CREATE SECRET gemini (
+    TYPE openai,
+    base_url 'https://generativelanguage.googleapis.com/v1beta/openai',
+    embeddings_path '/embeddings',
+    api_key '<your key>'
+);
+-- optional: make it the default for ai_embed / ai_similarity
+SET sdb_ai_embedding_default_secret = 'gemini';
+```
 
 Native widths differ by model -- `nomic-embed-text:v1.5` is 768,
-`gemini-embedding-2` is **3072** unless the endpoint is asked for a smaller
-output -- so the dimension is configurable rather than fixed. The model a
-table's vectors came from is recorded at build time (`template_embedding_meta`)
-because SereneDB cannot report it; `templates_status()` shows it as `model` with
-`model_matches_config`. A recorded mismatch makes search fall back to lexical
-BM25 instead of ranking on noise, and a table built before the model was
-recorded reports `model: null` -- unattributable rather than proven wrong, so it
-keeps working until it is rebuilt.
+`gemini-embedding-2` is **3072** (measured through that endpoint) unless the
+endpoint is asked for a smaller output -- so `EMBEDDING_DIMENSION` is
+configurable and defaults to 3072. The model a table's vectors came from is
+recorded at build time (`template_embedding_meta`) because SereneDB cannot
+report it, and the stored width is measured from a row (the column reports only
+as `ARRAY`), so a change is caught even for a table built before the model was
+recorded. `templates_status()` reports `model`, `stored_dimension`,
+`model_matches_config` and `dimension_matches_config`; `model: null` means
+unattributable rather than proven wrong.
+
+A model change therefore means rebuilding: BGL is 20,352 embedding calls and
+OpenStack's current corpus yields 54,043 distinct templates, above the 50,000
+`SERENEDB_MAX_TEMPLATES` cap, so it is refused until the cap is raised.
 
 ### Team ownership (fictional)
 

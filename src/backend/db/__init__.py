@@ -12,6 +12,7 @@ from backend.db.catalog_query import list_datasets
 from backend.db.config import (
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
+    EMBEDDING_SECRET,
     LOG_SCHEMA,
     MODEL_BASE_URL,
     SERENEDB_PORT,
@@ -53,6 +54,7 @@ __all__ = [
     "DatasetKind",
     "EMBEDDING_DIMENSION",
     "EMBEDDING_MODEL",
+    "EMBEDDING_SECRET",
     "LOG_SCHEMA",
     "MODEL_BASE_URL",
     "QueryClass",

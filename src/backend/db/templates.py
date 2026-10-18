@@ -31,7 +31,11 @@ import time
 
 from psycopg2 import sql
 
-from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL
+from backend.db.config import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    EMBEDDING_SECRET,
+)
 from backend.db.datasets import Capability, Dataset, resolve
 from backend.db.errors import refuse
 
@@ -172,12 +176,37 @@ def probe_embedding_dimension(cur) -> int:
     """
     cur.execute("SET sdb_ai_allow_insecure_endpoint = true")
     cur.execute(
-        sql.SQL("SELECT ai_embed(%s, {model}, 'local_ai') AS emb").format(
-            model=sql.Literal(EMBEDDING_MODEL)
+        sql.SQL("SELECT ai_embed(%s, {model}, {secret}) AS emb").format(
+            model=sql.Literal(EMBEDDING_MODEL),
+            secret=sql.Literal(EMBEDDING_SECRET),
         ),
         (_PROBE_TEXT,),
     )
     return len(cur.fetchone()["emb"])
+
+
+def stored_vector_width(cur, table: str) -> int | None:
+    """The width of a stored vector, measured from one row.
+
+    The column is declared ``FLOAT[n]`` but SereneDB reports its type only as
+    ``ARRAY``, so the width cannot be read from the catalog. One row settles
+    it, and it also catches a model change that was never recorded: a
+    different width is a different model.
+    """
+    try:
+        cur.execute(
+            sql.SQL("SELECT embedding FROM {t} WHERE embedding IS NOT NULL "
+                    "LIMIT 1").format(t=sql.Identifier(table))
+        )
+        row = cur.fetchone()
+    except Exception:  # noqa: BLE001 -- no table or no vectors is an answer
+        return None
+    return len(row["embedding"]) if row and row["embedding"] else None
+
+
+# Problems a rebuild resolves by dropping the table, as opposed to ones that
+# would break the rebuild too.
+STALE_CODES = frozenset({"stale_model", "stale_dimension"})
 
 
 def embedding_compatibility(dataset: Dataset | str) -> dict:
@@ -194,47 +223,67 @@ def embedding_compatibility(dataset: Dataset | str) -> dict:
       distance against a new query vector meaningless.
     """
     ds = resolve(dataset) if isinstance(dataset, str) else dataset
+    table = template_table(ds)
     report: dict = {
         "dataset": ds.id,
         "model": EMBEDDING_MODEL,
+        "secret": EMBEDDING_SECRET,
         "declared_dimension": EMBEDDING_DIMENSION,
         "actual_dimension": None,
+        "stored_dimension": None,
         "can_embed": False,
         "stored": None,
         "ok": False,
         "problems": [],
     }
+
+    def problem(code: str, message: str) -> None:
+        report["problems"].append({"code": code, "message": message})
+
     with _embed_cursor() as cur:
         try:
             report["actual_dimension"] = probe_embedding_dimension(cur)
             report["can_embed"] = True
         except Exception as error:  # noqa: BLE001 -- reported, not raised
             detail = str(error).strip().splitlines()[0]
-            report["problems"].append(
-                f"the database cannot embed with '{EMBEDDING_MODEL}': {detail}"
-            )
+            problem("cannot_embed",
+                    f"the database cannot embed with '{EMBEDDING_MODEL}': {detail}")
             if "secret" in detail.lower():
-                report["problems"].append(
-                    "create the server-side secret the ai_embed calls name "
-                    "('local_ai') so it points at a provider serving this "
-                    "model; a recreated container loses its secrets"
+                problem(
+                    "missing_secret",
+                    f"create the server-side secret the ai_embed calls name "
+                    f"('{EMBEDDING_SECRET}') so it points at a provider "
+                    f"serving this model; a recreated container loses its "
+                    f"secrets",
                 )
         report["stored"] = stored_embedding_model(cur, ds.id)
+        report["stored_dimension"] = stored_vector_width(cur, table)
 
     actual = report["actual_dimension"]
     if actual is not None and actual != EMBEDDING_DIMENSION:
-        report["problems"].append(
+        problem(
+            "declared_dimension",
             f"'{EMBEDDING_MODEL}' returns {actual} dimensions but the table "
             f"stores {EMBEDDING_DIMENSION}; set EMBEDDING_DIMENSION={actual} "
-            "and rebuild, or ask the endpoint for a smaller output width"
+            "and rebuild, or ask the endpoint for a smaller output width",
         )
 
     stored = report["stored"]
     if stored and stored.get("model") != EMBEDDING_MODEL:
-        report["problems"].append(
+        problem(
+            "stale_model",
             f"the stored vectors were built with '{stored['model']}' and the "
             f"configured model is '{EMBEDDING_MODEL}'; distances between the "
-            "two are meaningless, so rebuild with rebuild=True"
+            "two are meaningless, so rebuild with rebuild=True",
+        )
+
+    width = report["stored_dimension"]
+    if width is not None and width != EMBEDDING_DIMENSION:
+        problem(
+            "stale_dimension",
+            f"the stored vectors are {width}-wide but {EMBEDDING_DIMENSION} is "
+            "configured, so they came from another model and would be mixed "
+            "with new ones; rebuild with rebuild=True",
         )
 
     report["ok"] = report["can_embed"] and not report["problems"]
@@ -282,13 +331,13 @@ def build_templates(
     compatibility = embedding_compatibility(ds)
     report["compatibility"] = compatibility
     blocking = [
-        problem for problem in compatibility["problems"]
-        if not (rebuild and "stored vectors were built with" in problem)
+        item for item in compatibility["problems"]
+        if not (rebuild and item["code"] in STALE_CODES)
     ]
     if blocking:
         raise refuse(
             f"The configured embedding model cannot build {ds.id} templates.",
-            " Also: ".join(blocking),
+            " Also: ".join(item["message"] for item in blocking),
             code="embedding_incompatible",
             model=compatibility["model"],
             declared_dimension=compatibility["declared_dimension"],
@@ -411,7 +460,7 @@ def build_templates(
             cur.execute(
                 sql.SQL("""
                     UPDATE {t} SET embedding =
-                        ai_embed(template_text, {model}, 'local_ai')
+                        ai_embed(template_text, {model}, {secret})
                             ::FLOAT[{dim}]
                     WHERE template_id IN (
                         SELECT template_id FROM {t}
@@ -422,6 +471,7 @@ def build_templates(
                 """).format(
                     t=sql.Identifier(table),
                     model=sql.Literal(EMBEDDING_MODEL),
+                    secret=sql.Literal(EMBEDDING_SECRET),
                     dim=sql.Literal(EMBEDDING_DIMENSION),
                     batch=sql.Literal(EMBED_BATCH),
                 )
@@ -516,6 +566,7 @@ def templates_status(dataset: Dataset | str) -> dict:
         )
         row = cur.fetchone()
         stored = stored_embedding_model(cur, ds.id)
+        width = stored_vector_width(cur, table)
 
     return {
         "exists": True,
@@ -534,6 +585,14 @@ def templates_status(dataset: Dataset | str) -> dict:
             None if stored is None else stored.get("model") == EMBEDDING_MODEL
         ),
         "configured_model": EMBEDDING_MODEL,
+        # Measured from a stored row, so it is known even for a table built
+        # before the model was recorded. A width that differs from the
+        # configured one proves the vectors came from another model.
+        "stored_dimension": width,
+        "dimension_matches_config": (
+            None if width is None else width == EMBEDDING_DIMENSION
+        ),
+        "configured_dimension": EMBEDDING_DIMENSION,
     }
 
 
@@ -574,7 +633,17 @@ def has_template_vectors(dataset: Dataset | str) -> bool:
         # are worse than no vectors: every distance is meaningless, and the
         # search would rank confidently on noise. Searching lexically instead
         # is the honest degradation.
-        if available and status.get("model_matches_config") is False:
+        if available and status.get("dimension_matches_config") is False:
+            # Measured, so this holds even when no model was recorded: a
+            # 768-wide vector cannot be compared with a 3072-wide query one.
+            logger.warning(
+                "%s template vectors are %s-wide but %s is configured; "
+                "searching lexically until they are rebuilt",
+                ds.id, status.get("stored_dimension"),
+                status.get("configured_dimension"),
+            )
+            available = False
+        elif available and status.get("model_matches_config") is False:
             logger.warning(
                 "%s template vectors were built with '%s' but '%s' is "
                 "configured; searching lexically until they are rebuilt",
@@ -664,7 +733,7 @@ def matched_templates(
         cur.execute(
             sql.SQL("""
                 WITH q AS (
-                    SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
+                    SELECT ai_embed(%s, {model}, {secret})::FLOAT[{dim}] AS emb
                 )
                 SELECT template_text, row_count, embedding <=> q.emb AS distance
                 FROM {t}, q
@@ -672,6 +741,7 @@ def matched_templates(
                 LIMIT {limit}
             """).format(
                 model=sql.Literal(EMBEDDING_MODEL),
+                secret=sql.Literal(EMBEDDING_SECRET),
                 dim=sql.Literal(EMBEDDING_DIMENSION),
                 t=sql.Identifier(table),
                 limit=sql.Literal(limit),

@@ -46,7 +46,11 @@ import re
 from psycopg2 import sql
 
 from backend.db import predicates as pred
-from backend.db.config import EMBEDDING_DIMENSION, EMBEDDING_MODEL
+from backend.db.config import (
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    EMBEDDING_SECRET,
+)
 from backend.db.connection import query_runner
 from backend.db.datasets import Capability, Dataset, resolve
 from backend.db import templates
@@ -326,7 +330,7 @@ def search_logs(
         vec_join, vec_clauses, vec_params = _branch_filters(ds, "i", severity, window)
         fused = sql.SQL("""
             WITH query_embedding AS (
-                SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
+                SELECT ai_embed(%s, {model}, {secret})::FLOAT[{dim}] AS emb
             ),
             fused AS (
                 {lexical}
@@ -342,6 +346,7 @@ def search_logs(
             )
         """).format(
             model=sql.Literal(EMBEDDING_MODEL),
+            secret=sql.Literal(EMBEDDING_SECRET),
             dim=sql.Literal(EMBEDDING_DIMENSION),
             lexical=lexical,
             idx_id=_qualified("i", record_id),
@@ -371,7 +376,7 @@ def search_logs(
         )
         fused = sql.SQL("""
             WITH query_embedding AS (
-                SELECT ai_embed(%s, {model}, 'local_ai')::FLOAT[{dim}] AS emb
+                SELECT ai_embed(%s, {model}, {secret})::FLOAT[{dim}] AS emb
             ),
             fused AS (
                 {lexical}
@@ -380,6 +385,7 @@ def search_logs(
             )
         """).format(
             model=sql.Literal(EMBEDDING_MODEL),
+            secret=sql.Literal(EMBEDDING_SECRET),
             dim=sql.Literal(EMBEDDING_DIMENSION),
             lexical=lexical,
             template_branch=template_sql,

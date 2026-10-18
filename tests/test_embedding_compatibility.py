@@ -23,7 +23,16 @@ from backend.db import templates
 from backend.db.errors import QueryRefused
 
 
-def _cursor_with(monkeypatch, *, dimension=None, embed_error=None, stored=None):
+def _codes(report) -> set[str]:
+    return {problem["code"] for problem in report["problems"]}
+
+
+def _message(report, code) -> str:
+    return next(p["message"] for p in report["problems"] if p["code"] == code)
+
+
+def _cursor_with(monkeypatch, *, dimension=None, embed_error=None, stored=None,
+                 stored_width=None):
     """Install an ``_embed_cursor`` whose embedding and build record are fixed."""
 
     class Cur:
@@ -33,6 +42,10 @@ def _cursor_with(monkeypatch, *, dimension=None, embed_error=None, stored=None):
                 if embed_error:
                     raise RuntimeError(embed_error)
                 self._row = {"emb": [0.0] * dimension}
+            elif "embedding IS NOT NULL" in text:
+                self._row = (
+                    {"embedding": [0.0] * stored_width} if stored_width else None
+                )
             elif "information_schema" in text:
                 self._row = {"n": 1}
             elif "FROM" in text and "model" in text:
@@ -60,8 +73,12 @@ def test_a_missing_secret_is_reported_with_the_fix(monkeypatch):
     _cursor_with(monkeypatch, embed_error="ai_embed: secret 'local_ai' not found")
     report = templates.embedding_compatibility("bgl")
     assert report["ok"] is False and report["can_embed"] is False
-    assert any("cannot embed" in p for p in report["problems"])
-    assert any("secret" in p and "container" in p for p in report["problems"])
+    assert _codes(report) == {"cannot_embed", "missing_secret"}
+    # The hint names the secret the calls actually use, whatever it is called.
+    from backend.db.config import EMBEDDING_SECRET
+
+    assert f"'{EMBEDDING_SECRET}'" in _message(report, "missing_secret")
+    assert "container" in _message(report, "missing_secret")
 
 
 def test_a_width_mismatch_is_detected_and_names_the_value_to_set(monkeypatch):
@@ -73,7 +90,7 @@ def test_a_width_mismatch_is_detected_and_names_the_value_to_set(monkeypatch):
     assert report["can_embed"] is True
     assert report["actual_dimension"] == 3072
     assert report["ok"] is False
-    assert any("EMBEDDING_DIMENSION=3072" in p for p in report["problems"])
+    assert "EMBEDDING_DIMENSION=3072" in _message(report, "declared_dimension")
 
 
 def test_vectors_from_another_model_are_reported_as_meaningless(monkeypatch):
@@ -84,13 +101,14 @@ def test_vectors_from_another_model_are_reported_as_meaningless(monkeypatch):
                          "built_at": "2026-01-01 00:00:00+00"})
     report = templates.embedding_compatibility("bgl")
     assert report["ok"] is False
-    assert any("meaningless" in p and "rebuild" in p for p in report["problems"])
+    assert "stale_model" in _codes(report)
+    assert "meaningless" in _message(report, "stale_model")
 
 
 def test_a_matching_model_and_width_is_compatible(monkeypatch):
     monkeypatch.setattr(templates, "EMBEDDING_MODEL", "gemini-embedding-2")
     monkeypatch.setattr(templates, "EMBEDDING_DIMENSION", 768)
-    _cursor_with(monkeypatch, dimension=768,
+    _cursor_with(monkeypatch, dimension=768, stored_width=768,
                  stored={"model": "gemini-embedding-2", "dimension": 768,
                          "built_at": "2026-01-01 00:00:00+00"})
     report = templates.embedding_compatibility("bgl")
@@ -105,7 +123,9 @@ def test_a_build_is_refused_before_it_embeds_anything(monkeypatch):
         templates, "embedding_compatibility",
         lambda ds: {"model": "gemini-embedding-2", "declared_dimension": 768,
                     "actual_dimension": None, "stored": None, "can_embed": False,
-                    "ok": False, "problems": ["the database cannot embed"]},
+                    "ok": False,
+                    "problems": [{"code": "cannot_embed",
+                                  "message": "the database cannot embed"}]},
     )
     monkeypatch.setattr(
         templates, "_embed_cursor",
@@ -125,7 +145,8 @@ def test_a_rebuild_may_replace_vectors_from_another_model(monkeypatch):
         lambda ds: {"model": "gemini-embedding-2", "declared_dimension": 768,
                     "actual_dimension": 768, "can_embed": True,
                     "stored": {"model": "nomic-embed-text:v1.5"}, "ok": False,
-                    "problems": ["the stored vectors were built with 'nomic-embed-text:v1.5' ..."]},
+                    "problems": [{"code": "stale_model",
+                                  "message": "built with another model"}]},
     )
 
     @contextlib.contextmanager
@@ -148,7 +169,8 @@ def test_filling_in_vectors_with_a_different_model_is_refused(monkeypatch):
         lambda ds: {"model": "gemini-embedding-2", "declared_dimension": 768,
                     "actual_dimension": 768, "can_embed": True,
                     "stored": {"model": "nomic-embed-text:v1.5"}, "ok": False,
-                    "problems": ["the stored vectors were built with 'nomic-embed-text:v1.5' ..."]},
+                    "problems": [{"code": "stale_model",
+                                  "message": "built with another model"}]},
     )
     with pytest.raises(QueryRefused) as caught:
         templates.build_templates("bgl")
@@ -227,3 +249,96 @@ def test_the_model_is_recorded_so_a_change_is_detectable(monkeypatch):
     assert written and written[0][0] == "bgl"
     assert written[0][1] == templates.EMBEDDING_MODEL
     assert written[0][2] == templates.EMBEDDING_DIMENSION
+
+
+# --- The stored width is measured, not assumed -----------------------------
+def test_vectors_of_another_width_are_caught_even_with_no_model_recorded(monkeypatch):
+    """The live state after the model change: 20,352 vectors, no recorded
+    model, and 768 floats each against a 3072-dimension model. The column is
+    declared FLOAT[n] but SereneDB reports its type only as ARRAY, so the width
+    has to come from a row."""
+    monkeypatch.setattr(templates, "EMBEDDING_DIMENSION", 3072)
+    _cursor_with(monkeypatch, dimension=3072, stored=None, stored_width=768)
+    report = templates.embedding_compatibility("bgl")
+    assert report["can_embed"] is True
+    assert report["actual_dimension"] == 3072
+    assert report["stored_dimension"] == 768
+    assert report["ok"] is False
+    assert "stale_dimension" in _codes(report)
+    assert "rebuild" in _message(report, "stale_dimension")
+
+
+def test_a_table_with_no_vectors_yet_has_no_width_problem(monkeypatch):
+    monkeypatch.setattr(templates, "EMBEDDING_DIMENSION", 3072)
+    _cursor_with(monkeypatch, dimension=3072, stored=None, stored_width=None)
+    report = templates.embedding_compatibility("bgl")
+    assert report["stored_dimension"] is None
+    assert report["ok"] is True
+
+
+def test_a_rebuild_may_replace_vectors_of_another_width(monkeypatch):
+    """Both staleness problems are cleared by dropping the table, so neither
+    may block the rebuild that fixes them."""
+    assert templates.STALE_CODES == {"stale_model", "stale_dimension"}
+    monkeypatch.setattr(
+        templates, "embedding_compatibility",
+        lambda ds: {"model": "gemini-embedding-2", "declared_dimension": 3072,
+                    "actual_dimension": 3072, "can_embed": True, "stored": None,
+                    "stored_dimension": 768, "ok": False,
+                    "problems": [{"code": "stale_dimension",
+                                  "message": "768-wide vectors"}]},
+    )
+    reached: list[str] = []
+
+    @contextlib.contextmanager
+    def cursor():
+        reached.append("yes")
+        raise RuntimeError("stop after the gate")
+        yield
+
+    monkeypatch.setattr(templates, "_embed_cursor", cursor)
+    with pytest.raises(RuntimeError, match="stop after the gate"):
+        templates.build_templates("bgl", rebuild=True)
+    assert reached == ["yes"]
+
+    # ... and the same problem refuses a fill-in build, which would leave one
+    # table holding vectors of two widths.
+    with pytest.raises(QueryRefused):
+        templates.build_templates("bgl")
+
+
+def test_search_falls_back_when_the_stored_width_differs(monkeypatch):
+    """A 3072-wide query vector cannot be compared with 768-wide stored ones,
+    and this is caught even though no model was recorded."""
+    templates.clear_vector_cache()
+    monkeypatch.setattr(
+        templates, "templates_status",
+        lambda ds: {"exists": True, "embedded": 20352, "model": None,
+                    "model_matches_config": None, "stored_dimension": 768,
+                    "dimension_matches_config": False,
+                    "configured_dimension": 3072},
+    )
+    assert templates.has_template_vectors("bgl") is False
+    templates.clear_vector_cache()
+
+
+# --- The secret is named by configuration, not hard-coded ------------------
+def test_every_embed_call_names_the_configured_secret():
+    """The calls hard-coded 'local_ai'; the secret is now 'gemini', and the
+    name belongs in configuration either way."""
+    import re
+    from pathlib import Path
+
+    from backend.db.config import EMBEDDING_SECRET
+
+    assert EMBEDDING_SECRET
+    for name in ("templates.py", "query.py"):
+        source = Path("src/backend/db") / name
+        text = source.read_text(encoding="utf-8")
+        assert "'local_ai'" not in text, name
+        # Real call sites only: they interpolate the model, unlike the prose
+        # mentions of ``ai_embed(...)`` in comments.
+        calls = re.findall(r"ai_embed\([^)]*\{model\}[^)]*\)", text)
+        assert calls, f"{name}: no ai_embed call found"
+        for call in calls:
+            assert "{secret}" in call, f"{name}: {call}"
