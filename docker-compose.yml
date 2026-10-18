@@ -1,0 +1,37 @@
+# SereneDB for the log-investigation chatbot.
+#
+#   docker compose up -d        # start (host port from SERENEDB_PORT, default 7890)
+#   docker compose logs -f db   # follow the server log
+#   docker compose down         # stop, keeping the data volume
+#   docker compose down -v      # stop and delete the data (corpora and secrets)
+#
+# `bash ./bootstrap.sh --db docker` uses this file when `docker compose` is
+# available, then loads the corpora and creates the embedding secret.
+#
+# Two things here are deliberate:
+#
+# * The host port is **pinned** to SERENEDB_PORT. A container started with
+#   `docker run` and no explicit mapping took a new host port every time it was
+#   recreated (observed moving 7891 -> 7892 -> 7893 in one session), which left
+#   SERENEDB_PORT in .env stale and every query failing with "connection
+#   refused". A fixed mapping is what makes the port stable.
+# * The data lives in a **named volume**, so the loaded corpora (BGL alone is
+#   4.7M rows and takes a long time to load) and the PERSISTENT embedding secret
+#   survive a stop, a restart and a recreate.
+
+services:
+  db:
+    image: serenedb/serenedb
+    container_name: serenedb
+    restart: unless-stopped
+    ports:
+      - "${SERENEDB_PORT:-7890}:7890"
+    volumes:
+      - serenedb-data:/var/lib/serenedb
+    # No healthcheck: the port answers before the server answers a query, and
+    # the probe that matters is a real statement. `bash ./bootstrap.sh` does it
+    # from the host in step 5 (`backend.db.provision --wait`), which also uses
+    # the project's own connection settings.
+
+volumes:
+  serenedb-data:

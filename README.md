@@ -396,10 +396,17 @@ what was searched" rather than "not present".
 
 ## Prerequisites
 
-- Python 3.14+
-- [uv](https://docs.astral.sh/uv/)
-- A SereneDB instance on `localhost:7890` (default credentials
-  `postgres`/`postgres`, database `postgres`)
+`bash ./bootstrap.sh` installs and checks all of this; the list is what it
+needs, and what it will offer to install.
+
+- A Linux host with `curl` and `python3` (the SereneDB installer is Linux-only;
+  elsewhere use `bash ./bootstrap.sh --db docker`)
+- Python 3.14+ and [uv](https://docs.astral.sh/uv/) -- bootstrap installs uv if
+  it is missing, and uv provides the Python
+- A SereneDB instance: bootstrap starts one as a native binary (`serened`, no
+  root) or in Docker, or uses the one `SERENEDB_*` already points at. It speaks
+  the PostgreSQL wire protocol on port 7890 and needs no credentials by
+  default
 - An embedding provider the **database** can reach -- only for the optional
   template embeddings; `bash ./setup.sh` loads with `--no-embed` and needs no
   embedding model. `ai_embed` runs inside SereneDB and resolves its endpoint
@@ -410,12 +417,16 @@ what was searched" rather than "not present".
 - The raw loghub logs in `src/backend/data/` (gitignored): the three OpenStack
   nova runs `openstack_normal1.log`, `openstack_normal2.log`,
   `openstack_abnormal.log`, and `BGL.log` (743 MB; `BGL_LOG_PATH` may point
-  elsewhere). See Setup.
+  elsewhere). These are **optional**: bootstrap falls back to the bundled
+  2,000-row loghub samples for whichever corpus is missing, and says so. See
+  Setup.
 - Nothing extra for the remote OTel corpus: it is read from public S3 in place.
 
 ## Environment
 
-Create `.env` in the repo root with the API keys for the providers in use:
+`.env.example` is the annotated template; `bash ./bootstrap.sh` copies it to
+`.env` and names any key still unset. Create it by hand with `cp .env.example
+.env`, and fill in the keys for the providers in use:
 
 ```
 GROQ_API_KEY=...
@@ -609,11 +620,69 @@ uv run python -m backend.appdb.manage <username> <password>
 ## Setup
 
 ```bash
-uv sync           # install dependencies and the project itself
-bash ./setup.sh   # ownership + both local corpora (openstack, then bgl)
+bash ./bootstrap.sh          # everything: uv, deps, server, secret, corpora
 ```
 
-`setup.sh` loads the ownership table first, then the named corpora through the
+That is the whole setup on a Linux host. It runs eight steps, each of which it
+skips when already done, so **re-running it is the way to recover an instance**
+after a reboot or a recreated container:
+
+| Step | What it does | Skipped when |
+| --- | --- | --- |
+| 1 | installs [uv](https://docs.astral.sh/uv/) | `uv` is on PATH |
+| 2 | `uv sync` | never (it is already incremental) |
+| 3 | creates `.env` from `.env.example` and reports unset keys | `.env` exists |
+| 4 | starts SereneDB | a server already answers |
+| 5 | waits for it to answer a *query*, and writes `SERENEDB_PORT` | – |
+| 6 | holds the memory ceiling, creates the embedding secret | – |
+| 7 | loads the ownership table and the corpora | that corpus is already loaded |
+| 8 | prints the resulting state, including what the model returns | – |
+
+```bash
+bash ./bootstrap.sh --db docker          # SereneDB in Docker (docker-compose.yml)
+bash ./bootstrap.sh --db existing        # use the server SERENEDB_* points at
+bash ./bootstrap.sh --samples            # loghub's 2,000-row samples, not the full corpora
+bash ./bootstrap.sh --datasets openstack # only this corpus
+bash ./bootstrap.sh --skip-data          # set the server up, load nothing
+bash ./bootstrap.sh --embed              # also build template embeddings (spends provider quota)
+bash ./bootstrap.sh --force-reload       # rebuild corpora that are already loaded
+bash ./bootstrap.sh --yes                # never prompt (for CI or a non-interactive shell)
+```
+
+Two steps download and execute a vendor installer -- uv from `astral.sh` and
+SereneDB from `linux.serenedb.com`. Both print the exact command and ask first
+unless `--yes` is given; `--db existing` with uv already installed avoids them
+entirely.
+
+**Step 4 in each mode.** `--db native` installs `serened` (no root; it listens
+on `127.0.0.1:7890` and keeps its data, including persistent secrets, in
+`.data/serenedb`), writes its pid to `.data/serened.pid` and logs to
+`.data/serened.log`. `--db docker` uses `docker-compose.yml`, which **pins the
+host port** to `SERENEDB_PORT` and keeps a named volume, so the port stops
+drifting when the container is recreated and the loaded corpora survive; it
+falls back to `docker run` when `docker compose` is absent, and if the daemon
+refuses the connection it says how to fix it and points at `--db native`.
+
+**What step 6 does, and why it is not optional.** `ai_embed` runs inside
+SereneDB and resolves its endpoint and key from a server-side secret, so no
+host-side setting can replace it. The secret is created `PERSISTENT`, which is
+what makes it survive a restart -- verified by stopping a server and cold-starting
+it on the same data directory, after which `ai_embed` answered with no
+re-creation. The step also lowers the server's global `memory_limit` to the
+budgeted 512 MiB; a freshly started instance reports **5.7 GiB**, the
+configuration that OOM-killed index builds.
+
+The database-side steps are `backend.db.provision`, which is usable on its own:
+
+```bash
+uv run python -m backend.db.provision --wait --memory --secret --report
+uv run python -m backend.db.provision --report --probe-embedding   # one provider call
+uv run python -m backend.db.provision --json                       # the same state as JSON
+```
+
+### Loading corpora on their own
+
+`setup.sh` is step 7 by itself. It loads the ownership table first, then the named corpora through the
 loghub loader (`backend.db.loghub`), each with `--no-embed` unless `--embed` is
 given. With no datasets named it loads these, in this order:
 
@@ -673,8 +742,12 @@ cannot mix widths or models. Both are also enforced for search:
 falls back to lexical BM25 instead of ranking on noise.
 
 The database reaches its provider through a **server-side secret**, named by
-`EMBEDDING_SECRET` (default `gemini`). For Gemini through its OpenAI-compatible
-endpoint:
+`EMBEDDING_SECRET` (default `gemini`). `bash ./bootstrap.sh` creates it from
+`GOOGLE_API_KEY` as a *persistent* secret (and
+`uv run python -m backend.db.provision --secret` does just that step), which is
+the supported path because it also drops a temporary secret of the same name --
+two of them make every call fail as ambiguous. By hand, for Gemini through its
+OpenAI-compatible endpoint:
 
 ```sql
 CREATE SECRET gemini (
@@ -686,6 +759,12 @@ CREATE SECRET gemini (
 -- optional: make it the default for ai_embed / ai_similarity
 SET sdb_ai_embedding_default_secret = 'gemini';
 ```
+
+`CREATE SECRET` makes a **temporary** secret that dies with the instance; write
+`CREATE PERSISTENT SECRET` (what provisioning does) to have it reloaded at
+startup. Every `ai_embed` call in this project names its secret explicitly, so
+`sdb_ai_embedding_default_secret` is a convenience for interactive sessions
+rather than something the code depends on -- and it is session-scoped anyway.
 
 Native widths differ by model -- `nomic-embed-text:v1.5` is 768,
 `gemini-embedding-2` is **3072** (measured through that endpoint) unless the
@@ -801,6 +880,7 @@ confidence tests below are skipped unless enabled.
 | `test_rank_priorities.py` | the server-only `rank_priorities_tool`: arguments (non-overlapping windows, local-only team), per-dataset scoring with synthetic rows, and the envelope through the in-memory client |
 | `test_search_window.py` | time-filtered search: window validation, severity and window inside the ranked branch, the `total_matches` count, the in-place index and semantic branches, the tool on both transports |
 | `test_templates.py` / `test_template_build.py` | template extraction, and that the embedding loop provably terminates |
+| `test_provision.py` | the setup steps against the database: the secret is persistent and unshadowed, the key never reaches a log, readiness runs a query, and a loaded corpus is not rebuilt |
 | `test_embedding_compatibility.py` | the embedding model check: missing secret, width mismatch, vectors from another model, the build refusal and the lexical fallback |
 | `test_openstack.py` / `test_openstack_live.py` | OpenStack registration, the nova-log parser and multi-file loader; gated live checks against the loaded 207,820-row corpus |
 | `test_bgl.py` / `test_bgl_live.py` | BGL registration and parser; gated live checks against the full 4.7M-row corpus |
@@ -808,7 +888,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `3 failed, 1234 passed, 107 skipped` with SereneDB
+> The offline suite reports `3 failed, 1251 passed, 107 skipped` with SereneDB
 > reachable. All three failures are known and pre-existing, in
 > `tests/test_rendering.py` (inline-marker rendering edge cases). Two further
 > tests, `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
@@ -1004,6 +1084,9 @@ worked_investigation.sh  one topic as all three roles -> docs/worked_investigati
 confidence.sh gated live confidence-policy tests (RUN_LIVE_CONFIDENCE=1) + HTML report
 claims.sh     gated live claim-check tests (RUN_LIVE_CLAIMS=1) + HTML report
 setup.sh      seed SereneDB via loghub (--no-embed by default; optional datasets, --embed)
+bootstrap.sh  the whole setup: uv, deps, .env, SereneDB, the embedding secret, corpora
+docker-compose.yml  SereneDB with a pinned host port and a named volume (--db docker)
+.env.example  annotated environment template, copied to .env by bootstrap.sh
 src/
 ├── stream_events/       one event reducer shared by backend/jobs.py (saved progress) and the UI (live)
 ├── backend/
@@ -1022,6 +1105,7 @@ src/
 │   │   ├── promotion.py    index a chunk, digest it, drop it (teardown always)
 │   │   ├── external.py     the in-place inverted index over remote Parquet
 │   │   ├── templates.py    template extraction and template-level embeddings
+│   │   ├── provision.py    server-side setup: wait, secret, memory ceiling, state report
 │   │   └── loghub.py       loghub loaders: BGL and OpenStack parsers, raw-line and structured-CSV
 │   └── pipeline/
 │       ├── graph.py      LangGraph nodes, wiring, and checkpointer selection
@@ -1175,16 +1259,26 @@ measurement or the exact error behind it. Where a workaround exists it is named.
 
 - **A full template build exceeds the embedding provider's quota.** Embedding
   costs **44-53 ms per template** in the batched `UPDATE` the build issues
-  (20-23 templates/s; a single `ai_embed` call is ~0.40s, so SereneDB runs 8-10
-  of them concurrently inside one statement), which puts BGL's 20,352 templates
-  at 15-18 minutes. In practice a 200-row batch failed with `HTTP 429: You
-  exceeded your current quota` after roughly 330 calls in a few minutes. The
-  batch rolls back whole -- 0 of 600 rows written, so nothing is half-embedded
-  -- and the window recovers on its own (the first call after the limit took
-  7.96s, then 1.97s, then 0.40s and 0.32s). A complete build therefore needs a
-  raised quota, or `SET sdb_ai_throw_on_error = false` and repeated
-  `build_templates(dataset)` passes: the build fills only NULL embeddings, so
-  each pass resumes where the last one stopped.
+  (20-23 templates/s), which puts BGL's 20,352 templates at 15-18 minutes, and
+  the work is **not** one request per template: `ai_embed` sends up to
+  `sdb_ai_embedding_max_batch_size` (default 100) texts per provider request,
+  so that build is roughly 200 requests. It still ran out of quota -- a 200-row
+  batch failed with `HTTP 429: You exceeded your current quota` -- which says
+  the limit is on the texts embedded, not the requests sent. The batch rolls
+  back whole (0 of 600 rows written, so nothing is half-embedded) and the window
+  recovers on its own: the first call after the limit took 7.96s, then 1.97s,
+  then 0.40s and 0.32s.
+- **`sdb_ai_throw_on_error = false` does not rescue a quota failure.** The
+  setting returns NULL for a row whose request fails, but SereneDB documents
+  authentication, not-found, validation and **exhausted-quota 429** errors as
+  always failing the query, so the build still dies. What does work is capping
+  the spend per statement: with `sdb_ai_max_api_calls_per_query = 2`,
+  `sdb_ai_throw_on_quota_exceeded = false` and one text per request, exactly 2
+  of 5 rows came back embedded and the other 3 stayed NULL, with no error. Since
+  a build fills only NULL embeddings, repeated `build_templates(dataset)` passes
+  then resume where the last one stopped. (At the default batch size of 100 the
+  same cap embedded all 5 rows, because they rode in a single request -- the cap
+  counts requests, not texts.)
 - **BGL's stored vectors are the wrong width for the configured model.** Its
   20,352 vectors are 768-wide (built by `nomic-embed-text:v1.5`) while
   `gemini-embedding-2` returns 3072, so `has_template_vectors()` is `False` and
@@ -1195,11 +1289,19 @@ measurement or the exact error behind it. Where a workaround exists it is named.
   `SERENEDB_MAX_TEMPLATES` cap, so the build is refused. One template per four
   rows also means templating is barely collapsing OpenStack's messages, which is
   most of what makes template-level embedding affordable in the first place.
-- **The embedding secret does not survive the container.** `ai_embed` resolves
-  its endpoint and key from the server-side secret (`EMBEDDING_SECRET`, default
-  `gemini`); a recreated container has none and every call fails with
-  `secret '<name>' not found`. `MODEL_BASE_URL` is read by no query path and
-  cannot substitute for it.
+- **A temporary embedding secret dies with the server, and two of them break
+  it.** `ai_embed` resolves its endpoint and key from a server-side secret
+  (`EMBEDDING_SECRET`, default `gemini`), and `CREATE SECRET` makes a
+  *temporary* one that lives only for that instance -- which is why a recreated
+  container failed every call with `secret '<name>' not found`.
+  `bash ./bootstrap.sh` creates it `PERSISTENT` instead, measured to survive a
+  cold start of the same data directory. The trap is that temporary and
+  persistent secrets live in **separate storage backends** (`memory` and
+  `local_file` in `sdb_secrets()`), so adding the persistent one while a
+  temporary one of the same name exists leaves both, and every call then fails
+  with *"Ambiguity detected for secret name"*; provisioning drops the shadowing
+  one first. `MODEL_BASE_URL` is read by no query path and cannot substitute for
+  any of this.
 
 ### The in-place OTel index
 
@@ -1227,18 +1329,24 @@ measurement or the exact error behind it. Where a workaround exists it is named.
 
 ### SereneDB operational constraints
 
-- **`memory_limit` is global and reverts on restart.** A restarted instance came
-  back at **5.7 GiB** against a 512 MiB budget -- the configuration `budget.py`
-  records as the cause of three earlier OOM kills. Two index builds then died
+- **`memory_limit` is global and reverts on restart.** A freshly started server
+  reports **5.7 GiB** against a 512 MiB budget -- measured directly on a new
+  `serened` instance, and the configuration `budget.py` records as the cause of
+  three earlier OOM kills. Restarting one that had been lowered put it straight
+  back to 5.7 GiB, so the ceiling has to be re-applied every time (step 6 of
+  `bootstrap.sh`, and every index build does it itself). Two index builds then died
   mid-`CREATE INDEX` ("server closed the connection unexpectedly"), each time
   taking the instance down and changing its host port; holding the ceiling at
   the budget let the same build finish twice (446.7s, 444.6s), which is strong
   circumstantial evidence rather than a kernel log. Index builds now hold it
   themselves (`external.hold_memory_ceiling`), but **the corpus loaders and
   chunk promotion do not**, so those remain exposed.
-- **The container's host port is unstable.** It moved 7891 -> 7892 -> 7893 in a
-  single session, so `SERENEDB_PORT` in `.env` goes stale after any crash or
-  restart (`docker ps` shows the current mapping).
+- **A Docker container's host port drifts unless it is pinned.** It moved
+  7891 -> 7892 -> 7893 in a single session, leaving `SERENEDB_PORT` stale and
+  every query refused. `docker-compose.yml` now pins the mapping and
+  `bash ./bootstrap.sh` writes the port it used into `.env`, so this bites only
+  a container started by hand (`docker ps` shows the current mapping). The
+  native `serened` server has no mapping and always listens on 7890.
 - **Remote Parquet reads fail transiently.** The same read failed 5/5 with
   `Could not resolve hostname` and then succeeded 5/5 minutes later with no
   change, while inline `read_parquet` worked throughout. Retry before
@@ -1289,7 +1397,7 @@ measurement or the exact error behind it. Where a workaround exists it is named.
   persisted chat history survives).
 - **Three test failures are pre-existing**, all inline-marker rendering edge
   cases in `tests/test_rendering.py`; the offline suite is otherwise green
-  (1,234 passed, 107 skipped, identical under `TOOLS_TRANSPORT=mcp`).
+  (1,251 passed, 107 skipped, identical under `TOOLS_TRANSPORT=mcp`).
 - **The live corpus tests assume the full corpora.** With only loghub's 2,000-row
   samples loaded, 13 of `tests/test_openstack_live.py` fail on row-count
   assertions; they pass against the 207,820-row corpus.
