@@ -719,7 +719,15 @@ bash ./setup.sh openstack            # one corpus
 bash ./setup.sh openstack_2k         # src/backend/data/OpenStack_2k.log_structured.csv
 bash ./setup.sh bgl_2k               # src/backend/data/BGL_2k.log_structured.csv
 bash ./setup.sh --embed openstack    # also build template embeddings
+bash ./setup.sh --external-index      # ensure the first 5 seconds is searchable
 ```
+
+`--external-index` is exclusive: it skips ownership and local corpus loading,
+then invokes `backend.db.external.ensure_searchable` over the first 5 seconds
+of the OTel Parquet data, starting at the first footer timestamp. If the
+window is not already covered, `ensure_searchable` builds it in place; if it is
+covered, it does no build. The operation stores no log rows locally and can
+take several minutes when a build is needed.
 
 `--embed` builds template-level embeddings, which needs the embedding service
 from Prerequisites.
@@ -1180,7 +1188,7 @@ All command-line options are:
 | `--help` | – | Show the CLI help and exit. |
 | `--runs N` | `5` | Run `EXPLAIN ANALYZE` N times per database function. |
 | `--start TIMESTAMP` | First OTel footer timestamp | Start of the profiling window; use a UTC timestamp. |
-| `--window-seconds N` | `10` | Window length; the remote OTel limit is 300 seconds. |
+| `--window-seconds N` | `5` | Window length; the remote OTel limit is 300 seconds. |
 | `--search TEXT` | `error` | Search text for the existing `otel_slice` search cases. |
 | `--only LABELS` | All cases | Comma-separated database-function labels to profile. |
 | `--output PATH` | `docs/otel_profile.md` | Markdown report destination; parent directories are created. |

@@ -24,8 +24,11 @@
 #   bash ./setup.sh                           # ownership + both local corpora
 #   bash ./setup.sh <dataset> [<dataset>...]  # ownership + only those corpora
 #   bash ./setup.sh --embed [<dataset>...]    # also build template embeddings
+#   bash ./setup.sh --external-index            # ensure first 5s is searchable
 #
-# Datasets are the loader's ids: openstack, bgl, openstack_2k, bgl_2k.
+# ``--external-index`` is exclusive: it invokes backend.db.external and does
+# not load local corpora. Datasets are the loader's ids: openstack, bgl,
+# openstack_2k, bgl_2k.
 
 set -e
 
@@ -37,14 +40,25 @@ fi
 
 embed=--no-embed
 datasets=()
+external_index=0
 for arg in "$@"; do
     case "$arg" in
         --embed) embed="" ;;
         --no-embed) embed=--no-embed ;;
+        --external-index) external_index=1 ;;
         -*) echo "setup.sh: unknown option: $arg" >&2; exit 2 ;;
         *) datasets+=("$arg") ;;
     esac
 done
+
+if [ "$external_index" -eq 1 ]; then
+    if [ "${#datasets[@]}" -ne 0 ]; then
+        echo "setup.sh: --external-index cannot be combined with dataset names" >&2
+        exit 2
+    fi
+    "${run[@]}" -m backend.db.external
+    exit 0
+fi
 
 if [ "${#datasets[@]}" -eq 0 ]; then
     datasets=(openstack bgl)

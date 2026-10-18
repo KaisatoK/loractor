@@ -45,7 +45,7 @@ from backend.db.config import SERENEDB_BULK_TIMEOUT_MS
 
 TOTAL_TIME_RE = re.compile(r"\bTotal\s+Time\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*s\b", re.I)
 DEFAULT_RUNS = 5
-DEFAULT_WINDOW_SECONDS = 10
+DEFAULT_WINDOW_SECONDS = 5
 DEFAULT_SEARCH = "error"
 
 
@@ -400,7 +400,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS, help="EXPLAIN ANALYZE repetitions per query (default: 5)")
     parser.add_argument("--start", help="UTC window start; defaults to the first OTel footer timestamp")
-    parser.add_argument("--window-seconds", type=int, default=DEFAULT_WINDOW_SECONDS, help="bounded OTel profiling window (default: 10)")
+    parser.add_argument("--window-seconds", type=int, default=DEFAULT_WINDOW_SECONDS, help="bounded OTel profiling window (default: 5)")
     parser.add_argument("--search", default=DEFAULT_SEARCH, help="text used for the existing otel_slice search cases")
     parser.add_argument("--only", help="comma-separated case labels to run")
     parser.add_argument(

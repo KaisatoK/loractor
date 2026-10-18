@@ -37,9 +37,12 @@ Two details worth knowing, both from the documentation and confirmed here:
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
+import json
 import logging
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -50,6 +53,7 @@ from backend.db.budget import BUDGET, PROBLEM_SEVERITIES, fits
 from backend.db.datasets import Dataset, resolve
 from backend.db.errors import refuse
 from backend.db.corpus import arrival_rate, ensure_dictionaries, row_groups_touched
+from backend.db.pruning import load_row_groups
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +88,7 @@ MEASURED_FLAT_ROW_GROUPS = 15
 # Longest an index build may be planned to take. Same reasoning as the slice:
 # a build is not resumable and holds its working set throughout.
 MAX_BUILD_SECONDS = 1_800
+DEFAULT_INDEX_WINDOW_SECONDS = 5
 
 VIEW_NAME = "otel_ext"
 INDEX_NAME = "otel_ext_idx"
@@ -717,3 +722,58 @@ def ensure_searchable(start: str | None, end: str | None, *, progress=None) -> d
             )
         return {"built": False, **coverage}
     return ensure_external_index(start, end, progress=progress)
+
+
+def default_index_window(
+    seconds: int = DEFAULT_INDEX_WINDOW_SECONDS,
+) -> tuple[str, str]:
+    """Return the first OTel footer timestamp plus ``seconds``."""
+    if seconds < 1:
+        raise ValueError("seconds must be at least 1")
+    source = resolve("otel_s3")
+    groups = load_row_groups(source.sources[0], source.field("ts").column)
+    if not groups:
+        raise RuntimeError("no OTel Parquet footer row groups found")
+
+    start = groups[0].ts_min
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=dt.timezone.utc)
+    start = start.astimezone(dt.timezone.utc)
+    end = start + dt.timedelta(seconds=seconds)
+    return (
+        start.isoformat(sep=" ", timespec="microseconds"),
+        end.isoformat(sep=" ", timespec="microseconds"),
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Ensure the in-place OTel index is searchable for the window."""
+    parser = argparse.ArgumentParser(
+        prog="python -m backend.db.external",
+        description=(
+            "Ensure the in-place OTel index is searchable over the first 5 "
+            "seconds by default."
+        ),
+    )
+    parser.add_argument(
+        "bounds",
+        nargs="*",
+        metavar="START END",
+        help="optional half-open UTC window; provide both START and END",
+    )
+    args = parser.parse_args(argv)
+    if len(args.bounds) not in (0, 2):
+        parser.error("provide both START and END, or provide neither")
+
+    if args.bounds:
+        start, end = args.bounds
+    else:
+        start, end = default_index_window()
+        print(f"Using default 5-second window: {start} .. {end}", file=sys.stderr)
+
+    report = ensure_searchable(start, end)
+    print(json.dumps(report, default=str, indent=2))
+
+
+if __name__ == "__main__":
+    main()
