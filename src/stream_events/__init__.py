@@ -43,7 +43,8 @@ def progress_line(op: dict[str, Any]) -> str | None:
     if status in ("started", None):
         return None
     if status == "completed":
-        return f"✓ {action}"
+        details = _completed_details(op)
+        return f"✓ {action} — {details}" if details else f"✓ {action}"
     if status == "working":
         # A long-running tool reporting from inside itself (the sweep iterates
         # over up to 1,624 chunks in one call); the message says which pass it is
@@ -57,7 +58,35 @@ def progress_line(op: dict[str, Any]) -> str | None:
         # A refusal, not a failure: the query was never run because it was
         # unbounded or unsupported as asked, and it came back with a suggestion.
         return f"↷ {op.get('message') or action}"
+    error = op.get("error")
+    if isinstance(error, str) and error.strip():
+        return f"{action} — failed: {error.strip()}"
     return f"{action} — failed"
+
+
+def _count(value: Any) -> int | None:
+    # bool is an int subclass; a flag is not a row count.
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _completed_details(op: dict[str, Any]) -> str:
+    """``10 of 1,234 rows · <cost>`` for a completed call; empty when unknown.
+
+    Every part is optional: an older payload (or a tool that reports neither)
+    renders as the bare ``✓ <operation>`` it always did.
+    """
+    parts: list[str] = []
+    returned, total = _count(op.get("returned")), _count(op.get("total_matches"))
+    if returned is not None:
+        noun = "row" if returned == 1 else "rows"
+        if total is not None and total > returned:
+            parts.append(f"{returned:,} of {total:,} {noun}")
+        else:
+            parts.append(f"{returned:,} {noun}")
+    cost = op.get("cost")
+    if isinstance(cost, str) and cost.strip():
+        parts.append(cost.strip())
+    return " · ".join(parts)
 
 
 def apply_event(state: dict[str, Any], event: dict[str, Any], *, persist: bool) -> None:

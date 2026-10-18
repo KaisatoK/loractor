@@ -75,6 +75,30 @@ def test_progress_line_per_status(status, expected):
     assert progress_line(op) == expected
 
 
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"returned": 10, "total_matches": 1234, "cost": "12 ms"},
+         "✓ search — 10 of 1,234 rows · 12 ms"),
+        ({"returned": 1, "total_matches": 1}, "✓ search — 1 row"),
+        ({"returned": 0, "total_matches": None}, "✓ search — 0 rows"),
+        ({"cost": "~6,327,325 rows scanned, 2110 ms"},
+         "✓ search — ~6,327,325 rows scanned, 2110 ms"),
+        # Unknown or malformed details fall back to the bare line.
+        ({"returned": None, "total_matches": None}, "✓ search"),
+        ({"returned": True, "cost": "  "}, "✓ search"),
+    ],
+)
+def test_completed_line_shows_rows_and_cost(extra, expected):
+    assert progress_line({"operation": "search", "status": "completed", **extra}) == expected
+
+
+def test_failed_line_shows_the_reason():
+    op = {"operation": "get trend", "status": "failed", "error": "statement timeout"}
+    assert progress_line(op) == "get trend — failed: statement timeout"
+    assert progress_line({**op, "error": " "}) == "get trend — failed"
+
+
 def test_refusal_is_never_saved_as_a_failure():
     progress = _persisted([_progress("search", "skipped", "refused: too wide")])["progress"]
     assert progress == ["↷ refused: too wide"]

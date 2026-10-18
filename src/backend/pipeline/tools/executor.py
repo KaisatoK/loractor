@@ -122,6 +122,7 @@ def execute_database_tool(
                 "operation": operation,
                 "status": "failed",
                 "message": f"{operation} failed.",
+                "error": _error_reason(e),
             }
         )
         raise RuntimeError(f"{operation} failed") from e
@@ -143,16 +144,21 @@ def execute_database_tool(
 
     stats = envelope.get("query_stats")
     summary = _stats_summary(stats)
-    writer(
-        {
-            "type": "tool_progress",
-            "operation": operation,
-            "status": "completed",
-            "message": (
-                f"Completed {operation} ({summary})." if summary else f"Completed {operation}."
-            ),
-        }
-    )
+    completed = {
+        "type": "tool_progress",
+        "operation": operation,
+        "status": "completed",
+        "message": (
+            f"Completed {operation} ({summary})." if summary else f"Completed {operation}."
+        ),
+        # Structured details for the progress line (``stream_events``), so the
+        # panel says what came back and what it cost, not just "✓ <operation>".
+        "returned": envelope.get("returned"),
+        "total_matches": envelope.get("total_matches"),
+    }
+    if summary:
+        completed["cost"] = summary
+    writer(completed)
     if reporter.events:
         envelope["progress_trace"] = [
             {
@@ -164,6 +170,23 @@ def execute_database_tool(
         ]
     logger.debug("Tool query for %s: %s", operation, envelope.get("query"))
     return envelope
+
+
+_MAX_ERROR_CHARS = 200
+
+
+def _error_reason(error: Exception) -> str:
+    """A short, one-line reason for the progress panel.
+
+    Only the first line of the message: database errors often go on to quote
+    the statement, which belongs in the log (``logger.exception`` above), not
+    in the UI.
+    """
+    first = (str(error).strip().splitlines() or [""])[0].strip()
+    reason = first or type(error).__name__
+    if len(reason) > _MAX_ERROR_CHARS:
+        reason = reason[: _MAX_ERROR_CHARS - 1].rstrip() + "…"
+    return reason
 
 
 def _stats_summary(stats: dict[str, Any] | None) -> str | None:

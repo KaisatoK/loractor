@@ -8,6 +8,8 @@ legacy envelope. No database or model is touched.
 import json
 from contextlib import contextmanager
 
+import pytest
+
 from backend.db import capture, connection
 from backend.db.capture import capture_queries, record_query
 from backend.pipeline.tools.envelope import (
@@ -130,6 +132,34 @@ def test_executor_returns_envelope_with_captured_query():
     assert env["query"].startswith("SELECT service")
     assert env["truncated"] is False
     assert [e["status"] for e in runtime.events] == ["started", "completed"]
+    completed = runtime.events[-1]
+    assert completed["returned"] == 1
+    assert "total_matches" in completed
+
+
+def test_executor_reports_a_short_failure_reason():
+    runtime = _Runtime()
+
+    def function():
+        raise ValueError("relation does not exist\nLINE 1: SELECT * FROM secret_sql")
+
+    with pytest.raises(RuntimeError):
+        execute_database_tool(runtime=runtime, operation="rank", function=function)
+    failed = runtime.events[-1]
+    assert failed["status"] == "failed"
+    # Only the first line: the statement stays in the log, not the UI.
+    assert failed["error"] == "relation does not exist"
+
+
+def test_executor_failure_reason_is_bounded():
+    runtime = _Runtime()
+
+    def function():
+        raise ValueError("x" * 500)
+
+    with pytest.raises(RuntimeError):
+        execute_database_tool(runtime=runtime, operation="rank", function=function)
+    assert len(runtime.events[-1]["error"]) <= 200
 
 
 def test_remote_envelope_metadata_wins():
