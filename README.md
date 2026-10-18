@@ -808,7 +808,7 @@ confidence tests below are skipped unless enabled.
 | `test_sweep*.py` (4 files) | sweep orchestration, effort gating, observability trace, scoring |
 | `test_otel_live.py` | gated live checks against the remote corpus and its in-place index |
 
-> The offline suite reports `3 failed, 1192 passed, 99 skipped` with SereneDB
+> The offline suite reports `3 failed, 1234 passed, 107 skipped` with SereneDB
 > reachable. All three failures are known and pre-existing, in
 > `tests/test_rendering.py` (inline-marker rendering edge cases). Two further
 > tests, `test_bgl.py::test_an_uppercase_severity_is_refused_for_otel` and
@@ -1082,7 +1082,7 @@ MCP tool: it is a chat-box feature and is always answered in-process.
 
 ### What the server offers
 
-- **Tools.** The fourteen evidence tools, plus `list_skills` and `read_skill`. Thirteen
+- **Tools.** The fifteen evidence tools, plus `list_skills` and `read_skill`. Fourteen
   are the pipeline's own (`rank_priorities_tool` is server-only: an external agent
   has no `answer_node`, so it needs the ranking, which the pipeline adds itself).
   Each is declared once in `src/backend/pipeline/tools/specs.py` and generated for
@@ -1269,9 +1269,10 @@ measurement or the exact error behind it. Where a workaround exists it is named.
 
 - **The hypothesis-test tools the brief asks for are not built.** T8-T12
   (`get_request_trace_tool`, temporal precedence, counterexample, control group,
-  recurrence) and T13 are specified in `docs/tool_requests.md` and awaiting their
-  owner; the answer's hypotheses are therefore model-written judgements over
-  measured evidence, not deterministic tests.
+  recurrence) are specified in `docs/tool_requests.md` and awaiting their owner,
+  so the answer's hypotheses are model-written judgements over measured
+  evidence, not deterministic tests. T13 has since landed as
+  `rank_priorities_tool`.
 - **The team ownership table is invented.** `src/backend/data/team_ownership.csv`
   is a fictional `dataset,component,team` mapping, so every "owning team" in an
   answer is fictional until it is replaced.
@@ -1288,7 +1289,7 @@ measurement or the exact error behind it. Where a workaround exists it is named.
   persisted chat history survives).
 - **Three test failures are pre-existing**, all inline-marker rendering edge
   cases in `tests/test_rendering.py`; the offline suite is otherwise green
-  (1,192 passed, 99 skipped, identical under `TOOLS_TRANSPORT=mcp`).
+  (1,234 passed, 107 skipped, identical under `TOOLS_TRANSPORT=mcp`).
 - **The live corpus tests assume the full corpora.** With only loghub's 2,000-row
   samples loaded, 13 of `tests/test_openstack_live.py` fail on row-count
   assertions; they pass against the 207,820-row corpus.

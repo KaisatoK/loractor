@@ -166,7 +166,7 @@ never re-baseline an expectation just to make the run green.
 
 ## Known failures
 
-Not every entry below is pre-existing — see each bullet's provenance. Offline run (no DB, no model calls): `uv run pytest -q` reports `5 failed, 1160 passed, 107 skipped`; with SereneDB reachable the two database-dependent failures pass (the skips are the gated live cases).
+Not every entry below is pre-existing — see each bullet's provenance. Offline run (no DB, no model calls): `uv run pytest -q` reports `3 failed, 1234 passed, 107 skipped` with SereneDB reachable; with SereneDB reachable the two database-dependent failures pass (the skips are the gated live cases).
 
 - The three failures are all in `tests/test_rendering.py` (`test_marker_swapped_for_table`, `test_unknown_marker_renders_nothing`, `test_trailing_punctuation_moves_before_marker`) — inline-marker/prose splitting in `ui/rendering.py`'s `canonicalize`.
 - The previously known MCP skill-order failure is fixed: `server._skill_files()` now returns `log-investigation` first deterministically.
