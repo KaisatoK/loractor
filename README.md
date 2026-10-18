@@ -5,6 +5,8 @@ pick a role, and ask questions; a FastAPI + LangGraph backend investigates
 against a SereneDB log database and tailors the answer to the role (engineer,
 team lead, manager). Accounts and chat history are persisted server-side.
 
+New here? The human-readable docs ([docs/index.md](docs/index.md)) cover the workflow, roles, architecture and quick start — tool details in [TOOLS.md](TOOLS.md).
+
 ## Architecture
 
 ```
