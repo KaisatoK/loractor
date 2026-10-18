@@ -40,7 +40,7 @@ def sign_in(call) -> None:
 
 
 def login_page() -> None:
-    st.title("LangChain Chat Agent")
+    st.title("Loractor Chat Agent")
     st.caption("Sign in to investigate your logs.")
 
     sign_in_tab, register_tab = st.tabs(["Sign in", "Create account"])

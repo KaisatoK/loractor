@@ -7,7 +7,7 @@ from ui.main_page.main_page import main_page
 from ui.new_chat.new_chat import new_chat
 
 st.set_page_config(
-    page_title="LangChain Chat Agent", page_icon=":robot_face:", layout="wide"
+    page_title="Loractor Chat Agent", page_icon=":robot_face:", layout="wide"
 )
 
 # --- Authentication gate ------------------------------------------------------

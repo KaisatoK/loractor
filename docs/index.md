@@ -19,9 +19,12 @@ At its core, loractor is a role-aware log-investigation assistant. A Streamlit U
 
 ## Screenshot
 
-![The loractor UI](assets/screenshot-placeholder.svg)
+![The start page](assets/ui-start-page.png)
 
-Real screenshots are on the way — see [assets/README.md](assets/README.md) for what to capture and where to put the files.
+![The running chat](assets/ui-progress.png)
+
+![The chat result](assets/ui-chat-result.png)
+
 
 ## The docs
 

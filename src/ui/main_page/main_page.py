@@ -350,7 +350,7 @@ def render_role_run(token: str, chat_id: str, current_chat: dict, seq: int, role
 
 
 def main_page():
-    st.title("LangChain Chat Agent")
+    st.title("Loractor Chat Agent")
 
     token: str = st.session_state.auth["token"]
     chat_id: str = st.session_state.current_chat

@@ -71,4 +71,4 @@ def test_logout_shows_sign_in_page_instead_of_re_autologin(monkeypatch):
     assert at.session_state["demo_logged_out"] is True
     assert not at.exception
     # The sign-in page rendered (main page/new_chat render no title).
-    assert [t.value for t in at.title] == ["LangChain Chat Agent"]
+    assert [t.value for t in at.title] == ["Loractor Chat Agent"]
