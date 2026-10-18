@@ -40,19 +40,24 @@ At its core, loractor is a role-aware log-investigation assistant. A Streamlit U
 | [architecture.md](architecture.md) | The system and the per-turn investigation graph, with diagrams. |
 | [grounding.md](grounding.md) | How answers stay grounded: the findings ledger, result kinds, the checks. |
 | [mcp-server.md](mcp-server.md) | The MCP server: tools, skills, prompts, resources, how to run it. |
-| [quick-start.md](quick-start.md) | The short path from a clean checkout to a first answer. |
 | [TOOLS.md](../TOOLS.md) | The full tool catalogue: every tool, its arguments and its result contract. |
 | [limitations.md](limitations.md) | What the current build does not do, grouped by cause. |
 | [data-sources.md](data-sources.md) | The log corpora, their licences and the canonical schema. |
-| [worked investigation](worked_investigation.md) | One real topic answered as all three roles, generated from live runs. |
+| [worked investigation: BGL errors](worked_investigation_bgl_error.md) | One real topic answered as all three roles, generated from live runs. |
+| [worked investigation: OpenStack disk](worked_investigation_openstack_disk.md) | The OpenStack image-cache disk failure topic answered as all three roles. |
+| [worked investigation: BGL hardware](worked_investigation_bgl_hardware.md) | The BGL hardware failure topic answered as all three roles. |
+| [worked investigation: OpenStack periodic task](worked_investigation_oslo.md) | The `oslo_service.periodic_task` topic answered as all three roles. |
+| [worked investigation: recurring problem](worked_investigation_recurring_problem.md) | The cross-corpus recurring-problem question answered as all three roles. |
 | [README](../README.md) | The deep handbook: setup, configuration, corpora, testing and the full API. |
 | [AGENTS.md](../AGENTS.md) | Contributor and agent guide to the codebase. |
 
-## Worked investigation
+## Worked investigation: BGL errors
 
-[`docs/worked_investigation.md`](worked_investigation.md) is a real captured run of one topic — **BGL FATAL and ERROR events** — answered as the engineer, the team lead and the manager. For each role it records the question, the route, the tool calls, the executed queries, the key rows, the evidence report, the answer and the recommended action, and it ends with what the data does and does not establish.
+[`docs/worked_investigation_bgl_error.md`](worked_investigation_bgl_error.md) is a real captured run of one topic — **BGL FATAL and ERROR events** — answered as the engineer, the team lead and the manager. For each role it records the question, the route, the tool calls, the executed queries, the key rows, the evidence report, the answer and the recommended action, and it ends with what the data does and does not establish.
 
 Read it as an end-to-end example: the same agent and corpus produce three different investigations, and every number in an answer can be traced to a query in the appendix.
+
+Four further captures follow the same format on other corpora: [`docs/worked_investigation_openstack_disk.md`](worked_investigation_openstack_disk.md) (OpenStack image-cache disk failures), [`docs/worked_investigation_bgl_hardware.md`](worked_investigation_bgl_hardware.md) (BGL hardware failures on compute nodes), [`docs/worked_investigation_oslo.md`](worked_investigation_oslo.md) (the OpenStack `oslo_service.periodic_task` topic) and [`docs/worked_investigation_recurring_problem.md`](worked_investigation_recurring_problem.md) (the cross-corpus "what recurring problem do we have" question).
 
 Regenerate it against the current code and a live database:
 

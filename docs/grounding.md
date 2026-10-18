@@ -41,7 +41,7 @@ After the answer is written, the confidence stage asks independent questions abo
 
 ## See it live
 
-[`docs/worked_investigation.md`](worked_investigation.md) is a full captured run, with the tool calls, executed queries, evidence report, answer and recommended action for each role. Regenerate it with:
+[`docs/worked_investigation_bgl_error.md`](worked_investigation_bgl_error.md) is a full captured run, with the tool calls, executed queries, evidence report, answer and recommended action for each role. Four more captures use the same format: [`docs/worked_investigation_openstack_disk.md`](worked_investigation_openstack_disk.md), [`docs/worked_investigation_bgl_hardware.md`](worked_investigation_bgl_hardware.md), [`docs/worked_investigation_oslo.md`](worked_investigation_oslo.md) and [`docs/worked_investigation_recurring_problem.md`](worked_investigation_recurring_problem.md). Regenerate it with:
 
 ```bash
 bash ./worked_investigation.sh --topic "<a real issue or recurring pattern>"

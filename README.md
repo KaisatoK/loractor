@@ -62,7 +62,7 @@ This makes the trade-off explicit:
 - A promoted chunk was examined in detail.
 - The answer reports which level of coverage was actually achieved.
 
-See the [worked investigation](docs/worked_investigation.md) for a complete captured run across all three roles.
+See the [worked investigation: BGL errors](docs/worked_investigation_bgl_error.md) for a complete captured run across all three roles. Four more captured runs cover [OpenStack image-cache disk failures](docs/worked_investigation_openstack_disk.md), [BGL hardware failures](docs/worked_investigation_bgl_hardware.md), the [OpenStack periodic-task topic](docs/worked_investigation_oslo.md), and the [cross-corpus recurring-problem question](docs/worked_investigation_recurring_problem.md).
 
 ## Grounded answers
 
@@ -230,7 +230,11 @@ tests/                 Offline tests plus gated live corpus and policy tests
 - [Grounding](docs/grounding.md) — findings ledger, citations, and claim checks
 - [Known limitations](docs/limitations.md) — current boundaries and operational caveats
 - [Tool catalogue](TOOLS.md) — tool arguments, result kinds, and contracts
-- [Worked investigation](docs/worked_investigation.md) — an end-to-end captured example
+- [Worked investigation: BGL errors](docs/worked_investigation_bgl_error.md) — an end-to-end captured example
+- [Worked investigation: OpenStack disk](docs/worked_investigation_openstack_disk.md) — the same three roles on OpenStack image-cache disk failures
+- [Worked investigation: BGL hardware](docs/worked_investigation_bgl_hardware.md) — the same three roles on BGL hardware failures
+- [Worked investigation: OpenStack periodic task](docs/worked_investigation_oslo.md) — the same three roles on `oslo_service.periodic_task`
+- [Worked investigation: recurring problem](docs/worked_investigation_recurring_problem.md) — the same three roles on a cross-corpus recurring-problem question
 
 ## Status and limitations
 
