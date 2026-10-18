@@ -5,6 +5,7 @@ import streamlit as st
 
 from stream_events import apply_event
 from ui import chat_client
+from ui.autoscroll import auto_scroll
 from ui.chat_box import chat_box
 from ui.rendering import MARKER_RE, render_answer
 from ui.roles import ROLE_LABELS
@@ -74,6 +75,17 @@ def _status_label(status: str) -> str:
     return {"done": "Done", "error": "Failed", "cancelled": "Cancelled"}.get(
         status, status
     )
+
+
+def _streamed_chars(run: dict) -> int:
+    """Characters of thinking/answer text rendered for a live run.
+
+    The answer plus every progress line. ``thinking_delta`` appends to the open
+    "Thinking:" line rather than adding a new one, so a line *count* would not
+    change while a thought streams and the auto-scroll would not fire; the total
+    text length grows both then and as the answer streams in.
+    """
+    return len(run["answer"]) + sum(len(line) for line in run["progress"])
 
 
 def _apply_event(run: dict, event: dict) -> None:
@@ -198,6 +210,14 @@ def render_active_run(container, current_chat, token: str, chat_id: str) -> None
             )
         else:
             st.caption("_thinking…_")
+
+    # Keep the streaming thinking and answer text in view. The signal is the
+    # total rendered text, so it changes while a thought or the answer grows in
+    # place as well as when a new progress line appears. Only while the run is
+    # live; a finished run reruns the whole page anyway. The frontend releases
+    # the follow when the reader scrolls up and re-engages it at the bottom.
+    if status == "running":
+        auto_scroll(_streamed_chars(run), run["run_id"])
 
     if status != "running":
         _finalize_run(current_chat, chat_id, payload)
